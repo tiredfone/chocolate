@@ -1,0 +1,122 @@
+# Chocolate
+
+Chocolate is a browser port of the 2012 game client. It runs places in the browser with three.js for rendering, Rapier for physics and a Lua 5.1 VM compiled to WebAssembly, and it runs the client's real CoreScripts unmodified. A Node server simulates each place and replicates it to players over a WebSocket.
+
+It works on desktop and on touch devices. Mobile controls come from the CoreScripts' own touch path (TouchControls, ContextActionTouch), not from a separate UI.
+
+It renders like the 2012 OGRE client: the client's own material scripts are ported to WebGL, with gamma-space lighting, studs and other surfaces from `surfacesAlpha.png`, the medium-quality material textures, modulative shadows tinted by `Lighting.ShadowColor`, and the original particle systems for fire, smoke, sparkles, explosions and the ForceField.
+
+Chocolate is independent of any one website. Everything it needs from the host site goes through the endpoints in `config.php`, overridden by `config.local.php`.
+
+Chocolate does not include any Roblox files. You supply the 2012 client's `content/` folder and the iOS app's touch images yourself; see Setup.
+
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `client/` | Browser client: `main.js` boot, `world.js` client DataModel and engine-built GUI, `render.js`, `shade2012.js` 2012 materials and lighting, `particles2012.js` 2012 particle systems, `gui.js`, `camera.js`, `touch.js`, `assets.js`, `net.js` |
+| `client/vendor/` | Bundled three.js, Rapier, wasmoon and the Lua wasm |
+| `client/ui/` | Touch images the desktop content lacks, built from the iOS app by `tools/ipa-ui.mjs`. Gitignored |
+| `shared/` | Code used by both sides: `instance.js` DataModel, `classes.js` classes and enums, `luahost.js` engine API, `runtime.lua` Lua scheduler and datatypes, `physics.js`, `humanoid.js`, `rbxl.js` place parser |
+| `server/` | Game server: `main.js` WebSocket front end, `worker.js` one thread per place, `game.js` simulation, `replicator.js`, `assets.js`, `config.js` |
+| `content/` | The `content/` folder from the matching 2012 client build (textures, sky, sounds, fonts). Gitignored |
+| `tools/` | Headless test harnesses, described under Testing |
+| `config.php` | Defaults. Do not put site values here |
+| `config.local.php` | Site values and the shared key. Gitignored |
+
+## Setup
+
+1. Run `npm install`. Node 18 or newer is required.
+2. Copy the `content/` folder out of the 2012 client build into `content/`, then run `npm run content-index`. The client looks up content paths case-insensitively through the generated `client/content-index.json`, so run it again whenever `content/` changes.
+3. For touch devices, build the touch images from the ROBLOX 2.4.1 iOS app: `npm run ipa-ui -- /path/to/ROBLOX.ipa`. It needs the `unzip` command, converts Apple's CgBI PNGs and writes `client/ui/`. Without these files the game still runs, but the thumbstick, jump button and leave menu have no art.
+4. Create `config.local.php`. It returns an array that is merged over `config.php`; `endpoints` is merged key by key.
+
+   ```php
+   <?php
+   return [
+       'port' => 4201,
+       'siteUrl' => 'http://127.0.0.1',
+       'key' => 'long random shared secret',
+       'assetDir' => '/path/to/asset/files',
+       'endpoints' => [
+           'gears' => '/User/Gears?id={id}',
+       ],
+   ];
+   ```
+
+5. Proxy `{publicPath}/ws` to the server with WebSocket upgrade. `.htaccess` does this for Apache; keep its port equal to `port`.
+6. Start the server with `sh server/start.sh` or `npm start`. It reads the config through `php`, so PHP must be installed. `CHOCOLATE_HOST`, `CHOCOLATE_PORT`, `CHOCOLATE_SITE`, `CHOCOLATE_KEY` and `CHOCOLATE_ASSET_DIR` override the config for one run.
+
+## Configuration
+
+| Key | Meaning |
+| --- | --- |
+| `host`, `port` | Address the game server listens on |
+| `publicPath` | URL path where this folder is served |
+| `websocketPath` | WebSocket URL used when the ticket response has none |
+| `siteUrl` | Base URL the game server uses for server-side endpoints |
+| `key` | Shared secret sent as `X-Chocolate-Key` when redeeming tickets |
+| `assetDir` | Optional folder of asset files named by ID, with `{id}.lua` for scripts. When empty, assets come from the endpoints |
+| `userAgent` | User agent for server-side requests |
+
+Endpoints use `{id}` as a placeholder. Paths are relative to `siteUrl` on the server and to the page origin in the browser.
+
+| Endpoint | Used by | Contract |
+| --- | --- | --- |
+| `ticket` | browser | `POST {placeId}` as JSON with the page's CSRF token in `X-CSRF-Token`. Returns `{ success, ticket, ws }` |
+| `redeem` | server | `POST ticket=...` with `X-Chocolate-Key`. Returns `{ ok, userId, username, placeId, membership, age, dev }` and must accept each ticket once |
+| `asset` | both | Raw asset bytes by ID |
+| `place` | server | Place file by ID, only needed when `assetDir` is empty |
+| `coreScript` | both | Lua source by ID. A leading signature line starting with `%` is stripped |
+| `appearance` | server | `CharacterAppearance` list: URLs separated by `;`, without gear |
+| `bodyColors` | server | BodyColors XML for a user |
+| `gears` | server | Equipped gear IDs for a user, any separator. Leave empty to give no gear |
+| `gamePage`, `play`, `login` | browser | Pages to send the player to on leaving, teleporting or when logged out |
+
+## Embedding
+
+The host page provides the import map, the `#chocolate-config` JSON and the DOM the client expects:
+
+```html
+<script type="importmap">{"imports":{"three":"/chocolate/client/vendor/three.module.js","@dimforge/rapier3d-compat":"/chocolate/client/vendor/rapier.js","wasmoon-lua5.1":"/chocolate/client/vendor/wasmoon.js","lodash":"/chocolate/client/vendor/lodash.js"}}</script>
+<script type="application/json" id="chocolate-config">{"placeId":1,"placeName":"Place","csrf":"...","version":1,"publicPath":"/chocolate","websocketPath":"/chocolate/ws","endpoints":{"ticket":"...","asset":"...","coreScript":"...","gamePage":"...","play":"...","login":"..."}}</script>
+<div id="chocolate">
+  <canvas id="chocolate-canvas" tabindex="0"></canvas>
+  <div id="chocolate-loading" class="ch-overlay ch-boot"><div class="ch-boot-loading">Loading</div><p id="chocolate-status" class="ch-boot-status"></p></div>
+  <div id="chocolate-fatal" class="ch-overlay" hidden><h2></h2><p></p></div>
+</div>
+<script type="module" src="/chocolate/client/main.js"></script>
+```
+
+Only pass the browser endpoints listed above. Never send `key`, `siteUrl` or `assetDir` to the page.
+
+Give every module under `client/` and `shared/` a version in the import map, for example `"/chocolate/client/world.js": "/chocolate/client/world.js?v=<mtime>"`, and load `main.js` with the same versioned URL. Modules import each other by relative path, so without these entries browsers and service workers keep serving old copies after an update. Put the same version in `#chocolate-config` as `version`; the client adds it to `runtime.lua` and `content-index.json`.
+
+## How a join works
+
+1. The page asks the host for a ticket, then opens the WebSocket with it.
+2. The server redeems the ticket with the host and starts a worker for the place if none is running.
+3. The worker creates the Player, sets `CharacterAppearance`, loads the character from `appearance` and `bodyColors`, and gives StarterPack tools plus the gear from `gears` on every spawn.
+4. The client applies the snapshot, creates the engine-built `RobloxGui.ControlFrame`, then runs the LoadingScript (158948138) and the StarterScript (37801172), which loads the other CoreScripts.
+
+## Touch
+
+Touch mode is on when the primary pointer is coarse; `?touch=1` or `?touch=0` on the page forces it. In touch mode `UserInputService.TouchEnabled` is true, so the StarterScript loads TouchControls and ContextActionTouch. `client/touch.js` turns pointer events into `InputObject`s and fires `TouchStarted`, `TouchMoved`, `TouchEnded`, `InputBegan`, `InputChanged`, `InputEnded` and `ProcessedEvent` on UserInputService and on the GUI objects under each finger. A short tap that no GUI used acts as a mouse click in the world.
+
+## Testing
+
+There is no test suite. The tools run real code headlessly and print what happened:
+
+```sh
+node tools/corescripts.mjs desktop
+node tools/corescripts.mjs touch
+node tools/touch.mjs
+node tools/character.mjs <placeId> <userId> [name]
+node tools/movement.mjs
+```
+
+`corescripts.mjs` runs the LoadingScript and StarterScript chain and prints the GUI it built and any script errors. `touch.mjs` drives TouchControls and ContextActionTouch with simulated touches. `movement.mjs` walks and jumps the character controller over seams, plates, bricks and walls and prints where it ended up. `character.mjs` starts a place in-process, joins one player and prints the character and backpack. It makes the same read-only requests a real join makes, except it skips the ticket.
+
+## Licenses
+
+Chocolate is released under the MIT License; see `LICENSE`. three.js, Rapier and wasmoon keep their own licenses in `client/vendor/`. The 2012 client content and the iOS images belong to Roblox Corporation and are not part of this repository.

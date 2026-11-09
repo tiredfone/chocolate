@@ -1,0 +1,31 @@
+<?php
+$config = [
+    'host' => '127.0.0.1',
+    'port' => 4201,
+    'publicPath' => '/chocolate',
+    'websocketPath' => '/chocolate/ws',
+    'siteUrl' => 'http://127.0.0.1',
+    'key' => '',
+    'assetDir' => '',
+    'userAgent' => 'Chocolate/0.1',
+    'endpoints' => [
+        'ticket' => '/api/chocolate/ticket',
+        'redeem' => '/api/chocolate/redeem',
+        'asset' => '/asset/?id={id}',
+        'place' => '',
+        'coreScript' => '/asset/?id={id}',
+        'appearance' => '/api/charapp/{id}',
+        'bodyColors' => '/Asset/BodyColors.ashx?userId={id}',
+        'gears' => '',
+        'gamePage' => '/games/{id}',
+        'play' => '/play/{id}',
+        'login' => '/login',
+    ],
+];
+if (is_file(__DIR__ . '/config.local.php')) {
+    $local = require __DIR__ . '/config.local.php';
+    $endpoints = array_merge($config['endpoints'], $local['endpoints'] ?? []);
+    $config = array_merge($config, $local);
+    $config['endpoints'] = $endpoints;
+}
+return $config;

@@ -1,0 +1,27 @@
+RewriteEngine On
+RewriteCond %{HTTP:Upgrade} =websocket [NC]
+RewriteRule ^ws/?$ ws://127.0.0.1:4201/ws [P,L]
+RewriteRule ^(server|node_modules|tools|\.claude)(/|$) - [F,L]
+RewriteRule ^(config(\.local)?\.php|[^/]+\.md|\.gitignore)$ - [F,L]
+RewriteRule ^package(-lock)?\.json$ - [F,L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule .* - [R=404,L]
+
+<IfModule mod_mime.c>
+    AddType application/wasm .wasm
+    AddType text/javascript .js
+    AddType text/plain .lua
+</IfModule>
+
+<IfModule mod_headers.c>
+    <FilesMatch "\.(js|lua|css)$">
+        Header set Cache-Control "public, max-age=300"
+    </FilesMatch>
+    <FilesMatch "^(three\.core|three\.module|rapier|wasmoon)\.js$|\.wasm$">
+        Header set Cache-Control "public, max-age=604800"
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/javascript application/javascript application/wasm text/plain
+</IfModule>

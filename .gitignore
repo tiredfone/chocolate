@@ -1,0 +1,5 @@
+config.local.php
+node_modules/
+content/
+client/ui/*.png
+client/content-index.json

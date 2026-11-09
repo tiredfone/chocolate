@@ -1,0 +1,20 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+const CH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { Game } = await import(CH + '/server/game.js');
+if (!process.argv[2] || !process.argv[3]) { console.log('usage: node tools/character.mjs <placeId> <userId> [name]'); process.exit(1); }
+const sent = [];
+const g = new Game(+process.argv[2], { send: (cid, d) => sent.push(d), kick: (c, r) => console.log('KICK', r), log: (l) => { if (/error|warn/.test(l) && /Workspace\.[^ ]*\.(Animate|Sound|Health|RobloxTeam)/.test(l)) console.log('LOG', l.slice(0, 300)); } });
+await g.start();
+await g.join(1, { id: +process.argv[3], name: process.argv[4] || 'Player', membership: 0, age: 0, dev: false });
+await new Promise((r) => setTimeout(r, 6000));
+const player = [...g.dm.services.get('Players').children].find((p) => p.ClassName === 'Player');
+const ch = player && player.props.get('Character');
+console.log('character:', ch && ch.props.get('Name'));
+const show = (i, d) => { for (const c of i.children) { const P = c.props; const extra = ['ShirtTemplate','PantsTemplate','MeshId','TextureId','HeadColor','TorsoColor','BrickColor'].filter((k) => P.has(k)).map((k) => k + '=' + JSON.stringify(P.get(k))).join(' '); console.log(' '.repeat(d) + c.ClassName + ' ' + P.get('Name') + ' ' + extra); if (d < 4) show(c, d + 2); } };
+if (ch) show(ch, 2);
+const bp = player.findChildOfClass('Backpack'); console.log('backpack:', bp.children.map((c) => c.ClassName + ' ' + c.props.get('Name')).join(', '));
+console.log('CharacterAppearance:', player.props.get('CharacterAppearance'));
+g.stop && g.stop();
+process.exit(0);

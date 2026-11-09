@@ -1,0 +1,22 @@
+{
+  "name": "chocolate",
+  "version": "0.1.0",
+  "description": "Browser port of the 2012 game client: three.js rendering, Rapier physics and the original CoreScripts on a Lua 5.1 VM, with a Node game server.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/main.js",
+    "content-index": "node tools/content-index.mjs",
+    "ipa-ui": "node tools/ipa-ui.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "three": "0.187.0",
+    "wasmoon-lua5.1": "1.18.12",
+    "ws": "8.22.1"
+  }
+}
