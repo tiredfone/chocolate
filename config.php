@@ -19,6 +19,9 @@ $config = [
         'gears' => '',
         'gamePage' => '/games/{id}',
         'play' => '/play/{id}',
+        'studio' => '/studio/{id}',
+        'studioPlace' => '/api/chocolate/studio/place/{id}',
+        'studioSave' => '/api/chocolate/studio/save/{id}',
         'login' => '/login',
     ],
 ];

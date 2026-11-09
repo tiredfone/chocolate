@@ -4,6 +4,8 @@ import { sunDirection } from '../shared/luahost.js';
 import { loadTexture, loadMesh, loadImage, proceduralTexture, trussTexture, spriteTexture, contentTexture } from './assets.js';
 import { Material2012, MATERIALS, LIGHTS, rawColor, texPosAttribute, applyLighting as light2012 } from './shade2012.js';
 import { ParticleSystem2012, SYSTEMS, preloadParticles } from './particles2012.js';
+import { CharacterAtlases, BODY_MESH } from './character2012.js';
+import { contentMesh } from './assets.js';
 
 const MATERIAL_KIND = {
   256: 'plastic', 272: 'smoothplastic', 288: 'neon', 512: 'wood', 528: 'woodplanks', 784: 'slate', 800: 'slate', 816: 'concrete', 832: 'granite',
@@ -30,14 +32,7 @@ function materialTexture(path) {
   return t;
 }
 const FACE_PROPS = ['RightSurface', 'LeftSurface', 'TopSurface', 'BottomSurface', 'BackSurface', 'FrontSurface'];
-const TEMPLATE_W = 585, TEMPLATE_H = 559;
-const TEMPLATE = {
-  torso: { U: [231, 8, 128, 64], D: [231, 204, 128, 64], F: [231, 74, 128, 128], B: [427, 74, 128, 128], R: [165, 74, 64, 128], L: [361, 74, 64, 128] },
-  right: { U: [217, 289, 64, 64], D: [217, 485, 64, 64], F: [217, 355, 64, 128], B: [85, 355, 64, 128], R: [151, 355, 64, 128], L: [19, 355, 64, 128] },
-  left: { U: [308, 289, 64, 64], D: [308, 485, 64, 64], F: [308, 355, 64, 128], B: [440, 355, 64, 128], R: [506, 355, 64, 128], L: [374, 355, 64, 128] },
-};
 const LIMB_REGION = { Torso: 'torso', 'Right Arm': 'right', 'Left Arm': 'left', 'Right Leg': 'right', 'Left Leg': 'left' };
-const LIMB_COLOR = { Torso: 'TorsoColor', 'Right Arm': 'RightArmColor', 'Left Arm': 'LeftArmColor', 'Right Leg': 'RightLegColor', 'Left Leg': 'LeftLegColor' };
 
 const tmpM = new THREE.Matrix4();
 
@@ -161,33 +156,6 @@ function faceProjected(geo) {
   return g;
 }
 
-function limbGeometry(sx, sy, sz, region) {
-  const g = new THREE.BoxGeometry(sx, sy, sz);
-  const uv = g.attributes.uv;
-  const order = ['R', 'L', 'U', 'D', 'B', 'F'];
-  const pos = g.attributes.position;
-  const hx = sx / 2, hy = sy / 2, hz = sz / 2;
-  for (let f = 0; f < 6; f++) {
-    const r = region[order[f]];
-    for (let k = 0; k < 4; k++) {
-      const i = f * 4 + k;
-      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-      let s, t;
-      switch (order[f]) {
-        case 'F': s = (hx - x) / sx; t = (hy - y) / sy; break;
-        case 'B': s = (x + hx) / sx; t = (hy - y) / sy; break;
-        case 'R': s = (hz - z) / sz; t = (hy - y) / sy; break;
-        case 'L': s = (z + hz) / sz; t = (hy - y) / sy; break;
-        case 'U': s = (hx - x) / sx; t = (hz - z) / sz; break;
-        default: s = (hx - x) / sx; t = (z + hz) / sz; break;
-      }
-      const px = r[0] + 0.5 + s * (r[2] - 1), py = r[1] + 0.5 + t * (r[3] - 1);
-      uv.setXY(i, px / TEMPLATE_W, 1 - py / TEMPLATE_H);
-    }
-  }
-  return g;
-}
-
 const SKY_VS = `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position,1.0); gl_Position = p.xyww; }`;
 const SKY_FS = `uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom; uniform vec3 sunDir; uniform float sunVis; varying vec3 vDir;
 void main(){ vec3 d = normalize(vDir); float h = d.y; vec3 c = h > 0.0 ? mix(horizon, top, pow(clamp(h,0.0,1.0),0.55)) : mix(horizon, bottom, clamp(-h*3.0,0.0,1.0));
@@ -218,6 +186,15 @@ export class Renderer {
     this.bucketsDirty = new Set();
     this.setupLighting();
     preloadParticles();
+    this.atlases = new CharacterAtlases(r);
+    contentMesh('fonts/head.mesh').then((g) => {
+      if (!g) return;
+      this.headMesh = g;
+      for (const v of [...this.visuals.values()]) {
+        const m = v.part && v.part.children.find((c) => c.isA('DataModelMesh'));
+        if (m && this.isHeadMesh(m)) this.rebuild(v.part);
+      }
+    });
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.dm.observe(this);
@@ -240,8 +217,8 @@ export class Renderer {
     this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
     sc.left = -90; sc.right = 90; sc.top = 90; sc.bottom = -90; sc.near = 1; sc.far = 600;
-    this.sun.shadow.bias = -0.0006;
-    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.14;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
     this.skyMat = new THREE.ShaderMaterial({
@@ -294,7 +271,7 @@ export class Renderer {
     const key = urls.join('|');
     if (key === this.skyKey) return;
     this.skyKey = key;
-    Promise.all(urls.map((u) => loadImage(u))).then((imgs) => {
+    Promise.all(urls.map((u, i) => loadImage(u).then((img) => img || (u === DEFAULT_SKY[i] ? null : loadImage(DEFAULT_SKY[i]))))).then((imgs) => {
       if (this.skyKey !== key || imgs.some((i) => !i)) return;
       const cube = new THREE.CubeTexture(imgs.map((im) => {
         const c = document.createElement('canvas');
@@ -515,24 +492,20 @@ export class Renderer {
       } else geo = boxGeometry(...size);
       texPosAttribute(geo);
       let mats;
-      if (this.isCharacterPart(part) && shape === 1) {
-        const tex = this.clothingTexture(part);
-        if (tex) {
-          geo.dispose();
-          geo = limbGeometry(...size, TEMPLATE[LIMB_REGION[part.props.get('Name')]]);
-          mats = new Material2012({ ks: 0.3, exp: 30, map: tex, transparent: transp > 0, opacity: 1 - transp });
-        }
-      }
-      if (!mats) {
+      const limb = BODY_MESH[part.props.get('Name')];
+      if (limb && shape === 1 && this.isCharacterPart(part)) body = this.buildLimb(part, limb, size, geo, transp);
+      else {
         if (part.ClassName === 'WedgePart' || part.ClassName === 'CornerWedgePart') mats = [0, 1, 2, 3, 4, 5].map((g) => this.material(part, g));
         else if (shape === 1) mats = this.partMaterials(part);
         else mats = this.material(part, -1);
+        body = new THREE.Mesh(geo, mats);
       }
-      body = new THREE.Mesh(geo, mats);
     }
     if (body) {
-      body.castShadow = transp < 0.5;
-      body.receiveShadow = true;
+      body.traverse((o) => {
+        o.castShadow = transp < 0.5 && !o.userData.overlay;
+        o.receiveShadow = true;
+      });
       body.userData.part = part;
       v.body = body;
       if (transp >= 1) body.visible = false;
@@ -541,6 +514,37 @@ export class Renderer {
     }
     if (!meshInst || this.isHeadMesh(meshInst)) this.buildDecals(v, part, size, meshInst);
     this.buildEffects(v, part);
+  }
+
+  buildLimb(part, limb, size, box, transp) {
+    const atlas = this.atlases.get(part.parent);
+    const c = brick(part.props.get('BrickColor'));
+    const mat = new Material2012({ color: atlas ? rawColor(1, 1, 1) : rawColor(c.r, c.g, c.b), ks: 0.3, exp: 30, transparent: transp > 0, opacity: 1 - transp });
+    if (atlas) mat.map = atlas;
+    const group = new THREE.Group();
+    const mesh = new THREE.Mesh(box, mat);
+    group.add(mesh);
+    contentMesh(limb.path).then((g) => {
+      if (!g || !mesh.parent) return;
+      box.dispose();
+      mesh.geometry = g;
+      mesh.scale.set(size[0] / limb.size[0], size[1] / limb.size[1], size[2] / limb.size[2]);
+    });
+    for (const [prop, y, rx] of atlas ? [] : [['TopSurface', size[1] / 2, -Math.PI / 2], ['BottomSurface', -size[1] / 2, Math.PI / 2]]) {
+      const kind = SURFACE_TEX[part.props.get(prop) | 0];
+      if (!kind || SURFACE_ROW[kind] === undefined) continue;
+      const plane = new THREE.PlaneGeometry(size[0] * 0.94, size[2] * 0.94);
+      const uv = plane.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * size[0], uv.getY(i) * size[2]);
+      const om = new Material2012({ studOnly: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      om.setStuds(studTexture(), SURFACE_ROW[kind]);
+      const o = new THREE.Mesh(plane, om);
+      o.position.y = y + Math.sign(y) * 0.004;
+      o.rotation.x = rx;
+      o.userData.overlay = true;
+      group.add(o);
+    }
+    return group;
   }
 
   batchable(v) {
@@ -674,7 +678,13 @@ export class Renderer {
     }
     const sx = size[0] * scale[0], sy = size[1] * scale[1], sz = size[2] * scale[2];
     switch (type) {
-      case 0: geo = headGeometry(size[2] * scale[0] * 0.98, size[1] * scale[1], size[2] * scale[2] * 0.98); break;
+      case 0:
+        if (this.headMesh) {
+          geo = this.headMesh.clone();
+          geo.scale(size[2] * scale[0], size[1] * scale[1], size[2] * scale[2]);
+          geo.computeBoundingBox();
+        } else geo = headGeometry(size[2] * scale[0] * 0.98, size[1] * scale[1], size[2] * scale[2] * 0.98);
+        break;
       case 1: geo = boxGeometry(sx, sy, sz); break;
       case 2: geo = wedgeGeometry(sx, sy, sz); break;
       case 3: geo = new THREE.SphereGeometry(0.5, 24, 16); geo.scale(sx, sy, sz); break;
@@ -750,60 +760,6 @@ export class Renderer {
         mat.visible = true;
       });
     }
-  }
-
-  clothingTexture(part) {
-    const model = part.parent;
-    const name = part.props.get('Name');
-    const region = LIMB_REGION[name];
-    const isLeg = /Leg/.test(name);
-    const shirt = model.findChildOfClass('Shirt');
-    const pants = model.findChildOfClass('Pants');
-    const graphic = model.findChildOfClass('ShirtGraphic');
-    const layers = [];
-    if (name === 'Torso') {
-      if (pants) layers.push(pants.props.get('PantsTemplate'));
-      if (shirt) layers.push(shirt.props.get('ShirtTemplate'));
-    } else if (isLeg) {
-      if (pants) layers.push(pants.props.get('PantsTemplate'));
-    } else if (shirt) layers.push(shirt.props.get('ShirtTemplate'));
-    const tshirt = name === 'Torso' && graphic ? graphic.props.get('Graphic') : null;
-    if (!layers.length && !tshirt) return null;
-    const bc = model.findChildOfClass('BodyColors');
-    const color = brick(bc ? bc.props.get(LIMB_COLOR[name]) : part.props.get('BrickColor'));
-    const c = document.createElement('canvas');
-    c.width = TEMPLATE_W;
-    c.height = TEMPLATE_H;
-    const g = c.getContext('2d');
-    g.fillStyle = `rgb(${Math.round(color.r * 255)},${Math.round(color.g * 255)},${Math.round(color.b * 255)})`;
-    g.fillRect(0, 0, TEMPLATE_W, TEMPLATE_H);
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-    (async () => {
-      for (const url of layers) {
-        const img = await loadImage(url);
-        if (!img) continue;
-        g.save();
-        g.translate(0, TEMPLATE_H);
-        g.scale(1, -1);
-        g.drawImage(img, 0, 0, TEMPLATE_W, TEMPLATE_H);
-        g.restore();
-      }
-      if (tshirt) {
-        const img = await loadImage(tshirt);
-        if (img) {
-          const r = TEMPLATE.torso.F;
-          g.save();
-          g.translate(r[0], r[1] + r[3]);
-          g.scale(1, -1);
-          g.drawImage(img, 0, 0, r[2], r[3]);
-          g.restore();
-        }
-      }
-      tex.needsUpdate = true;
-    })();
-    return tex;
   }
 
   buildEffects(v, part) {

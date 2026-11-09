@@ -271,6 +271,26 @@ function fetchContentBytes(path) {
   return p;
 }
 
+const contentMeshes = new Map();
+export function contentMesh(path) {
+  let p = contentMeshes.get(path);
+  if (!p) {
+    p = fetchContentBytes(path).then((b) => {
+      if (!b) return null;
+      const m = parseMesh(b);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(m.uv, 2));
+      g.computeBoundingSphere();
+      g.userData.shared = true;
+      return g;
+    }).catch(() => null);
+    contentMeshes.set(path, p);
+  }
+  return p;
+}
+
 const rawContent = new Map();
 function contentRawImage(path) {
   let p = rawContent.get(path);

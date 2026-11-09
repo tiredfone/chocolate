@@ -88,7 +88,7 @@ const DEFS = {
   DataModel: { base: 'Instance', props: 'PlaceId:int=0 JobId:string CreatorId:int=0 GameId:int=0' },
   ServiceProvider: { base: 'Instance', abstract: true },
   Workspace: { base: 'Model', service: true, props: 'CurrentCamera:Ref DistributedGameTime:number=0 Gravity:number=196.2 FallenPartsDestroyHeight:number=-500 FilteringEnabled:bool=false' },
-  Players: { base: 'Instance', service: true, props: 'CharacterAutoLoads:bool=true MaxPlayers:int=12 LocalPlayer:Ref NumPlayers:int=0' },
+  Players: { base: 'Instance', service: true, props: 'CharacterAutoLoads:bool=true MaxPlayers:int=12 LocalPlayer:Ref NumPlayers:int=0 BubbleChat:bool=true ClassicChat:bool=true' },
   Lighting: {
     base: 'Instance', service: true,
     props: 'Ambient:C3=0.5,0.5,0.5 Brightness:number=1 ColorShift_Bottom:C3=0,0,0 ColorShift_Top:C3=0,0,0 FogColor:C3=0.753,0.753,0.753 FogEnd:number=100000 FogStart:number=0 GeographicLatitude:number=41.733 ShadowColor:C3=0.702,0.702,0.722 TimeOfDay:string=14:00:00 OutdoorAmbient:C3=0.5,0.5,0.5 GlobalShadows:bool=false',

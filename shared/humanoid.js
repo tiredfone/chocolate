@@ -434,6 +434,8 @@ export function buildCharacter(dm, name, at) {
     p.props.set('BrickColor', pn === 'Torso' ? 23 : pn.includes('Leg') ? 119 : 24);
     p.props.set('Locked', true);
     for (const s of ['Top', 'Bottom', 'Left', 'Right', 'Front', 'Back']) p.props.set(s + 'Surface', 0);
+    if (pn !== 'Head') p.props.set('TopSurface', 3);
+    if (!pn.includes('Leg')) p.props.set('BottomSurface', 4);
     if (pn === 'Torso') {
       p.props.set('LeftSurface', 2);
       p.props.set('RightSurface', 2);

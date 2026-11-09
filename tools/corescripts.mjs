@@ -88,6 +88,11 @@ for (let i = 0; i < 600; i++) {
   t += 1 / 30; host.tick(t);
   if (i === 30) { shot = rg.children.filter((c) => c.ClassName === 'Frame' && c.props.get('BackgroundColor3')[2] > 0.8).map((c) => c.children.map((x) => x.props.get('Name')).join('+')); loaded = true; dm.emit(dm.root, 'Loaded'); }
 }
+if (process.env.CHAT) {
+  const { T } = await import(CH + '/shared/luahost.js');
+  dm.emit(dm.services.get('Players'), 'PlayerChatted', T.e('PlayerChatType', 0), player, process.env.CHAT, null);
+  for (let i = 0; i < 60; i++) { t += 1 / 30; host.tick(t); await new Promise((r) => setTimeout(r, 20)); }
+}
 if (process.env.CLICK) {
   for (const name of process.env.CLICK.split(',')) {
     const b = dm.root.descendants().find((d) => d.props.get('Name') === name && d.isA('GuiButton'));

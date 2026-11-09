@@ -287,10 +287,20 @@ export class DataModel {
         made.push(inst);
       }
       if (node.ref) byRef.set(node.ref, inst);
+      if (opts.track) {
+        inst.fileRef = node.ref;
+        inst.fileProps = new Map();
+      }
       const hasBrick = node.props.has('BrickColor');
       for (const [rawName, pv] of node.props) {
         if (rawName === 'Parent' || rawName === 'ClassName') continue;
+        if (pv.t === 'raw') {
+          if (!inst.extra) inst.extra = new Map();
+          inst.extra.set(rawName, pv);
+          continue;
+        }
         let name = canonicalProp(inst.ClassName, rawName);
+        if (opts.track && name && inst.info.all.has(name)) inst.fileProps.set(name, { raw: rawName, tag: pv.tag });
         if ((rawName === 'Color3uint8' || rawName === 'Color') && !hasBrick && inst.info.all.has('BrickColor') && pv.t === 'C3') {
           inst.props.set('BrickColor', nearestBrick(pv.v[0], pv.v[1], pv.v[2]));
           continue;

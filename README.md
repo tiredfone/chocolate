@@ -18,6 +18,8 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
 | `client/vendor/` | Bundled three.js, Rapier, wasmoon and the Lua wasm |
 | `client/ui/` | Touch images the desktop content lacks, built from the iOS app by `tools/ipa-ui.mjs`. Gitignored |
 | `shared/` | Code used by both sides: `instance.js` DataModel, `classes.js` classes and enums, `luahost.js` engine API, `runtime.lua` Lua scheduler and datatypes, `physics.js`, `humanoid.js`, `rbxl.js` place parser |
+| `studio/` | Browser Studio: `main.js` boot, `studio.js` commands, selection and undo, `view.js` camera, picking and tools, `panes.js` Explorer, Properties, Toolbox, Output and script editor, `ui.js` 2012 menus, toolbars and docking, `studio.css` |
+| `studio/ui/` | 2012 Studio icons extracted from `RobloxApp.exe` by `tools/studio-ui.mjs`. Gitignored |
 | `server/` | Game server: `main.js` WebSocket front end, `worker.js` one thread per place, `game.js` simulation, `replicator.js`, `assets.js`, `config.js` |
 | `content/` | The `content/` folder from the matching 2012 client build (textures, sky, sounds, fonts). Gitignored |
 | `tools/` | Headless test harnesses, described under Testing |
@@ -28,8 +30,9 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
 
 1. Run `npm install`. Node 18 or newer is required.
 2. Copy the `content/` folder out of the 2012 client build into `content/`, then run `npm run content-index`. The client looks up content paths case-insensitively through the generated `client/content-index.json`, so run it again whenever `content/` changes.
-3. For touch devices, build the touch images from the ROBLOX 2.4.1 iOS app: `npm run ipa-ui -- /path/to/ROBLOX.ipa`. It needs the `unzip` command, converts Apple's CgBI PNGs and writes `client/ui/`. Without these files the game still runs, but the thumbstick, jump button and leave menu have no art.
-4. Create `config.local.php`. It returns an array that is merged over `config.php`; `endpoints` is merged key by key.
+3. For Studio, extract the 2012 Studio icons: `npm run studio-ui -- /path/to/RobloxApp.exe` (or the 2012 client `.zip`). It writes `studio/ui/`.
+4. For touch devices, build the touch images from the ROBLOX 2.4.1 iOS app: `npm run ipa-ui -- /path/to/ROBLOX.ipa`. It needs the `unzip` command, converts Apple's CgBI PNGs and writes `client/ui/`. Without these files the game still runs, but the thumbstick, jump button and leave menu have no art.
+5. Create `config.local.php`. It returns an array that is merged over `config.php`; `endpoints` is merged key by key.
 
    ```php
    <?php
@@ -44,8 +47,8 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
    ];
    ```
 
-5. Proxy `{publicPath}/ws` to the server with WebSocket upgrade. `.htaccess` does this for Apache; keep its port equal to `port`.
-6. Start the server with `sh server/start.sh` or `npm start`. It reads the config through `php`, so PHP must be installed. `CHOCOLATE_HOST`, `CHOCOLATE_PORT`, `CHOCOLATE_SITE`, `CHOCOLATE_KEY` and `CHOCOLATE_ASSET_DIR` override the config for one run.
+6. Proxy `{publicPath}/ws` to the server with WebSocket upgrade. `.htaccess` does this for Apache; keep its port equal to `port`.
+7. Start the server with `sh server/start.sh` or `npm start`. It reads the config through `php`, so PHP must be installed. `CHOCOLATE_HOST`, `CHOCOLATE_PORT`, `CHOCOLATE_SITE`, `CHOCOLATE_KEY` and `CHOCOLATE_ASSET_DIR` override the config for one run.
 
 ## Configuration
 
@@ -92,6 +95,19 @@ Only pass the browser endpoints listed above. Never send `key`, `siteUrl` or `as
 
 Give every module under `client/` and `shared/` a version in the import map, for example `"/chocolate/client/world.js": "/chocolate/client/world.js?v=<mtime>"`, and load `main.js` with the same versioned URL. Modules import each other by relative path, so without these entries browsers and service workers keep serving old copies after an update. Put the same version in `#chocolate-config` as `version`; the client adds it to `runtime.lua` and `content-index.json`.
 
+## Studio
+
+`studio/` is an editor for places that looks and works like the 2012 Studio: its menu bar, toolbars and Explorer icons, the Drag, Move on axis, Resize, Rotate, Lock, Anchor, Paint, Material and surface tools with 1, 1/5 or no grid snapping, Explorer, Properties, Toolbox, Output, script tabs, undo and redo, copy and paste, grouping, and model insert by asset ID. It runs no scripts; Tools > Test > Play Solo saves and opens the place's play page. On phones and tablets the menus fold into one button, the toolbars scroll, the panes become a bottom sheet, one finger orbits, two fingers pan and pinch to zoom, and the handles take touch.
+
+The host page is the same as for the game with these differences: it loads `studio/studio.css` and `studio/main.js`, versions `studio/` modules in the import map too, has an empty `<div id="studio">` (an element with id `studio-status` inside it shows loading messages), and passes the `asset`, `studioPlace`, `studioSave` and `play` endpoints.
+
+| Endpoint | Contract |
+| --- | --- |
+| `studioPlace` | `GET`: the place file's bytes, only for a user allowed to edit it. An empty body starts a new place with a baseplate |
+| `studioSave` | `POST` the 2012 XML place file as the body with the page's CSRF token in `X-CSRF-Token`. Returns `{ success }` or `{ success: false, error }` |
+
+Places are written by `shared/rbxlx.js` in the 2012 XML format. Loading with `{ track: true }` keeps each instance's original referent and property names, and properties chocolate does not model are written back verbatim, so an unchanged place round-trips exactly; new objects are written with every property, under 2012 serialization names such as `size` and `formFactorRaw`.
+
 ## How a join works
 
 1. The page asks the host for a ticket, then opens the WebSocket with it.
@@ -114,6 +130,8 @@ node tools/touch.mjs
 node tools/character.mjs <placeId> <userId> [name]
 node tools/movement.mjs
 ```
+
+To check the place writer, load a place with `dm.load(parsePlace(bytes), dm.root, { track: true })`, write it with `writePlace(dm)`, parse the result again and compare every instance's properties; nothing should differ.
 
 `corescripts.mjs` runs the LoadingScript and StarterScript chain and prints the GUI it built and any script errors. `touch.mjs` drives TouchControls and ContextActionTouch with simulated touches. `movement.mjs` walks and jumps the character controller over seams, plates, bricks and walls and prints where it ended up. `character.mjs` starts a place in-process, joins one player and prints the character and backpack. It makes the same read-only requests a real join makes, except it skips the ticket.
 

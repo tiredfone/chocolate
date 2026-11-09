@@ -954,6 +954,11 @@ export class Game {
         const h = finiteArr(m.h, 3), o = finiteArr(m.o, 3);
         if (h) mouse.props.set('Hit', C.lookAt(o ? o[0] : h[0], o ? o[1] : h[1], o ? o[2] : h[2] + 1, h[0], h[1], h[2]).map((v, i) => (i < 3 ? h[i] : v)));
         if (o) mouse.props.set('Origin', C.cf(o[0], o[1], o[2]));
+        if (h) {
+          const ch = pl.props.get('Character');
+          const hum = ch && !ch.destroyed ? ch.findChildOfClass('Humanoid') : null;
+          if (hum) hum.props.set('TargetPoint', h.slice());
+        }
         const tg = m.tg ? dm.byId.get(m.tg) : null;
         mouse.props.set('Target', tg && tg.isA('BasePart') ? tg : null);
         if (m.x != null) mouse.props.set('X', m.x | 0);

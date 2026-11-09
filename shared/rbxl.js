@@ -51,13 +51,13 @@ function tree(src, start, end) {
     const gt = src.indexOf('>', lt);
     if (gt < 0) break;
     if (src[lt + 1] === '/') {
-      if (stack.length > 1) stack.pop();
+      if (stack.length > 1) stack.pop().end = gt + 1;
     } else if (src[lt + 1] !== '!' && src[lt + 1] !== '?') {
       const self = src[gt - 1] === '/';
       const body = src.slice(lt + 1, self ? gt - 1 : gt);
       const sp = body.search(/\s/);
       const tag = sp < 0 ? body : body.slice(0, sp);
-      const el = { tag, attrs: sp < 0 ? {} : parseAttrs(body.slice(sp)), kids: [], text: '' };
+      const el = { tag, attrs: sp < 0 ? {} : parseAttrs(body.slice(sp)), kids: [], text: '', start: lt, end: gt + 1 };
       cur.kids.push(el);
       if (!self) stack.push(el);
     }
@@ -159,7 +159,8 @@ function parseXML(src) {
           const name = p.attrs.name;
           if (!name) continue;
           const v = xmlProp(p);
-          if (v) node.props.set(name, { t: v[0], v: v[1] });
+          if (v) node.props.set(name, { t: v[0], v: v[1], tag: p.tag });
+          else node.props.set(name, { t: 'raw', v: src.slice(p.start, p.end) });
         }
       }
       re.lastIndex = end + 13;

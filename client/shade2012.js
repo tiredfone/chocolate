@@ -102,6 +102,15 @@ void main() {
     base *= t;
     if (base.a < cutoff) discard;
   #endif
+  #ifdef STUD_ONLY
+    vec2 so = vec2(vUv.x * 0.5, vUv.y * 0.25);
+    vec2 sf = fract(so);
+    vec4 sv = toGamma(textureGrad(studMap, vec2(sf.x, (4.0 - studRow + sf.y) / 5.0), dFdx(so) * vec2(1.0, 0.2), dFdy(so) * vec2(1.0, 0.2)));
+    if (sv.a < 0.004) discard;
+    gl_FragColor = vec4(sv.rgb * mix(shadowTint, vec3(1.0), dot(N, lamp0Dir) > 0.0 ? getShadowMask() : 0.0), sv.a);
+    #include <fog_fragment>
+    return;
+  #endif
   #ifdef NEON
     vec3 lit = base.rgb;
   #else
@@ -132,7 +141,7 @@ void main() {
       lit = mix(lit, env, refl);
     #endif
     lit = clamp(lit, 0.0, 1.0);
-    lit *= mix(shadowTint, vec3(1.0), getShadowMask());
+    lit *= mix(shadowTint, vec3(1.0), ndl0 > 0.0 ? getShadowMask() : 0.0);
   #endif
   gl_FragColor = vec4(lit, base.a);
   #include <fog_fragment>
@@ -161,6 +170,7 @@ export class Material2012 extends THREE.ShaderMaterial {
     if (o.ks !== undefined) this.uniforms.ks.value = o.ks;
     if (o.exp !== undefined) this.uniforms.specExp.value = o.exp;
     if (o.neon) this.defines.NEON = '';
+    if (o.studOnly) this.defines.STUD_ONLY = '';
     if (o.refl > 0) {
       this.uniforms.refl.value = Math.min(1, o.refl);
       this.defines.USE_ENV = '';

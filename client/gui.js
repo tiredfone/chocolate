@@ -1,3 +1,5 @@
+import { loadFont, textCanvas } from './bitmapfont.js';
+import { brick as brickOf } from '../shared/brickcolor.js';
 import { brick } from '../shared/brickcolor.js';
 import { loadImage, assetId, nineSlice, contentUrl } from './assets.js';
 
@@ -50,6 +52,44 @@ function imageSrc(url) {
   return p;
 }
 
+let bubbleParts = null;
+export function bubbleArt() {
+  if (!bubbleParts) {
+    const load = (name) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = contentUrl(`textures/${name}.png`);
+    });
+    bubbleParts = Promise.all([1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => load(`chatBubble_white_bkg_slice${i}`)).concat([load('chatBubble_white_tail')]))
+      .then((imgs) => (imgs.some((i) => !i) ? null : { slices: imgs.slice(0, 9), tail: imgs[9] }));
+  }
+  return bubbleParts;
+}
+
+export function drawBubble(font, art, msg) {
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  const k = 0.4, tk = 0.6;
+  const text = textCanvas(font, msg, { color: '#000', maxWidth: 360, align: 'center' });
+  const s = art.slices;
+  const cw = s[0].width * k, ch = s[0].height * k;
+  const padX = 4, padY = 1;
+  const W = Math.max(cw * 2, text.width * tk + padX * 2 + cw), H = Math.max(ch * 2, text.height * tk + padY * 2 + ch);
+  const ts = art.tail.width * k, rim = 17 * k;
+  const c = document.createElement('canvas');
+  c.width = Math.ceil(W * dpr);
+  c.height = Math.ceil((H + rim) * dpr);
+  c.style.width = W + 'px';
+  c.style.height = H + rim + 'px';
+  const g = c.getContext('2d');
+  g.scale(dpr, dpr);
+  const xs = [0, cw, W - cw], ys = [0, ch, H - ch], ws = [cw, W - cw * 2, cw], hs = [ch, H - ch * 2, ch];
+  for (let r = 0; r < 3; r++) for (let q = 0; q < 3; q++) g.drawImage(s[r * 3 + q], xs[q], ys[r], ws[q] + 0.5, hs[r] + 0.5);
+  g.drawImage(art.tail, (W - ts) / 2, H - 15 * k, ts, ts);
+  g.drawImage(text, (W - text.width * tk) / 2, (H - text.height * tk) / 2, text.width * tk, text.height * tk);
+  return c;
+}
+
 export class Gui {
   constructor(root, world, renderer, opts) {
     this.root = root;
@@ -88,14 +128,16 @@ export class Gui {
       if (!sl) return;
       const sel = name === 'bubble' ? '.ch-bubble' : `.ch-g[data-style="${name}"]`;
       const hover = name === 'button1' || name === 'button2' ? await nineSlice(name === 'button1' ? 'textures/ui/btn_redGlow' : 'textures/ui/btn_greyTransp') : null;
-      const bw = `${sl.top}px ${sl.right}px ${sl.bottom}px ${sl.left}px`;
+      const k = name === 'bubble' ? 0.4 : 1;
+      const bw = `${sl.top * k}px ${sl.right * k}px ${sl.bottom * k}px ${sl.left * k}px`;
       const bi = (x) => `url(${x.url}) ${x.top} ${x.right} ${x.bottom} ${x.left} fill stretch`;
       rules.push(`${sel}{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important}`);
       rules.push(`${sel}::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;border-style:solid;border-width:${bw};border-image:${bi(sl)}}`);
       if (hover) rules.push(`${sel}.auto:hover::before{border-image:${bi(hover)}}`);
     })).then(() => {
-      rules.push('.ch-bubble{isolation:isolate;padding:10px 14px;color:#1b1f27}');
-      rules.push(`.ch-bubble::after{content:"";position:absolute;left:50%;bottom:-14px;width:26px;height:16px;transform:translateX(-50%);background:url(${contentUrl('textures/chatBubble_white_tail.png')}) center/contain no-repeat}`);
+      rules.push('.ch-bubble{isolation:isolate;padding:5px 9px;max-width:none;color:#000;line-height:0}');
+      rules.push('.ch-bubble canvas{display:block}');
+      rules.push(`.ch-bubble::after{content:"";position:absolute;left:50%;bottom:-11px;width:16px;height:16px;transform:translateX(-50%);z-index:1;background:url(${contentUrl('textures/chatBubble_white_tail.png')}) center/100% 100% no-repeat}`);
       sheet.textContent = rules.join('\n');
     });
   }
@@ -114,8 +156,15 @@ export class Gui {
 
   bubble(part, msg) {
     if (!part) return;
-    const b = el('div', 'ch-bubble', this.tags);
-    b.textContent = msg;
+    const b = el('div', 'ch-bubble2', this.tags);
+    b.style.visibility = 'hidden';
+    Promise.all([loadFont('Arial-18pt'), bubbleArt()]).then(([font, art]) => {
+      if (!font || !art) {
+        b.className = 'ch-bubble';
+        b.textContent = msg;
+      } else b.appendChild(drawBubble(font, art, msg));
+      b.style.visibility = '';
+    });
     const rec = { part, el: b, until: performance.now() + 7000 };
     if (!this.bubbles) this.bubbles = [];
     const same = this.bubbles.filter((x) => x.part === part);
@@ -409,11 +458,33 @@ export class Gui {
         const n = el('div', 'ch-tag-name', box);
         const bar = el('div', 'ch-tag-bar', box);
         const fill = el('div', 'ch-tag-fill', bar);
-        t = { box, n, bar, fill };
+        t = { box, n, bar, fill, key: '' };
         this.tagEls.set(rec, t);
       }
       const name = rec.model.props.get('Name');
-      if (t.n.textContent !== name) t.n.textContent = name;
+      const pl = this.world.dm.services.get('Players').children.find((c) => c.ClassName === 'Player' && c.props.get('Character') === rec.model);
+      let color = '#fff';
+      if (pl && !pl.props.get('Neutral')) {
+        const b = brickOf(pl.props.get('TeamColor'));
+        color = `rgb(${Math.round(b.r * 255)},${Math.round(b.g * 255)},${Math.round(b.b * 255)})`;
+      }
+      const key = name + '|' + color;
+      if (t.key !== key) {
+        t.key = key;
+        loadFont('ArialBold-18pt').then((font) => {
+          if (t.key !== key) return;
+          if (!font) {
+            t.n.textContent = name;
+            t.n.style.color = color;
+            return;
+          }
+          const c = textCanvas(font, name, { color, shadow: 'rgba(0,0,0,0.8)' });
+          c.style.width = c.width * 0.62 + 'px';
+          c.style.height = c.height * 0.62 + 'px';
+          t.n.replaceChildren(c);
+        });
+      }
+      t.box.style.scale = String(Math.max(0.6, Math.min(1, 40 / Math.max(1, d))));
       const h = rec.hum.props.get('Health'), mh = rec.hum.props.get('MaxHealth') || 100;
       t.bar.hidden = h >= mh;
       t.fill.style.width = Math.max(0, Math.min(100, (h / mh) * 100)) + '%';
@@ -441,7 +512,11 @@ export class Gui {
         const k = (stackCount.get(b.part) || 0);
         stackCount.set(b.part, k + 1);
         b.el.style.display = '';
-        b.el.style.transform = `translate(${p[0]}px, ${p[1]}px) translate(-50%, ${-100 - (b.stack || 0) * 110}%)`;
+        const bd = Math.hypot(cf[0] - camPos.x, cf[1] - camPos.y, cf[2] - camPos.z);
+        const bs = Math.max(0.5, Math.min(1, 1.15 - bd / 110));
+        b.el.style.transform = `translate(${p[0]}px, ${p[1]}px) scale(${bs}) translate(-50%, ${-100 - (b.stack || 0) * 115}%) translateY(-12px)`;
+        b.el.style.transformOrigin = '0 0';
+        b.el.style.opacity = b.stack ? String(Math.max(0.35, 1 - b.stack * 0.25)) : '1';
         return true;
       });
     }

@@ -11,7 +11,8 @@
   "scripts": {
     "start": "node server/main.js",
     "content-index": "node tools/content-index.mjs",
-    "ipa-ui": "node tools/ipa-ui.mjs"
+    "ipa-ui": "node tools/ipa-ui.mjs",
+    "studio-ui": "node tools/studio-ui.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
