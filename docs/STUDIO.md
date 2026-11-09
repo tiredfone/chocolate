@@ -25,7 +25,7 @@ npm run studio-ui -- /path/to/version-xxxx.zip
 
 This reads the icons, toolbar strips and Explorer class icons out of the executable's resources and writes them to `studio/ui/`. It needs the `unzip` command when given a zip.
 
-Characters look best with `content/fonts/head.mesh`. Desktop client zips of some builds lack it; the matching `canary-*` build has it. Copy it into `content/fonts/` and run `npm run content-index` again.
+Characters look best with `content/fonts/head.mesh`. Some desktop client zips lack it; other 2012 builds such as `version-final` or the `canary-*` builds have it. Copy it into `content/fonts/` and run `npm run content-index` again.
 
 ## Using Studio
 

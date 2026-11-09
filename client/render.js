@@ -189,6 +189,11 @@ export class Renderer {
     this.atlases = new CharacterAtlases(r);
     contentMesh('fonts/head.mesh').then((g) => {
       if (!g) return;
+      g = g.clone();
+      g.computeBoundingBox();
+      const bb = g.boundingBox, c = bb.getCenter(new THREE.Vector3()), sz = bb.getSize(new THREE.Vector3());
+      g.translate(-c.x, -c.y, -c.z);
+      g.scale(1 / (sz.x || 1), 1 / (sz.y || 1), 1 / (sz.z || 1));
       this.headMesh = g;
       for (const v of [...this.visuals.values()]) {
         const m = v.part && v.part.children.find((c) => c.isA('DataModelMesh'));
