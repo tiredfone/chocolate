@@ -124,6 +124,7 @@ export class Game {
     for (const [name, id] of Object.entries(SERVER_LIBRARIES)) this.host.libraries.set(name, String(id));
     await this.host.init(() => Lua.create(), RUNTIME);
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
+    for (let i = 0; i < 3; i++) this.host.tick(this.t);
     this.running = true;
     this.t0 = performance.now();
     this.loop = setInterval(() => this.tick(), TICK * 1000);
@@ -964,6 +965,24 @@ export class Game {
         if (m.x != null) mouse.props.set('X', m.x | 0);
         if (m.y != null) mouse.props.set('Y', m.y | 0);
         if (m.b) dm.emit(mouse, m.b === 'down' ? 'Button1Down' : m.b === 'up' ? 'Button1Up' : m.b === 'move' ? 'Move' : 'Idle');
+        break;
+      }
+      case 'val': {
+        const inst = dm.byId.get(m.id | 0);
+        if (!inst || inst.destroyed || !inst.isA('ValueBase')) return;
+        const ch = pl.props.get('Character');
+        const owned = (ch && inst.isDescendantOf(ch)) || pl.children.some((x) => (x.ClassName === 'Backpack' || x.ClassName === 'PlayerGui') && inst.isDescendantOf(x));
+        if (!owned) return;
+        const p = inst.info.all.get('Value');
+        if (!p) return;
+        let v = m.v;
+        if (p.type === 'Ref') v = v == null ? null : dm.byId.get(v | 0) || null;
+        else if (['V3', 'V2', 'C3', 'CF', 'UD2'].includes(p.type)) {
+          if (!Array.isArray(v) || v.length > 12 || !v.every((x) => typeof x === 'number' && Number.isFinite(x))) return;
+        } else if (p.type === 'string') v = cleanText(v, 2000);
+        else if (p.type === 'bool') v = !!v;
+        else if (typeof v !== 'number' || !Number.isFinite(v)) return;
+        dm.setProp(inst, 'Value', v);
         break;
       }
       case 'key': {

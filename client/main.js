@@ -181,6 +181,7 @@ async function boot() {
 
 function start(world, renderer, camera, gui, net) {
   const held = new Set();
+  const codes = new Set();
   let jumpQueued = false;
   const KEYMAP = { w: 'forward', arrowup: 'forward', s: 'back', arrowdown: 'back', a: 'left', d: 'right' };
   window.addEventListener('keydown', (e) => {
@@ -203,6 +204,7 @@ function start(world, renderer, camera, gui, net) {
     if (e.repeat) return;
     world.ensureAudio();
     held.add(k);
+    if (e.code) codes.add(e.code);
     if (k === ' ') {
       jumpQueued = true;
       e.preventDefault();
@@ -226,12 +228,14 @@ function start(world, renderer, camera, gui, net) {
   window.addEventListener('keyup', (e) => {
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
     held.delete(k);
+    if (e.code) codes.delete(e.code);
     if (k === 'arrowleft' || k === 'arrowright') camera.keyYaw = 0;
     const lua = k === ' ' ? ' ' : k === 'enter' ? '\r' : k === 'shift' ? String.fromCharCode(48) : k.length === 1 ? k : null;
     if (lua) world.keyUp(lua);
   });
   window.addEventListener('blur', () => {
     held.clear();
+    codes.clear();
     camera.keyYaw = 0;
   });
   const ms = world.mouseState;
@@ -262,8 +266,9 @@ function start(world, renderer, camera, gui, net) {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     const f = camera.forwardFlat(), rt = camera.rightFlat();
-    let fw = (held.has('w') || held.has('arrowup') ? 1 : 0) - (held.has('s') || held.has('arrowdown') ? 1 : 0);
-    let sd = (held.has('d') ? 1 : 0) - (held.has('a') ? 1 : 0);
+    const key = (code, letter) => (codes.size || !held.has(letter) ? codes.has(code) : true);
+    let fw = (key('KeyW', 'w') || held.has('arrowup') ? 1 : 0) - (key('KeyS', 's') || held.has('arrowdown') ? 1 : 0);
+    let sd = (key('KeyD', 'd') ? 1 : 0) - (key('KeyA', 'a') ? 1 : 0);
     const tm = world.touchMove;
     if (tm && !fw && !sd) {
       fw = -tm[1];

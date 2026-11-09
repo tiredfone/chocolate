@@ -531,22 +531,37 @@ export class Renderer {
     group.add(mesh);
     contentMesh(limb.path).then((g) => {
       if (!g || !mesh.parent) return;
+      if (!this.flatLimbs) this.flatLimbs = new Map();
+      let flat = this.flatLimbs.get(limb.path);
+      if (!flat) {
+        flat = g.clone();
+        flat.deleteAttribute('normal');
+        flat.computeVertexNormals();
+        flat.userData.shared = true;
+        this.flatLimbs.set(limb.path, flat);
+      }
       box.dispose();
-      mesh.geometry = g;
+      mesh.geometry = flat;
       mesh.scale.set(size[0] / limb.size[0], size[1] / limb.size[1], size[2] / limb.size[2]);
     });
-    for (const [prop, y, rx] of atlas ? [] : [['TopSurface', size[1] / 2, -Math.PI / 2], ['BottomSurface', -size[1] / 2, Math.PI / 2]]) {
+    const faces = [['BottomSurface', -size[1] / 2, Math.PI / 2, true]];
+    if (!atlas) faces.push(['TopSurface', size[1] / 2, -Math.PI / 2, false]);
+    for (const [prop, y, rx, solid] of faces) {
       const kind = SURFACE_TEX[part.props.get(prop) | 0];
       if (!kind || SURFACE_ROW[kind] === undefined) continue;
-      const plane = new THREE.PlaneGeometry(size[0] * 0.94, size[2] * 0.94);
+      const k = solid ? 1 : 0.94;
+      const plane = new THREE.PlaneGeometry(size[0] * k, size[2] * k);
       const uv = plane.attributes.uv;
-      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * size[0], uv.getY(i) * size[2]);
-      const om = new Material2012({ studOnly: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * size[0] * k, uv.getY(i) * size[2] * k);
+      texPosAttribute(plane);
+      const om = solid
+        ? new Material2012({ color: rawColor(c.r, c.g, c.b), ks: 0.3, exp: 30, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })
+        : new Material2012({ studOnly: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
       om.setStuds(studTexture(), SURFACE_ROW[kind]);
       const o = new THREE.Mesh(plane, om);
       o.position.y = y + Math.sign(y) * 0.004;
       o.rotation.x = rx;
-      o.userData.overlay = true;
+      o.userData.overlay = !solid;
       group.add(o);
     }
     return group;
@@ -651,7 +666,8 @@ export class Renderer {
     const vc = m.props.get('VertexColor');
     const c = brick(part.props.get('BrickColor'));
     const transp = this.localTransparency.has(part) ? this.localTransparency.get(part) : part.props.get('Transparency');
-    const mat = new Material2012({ color: rawColor(c.r, c.g, c.b), ks: 0.5, exp: 40, refl: part.props.get('Reflectance'), transparent: transp > 0, opacity: 1 - transp });
+    const textured = !!m.props.get('TextureId');
+    const mat = new Material2012({ color: rawColor(c.r, c.g, c.b), ks: 0.5, exp: 40, refl: textured ? 0 : part.props.get('Reflectance'), transparent: transp > 0, opacity: 1 - transp });
     const holder = new THREE.Group();
     holder.position.set(off[0], off[1], off[2]);
     let type = m.ClassName === 'SpecialMesh' ? m.props.get('MeshType') : m.ClassName === 'FileMesh' ? 5 : m.ClassName === 'CylinderMesh' ? 100 : 6;

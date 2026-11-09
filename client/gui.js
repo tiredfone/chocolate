@@ -48,6 +48,9 @@ function imageSrc(url) {
       return new Promise((res) => c.toBlob((b) => res(b ? URL.createObjectURL(b) : null)));
     });
     imageUrls.set(id, p);
+    p.then((u) => {
+      if (!u && imageUrls.get(id) === p) imageUrls.delete(id);
+    });
   }
   return p;
 }
@@ -365,9 +368,18 @@ export class Gui {
           node.img.removeAttribute('src');
           node.img.style.visibility = 'hidden';
           imageSrc(url).then((u) => {
-            if (u && node.imgUrl === url) {
+            if (node.imgUrl !== url) return;
+            if (u) {
               node.img.src = u;
               node.img.style.visibility = '';
+              node.imgTries = 0;
+            } else if (url && (node.imgTries = (node.imgTries || 0) + 1) < 6) {
+              setTimeout(() => {
+                if (node.imgUrl === url) {
+                  node.imgUrl = null;
+                  this.dirty = true;
+                }
+              }, 2000 * node.imgTries);
             }
           });
         }

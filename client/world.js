@@ -1,5 +1,5 @@
 import { DataModel } from '../shared/instance.js';
-import { applyRecords, decodeValue } from '../shared/codec.js';
+import { applyRecords, decodeValue, encodeValue } from '../shared/codec.js';
 import { ScriptHost } from '../shared/luahost.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
@@ -64,7 +64,7 @@ export class ClientWorld {
         if (this.chars.has(inst)) this.dropChar(inst);
         if (this.sounds.has(inst)) this.stopSound(inst);
       },
-      changed: (inst, name) => this.onChange(inst, name),
+      changed: (inst, name, old, opts) => this.onChange(inst, name, old, opts),
     });
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
     this.coreSources = await loadCoreSources([LOADING_SCRIPT, STARTER_SCRIPT]).catch(() => new Map());
@@ -286,7 +286,17 @@ export class ClientWorld {
     if (this.hooks.reparented) this.hooks.reparented(inst, old);
   }
 
-  onChange(inst, name) {
+  onChange(inst, name, old, opts) {
+    if (name === 'Value' && !(opts && opts.remote) && inst.id > 0 && inst.isA('ValueBase') && this.ownsValue(inst)) {
+      const p = inst.info.all.get('Value');
+      const v = p ? encodeValue(p.type, inst.props.get('Value')) : undefined;
+      if (v !== undefined) this.net.send({ t: 'val', id: inst.id, v });
+    }
+    if (inst.ClassName === 'Player' && name === 'Character') {
+      const now = inst.props.get('Character');
+      if (old && old !== now && !old.destroyed) this.dm.emit(inst, 'CharacterRemoving', old);
+      if (now && now !== old) this.dm.emit(inst, 'CharacterAdded', now);
+    }
     if (inst.ClassName === 'Humanoid' && name === 'Health' && this.dm.hasListener(inst, 'HealthChanged')) this.dm.emit(inst, 'HealthChanged', inst.props.get('Health'));
     if (inst.ClassName === 'Humanoid' && name === 'Health' && inst.props.get('Health') <= 0) {
       const rec = this.chars.get(inst.parent);
@@ -425,6 +435,14 @@ export class ClientWorld {
         break;
       }
     }
+  }
+
+  ownsValue(inst) {
+    const pl = this.player;
+    if (!pl) return false;
+    if (this.ownModel && inst.isDescendantOf(this.ownModel)) return true;
+    for (const c of pl.children) if ((c.ClassName === 'Backpack' || c.ClassName === 'PlayerGui') && inst.isDescendantOf(c)) return true;
+    return false;
   }
 
   toolMoved(tool, old, local) {

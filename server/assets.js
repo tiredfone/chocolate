@@ -103,11 +103,24 @@ export async function siteJson(path) {
   return JSON.parse(await siteText(path));
 }
 
+async function retryText(url, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await siteText(url);
+    } catch (e) {
+      last = e;
+      await new Promise((r) => setTimeout(r, 400 * 2 ** i));
+    }
+  }
+  throw last;
+}
+
 export async function appearance(userId) {
   const out = { colors: null, assets: [], gear: [] };
   let list = '';
   try {
-    list = await siteText(siteUrl('appearance', userId));
+    list = await retryText(siteUrl('appearance', userId));
   } catch {
     return out;
   }
@@ -115,7 +128,7 @@ export async function appearance(userId) {
   for (const u of urls) {
     if (/BodyColors/i.test(u)) {
       try {
-        const xml = await siteText(siteUrl('bodyColors', userId));
+        const xml = await retryText(siteUrl('bodyColors', userId));
         out.colors = parsePlace(xml);
       } catch {}
       continue;
@@ -126,7 +139,7 @@ export async function appearance(userId) {
   const gearUrl = siteUrl('gears', userId);
   if (gearUrl) {
     try {
-      const g = await siteText(gearUrl);
+      const g = await retryText(gearUrl);
       out.gear = [...g.matchAll(/\d+/g)].map((m) => +m[0]).filter((n) => n > 0);
     } catch {}
   }

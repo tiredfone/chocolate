@@ -779,6 +779,7 @@ end
 
 local instanceIndex = function(u, k)
   local id = idOf[u]
+  if type(k) == "number" then k = tostring(k) end
   if type(k) ~= "string" then error("bad key", 2) end
   local r = JS_GET(id, k)
   local tag = r[0]

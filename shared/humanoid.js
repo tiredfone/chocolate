@@ -28,7 +28,7 @@ export function gripOf(tool) {
   return tool.props.get('Grip') || C.cf(0, 0, 0);
 }
 
-const LANDED_DELAY = 1;
+const LANDED_DELAY = 0.5;
 export const STATES = { idle: 0, walk: 1, jump: 2, fall: 3, sit: 4, climb: 5, dead: 6, stand: 7 };
 export const STATE_NAMES = Object.fromEntries(Object.entries(STATES).map(([k, v]) => [v, k]));
 
@@ -435,7 +435,7 @@ export function buildCharacter(dm, name, at) {
     p.props.set('Locked', true);
     for (const s of ['Top', 'Bottom', 'Left', 'Right', 'Front', 'Back']) p.props.set(s + 'Surface', 0);
     if (pn !== 'Head') p.props.set('TopSurface', 3);
-    if (!pn.includes('Leg')) p.props.set('BottomSurface', 4);
+    p.props.set('BottomSurface', 4);
     if (pn === 'Torso') {
       p.props.set('LeftSurface', 2);
       p.props.set('RightSurface', 2);

@@ -6,8 +6,8 @@ export function detectTouch() {
   return coarse && (navigator.maxTouchPoints || 0) > 0;
 }
 
-const TAP_MOVE = 12;
-const TAP_TIME = 350;
+const TAP_MOVE = 20;
+const TAP_TIME = 600;
 
 export class TouchInput {
   constructor(world, renderer, gui, root, canvas) {

@@ -4,6 +4,7 @@ import { publicPath } from '../client/assets.js';
 
 const FACE_PROPS = ['RightSurface', 'TopSurface', 'BackSurface', 'LeftSurface', 'BottomSurface', 'FrontSurface'];
 const AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+const PHYSICAL = { KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd', KeyQ: 'q', KeyE: 'e' };
 const AXIS_COLORS = [0xff3a3a, 0x3aff3a, 0x3a6dff];
 
 export function partsOf(inst) {
@@ -278,12 +279,15 @@ export class StudioView {
     el.addEventListener('pointerleave', () => this.setHover(null));
     window.addEventListener('keydown', (e) => {
       if (e.target.closest && e.target.closest('input, textarea, select')) return;
-      const k = e.key.toLowerCase();
+      const k = PHYSICAL[e.code] || e.key.toLowerCase();
       if (!e.ctrlKey && !e.metaKey && !e.altKey && ['w', 'a', 's', 'd', 'q', 'e', 'shift', 'arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(k)) {
         if (document.activeElement === el || !document.activeElement || document.activeElement === document.body) this.keys.add(k);
       }
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(PHYSICAL[e.code] || e.key.toLowerCase());
+      this.keys.delete(e.key.toLowerCase());
+    });
     window.addEventListener('blur', () => this.keys.clear());
   }
 
