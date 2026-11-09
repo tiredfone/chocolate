@@ -22,14 +22,15 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
 | `studio/ui/` | 2012 Studio icons extracted from `RobloxApp.exe` by `tools/studio-ui.mjs`. Gitignored |
 | `server/` | Game server: `main.js` WebSocket front end, `worker.js` one thread per place, `game.js` simulation, `replicator.js`, `assets.js`, `config.js` |
 | `content/` | The `content/` folder from the matching 2012 client build (textures, sky, sounds, fonts). Gitignored |
-| `tools/` | Headless test harnesses, described under Testing |
+| `tools/` | Headless test harnesses and asset extractors, described under Setup and Testing |
+| `docs/` | `STUDIO.md`: the full Studio guide and API reference |
 | `config.php` | Defaults. Do not put site values here |
 | `config.local.php` | Site values and the shared key. Gitignored |
 
 ## Setup
 
 1. Run `npm install`. Node 18 or newer is required.
-2. Copy the `content/` folder out of the 2012 client build into `content/`, then run `npm run content-index`. The client looks up content paths case-insensitively through the generated `client/content-index.json`, so run it again whenever `content/` changes.
+2. Copy the `content/` folder out of the 2012 client build into `content/`. If its `fonts/` folder has no `head.mesh`, copy that file from the `canary-*` build of the same client version; characters fall back to a drawn head without it. Then run `npm run content-index`. The client looks up content paths case-insensitively through the generated `client/content-index.json`, so run it again whenever `content/` changes.
 3. For Studio, extract the 2012 Studio icons: `npm run studio-ui -- /path/to/RobloxApp.exe` (or the 2012 client `.zip`). It writes `studio/ui/`.
 4. For touch devices, build the touch images from the ROBLOX 2.4.1 iOS app: `npm run ipa-ui -- /path/to/ROBLOX.ipa`. It needs the `unzip` command, converts Apple's CgBI PNGs and writes `client/ui/`. Without these files the game still runs, but the thumbstick, jump button and leave menu have no art.
 5. Create `config.local.php`. It returns an array that is merged over `config.php`; `endpoints` is merged key by key.
@@ -97,16 +98,9 @@ Give every module under `client/` and `shared/` a version in the import map, for
 
 ## Studio
 
-`studio/` is an editor for places that looks and works like the 2012 Studio: its menu bar, toolbars and Explorer icons, the Drag, Move on axis, Resize, Rotate, Lock, Anchor, Paint, Material and surface tools with 1, 1/5 or no grid snapping, Explorer, Properties, Toolbox, Output, script tabs, undo and redo, copy and paste, grouping, and model insert by asset ID. It runs no scripts; Tools > Test > Play Solo saves and opens the place's play page. On phones and tablets the menus fold into one button, the toolbars scroll, the panes become a bottom sheet, one finger orbits, two fingers pan and pinch to zoom, and the handles take touch.
+`studio/` is a place editor in the style of the 2012 Studio: the 2012 menus, toolbars and Explorer icons, the Drag, Move, Resize, Rotate, Lock, Anchor, Paint, Material and surface tools with grid snapping, Explorer, Properties, Toolbox, Output, script tabs, undo and redo, and lossless saving in the 2012 XML format. It works on phones and tablets with a bottom sheet, a camera thumbstick and a camera-only mode. It runs no scripts; Play Solo saves and opens the game.
 
-The host page is the same as for the game with these differences: it loads `studio/studio.css` and `studio/main.js`, versions `studio/` modules in the import map too, has an empty `<div id="studio">` (an element with id `studio-status` inside it shows loading messages), and passes the `asset`, `studioPlace`, `studioSave` and `play` endpoints.
-
-| Endpoint | Contract |
-| --- | --- |
-| `studioPlace` | `GET`: the place file's bytes, only for a user allowed to edit it. An empty body starts a new place with a baseplate |
-| `studioSave` | `POST` the 2012 XML place file as the body with the page's CSRF token in `X-CSRF-Token`. Returns `{ success }` or `{ success: false, error }` |
-
-Places are written by `shared/rbxlx.js` in the 2012 XML format. Loading with `{ track: true }` keeps each instance's original referent and property names, and properties chocolate does not model are written back verbatim, so an unchanged place round-trips exactly; new objects are written with every property, under 2012 serialization names such as `size` and `formFactorRaw`.
+The host serves a Studio page and two endpoints, `studioPlace` (load) and `studioSave` (save). See [docs/STUDIO.md](docs/STUDIO.md) for setup, the page and endpoint contracts, the place file API (`parsePlace`, `writePlace`, `writeModel`), the `window.__studio` API and every command.
 
 ## How a join works
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Studio guide and API reference in `docs/STUDIO.md`.
 - Browser Studio (`studio/`) in the style of the 2012 Studio, usable on desktop and touch devices, with lossless 2012 XML place saving (`shared/rbxlx.js`) and `npm run studio-ui` to extract its icons from `RobloxApp.exe`.
 
 ## 0.1.0
