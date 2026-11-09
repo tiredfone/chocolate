@@ -461,6 +461,17 @@ export class ScriptHost {
 
   get(inst, key) {
     if (key === 'Parent') return inst.parent && !inst.destroyed ? ['i', inst.parent.id] : ['nil'];
+    if (key === '__ownerPlayer') {
+      const players = this.dm.services.get('Players');
+      for (let p = inst; p; p = p.parent) {
+        if (p.ClassName === 'Player') return ['i', p.id];
+        if (p.ClassName === 'Model' && players) {
+          const pl = players.children.find((c) => c.ClassName === 'Player' && c.props.get('Character') === p);
+          if (pl) return ['i', pl.id];
+        }
+      }
+      return ['nil'];
+    }
     if (key === 'ClassName' || key === 'className') return ['s', inst.ClassName];
     if (key === 'Name') return ['s', inst.props.get('Name')];
     const comp = this.computed.get(key);

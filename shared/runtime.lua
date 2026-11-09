@@ -783,6 +783,13 @@ local instanceIndex = function(u, k)
   if type(k) ~= "string" then error("bad key", 2) end
   local r = JS_GET(id, k)
   local tag = r[0]
+  if tag == "nil" and k == "LocalPlayer" then
+    local s = scriptOf[co_running() or false]
+    if s and idOf[s] then
+      r = JS_GET(idOf[s], "__ownerPlayer")
+      tag = r[0]
+    end
+  end
   if tag == "m" then return methodFor(r[1] or k)
   elseif tag == "ev" then return makeSignal(id, r[1] or k)
   elseif tag == "err" then error(r[1], 2)
