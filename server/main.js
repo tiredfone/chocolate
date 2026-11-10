@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { config, siteUrl } from './config.js';
+import { TeamSession } from './teamcreate.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = +config.port || 47240;
@@ -11,6 +12,9 @@ const HOST = config.host || '127.0.0.1';
 const IDLE_MS = 90 * 1000;
 const MAX_MSG = 64 * 1024;
 const MAX_RATE = 120;
+const MAX_STUDIO_MSG = 8 * 1024 * 1024;
+const MAX_STUDIO_RATE = 400;
+const studios = new Map();
 const KEY = String(config.key || '');
 const REDEEM = siteUrl('redeem');
 
@@ -105,7 +109,7 @@ async function redeem(ticket) {
     const r = await fetch(REDEEM, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/0.1', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.2', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
       body: new URLSearchParams({ ticket }).toString(),
     });
     if (!r.ok) return null;
@@ -128,7 +132,7 @@ const server = http.createServer((req, res) => {
   res.end();
 });
 
-const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MSG, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
+const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_STUDIO_MSG, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
@@ -147,21 +151,34 @@ wss.on('connection', async (ws, req, url) => {
   const early = [];
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
+    if (!s.studio && data.length > MAX_MSG) return;
     const now = Date.now();
     if (now - s.window > 1000) {
       s.window = now;
       s.count = 0;
     }
-    if (++s.count > MAX_RATE) return;
+    if (++s.count > (s.studio ? MAX_STUDIO_RATE : MAX_RATE)) return;
     const str = data.toString();
     if (!s.joined) {
-      if (early.length < 50) early.push(str);
+      if (early.length < 50 && str.length <= MAX_MSG) early.push(str);
       return;
     }
-    s.place.worker.postMessage({ t: 'msg', cid, data: str });
+    if (s.studio) s.studio.message(cid, str);
+    else s.place.worker.postMessage({ t: 'msg', cid, data: str });
   });
   ws.on('close', () => {
     sockets.delete(cid);
+    if (s.studio) {
+      const st = s.studio;
+      st.leave(cid);
+      if (st.empty()) st.scheduleIdle(() => {
+        if (studios.get(st.placeId) === st && st.empty()) {
+          studios.delete(st.placeId);
+          log(`[studio ${st.placeId}] idle, closed`);
+        }
+      });
+      return;
+    }
     if (s.place) {
       s.place.members.delete(cid);
       if (!s.place.dead) s.place.worker.postMessage({ t: 'leave', cid });
@@ -176,6 +193,26 @@ wss.on('connection', async (ws, req, url) => {
   if (ws.readyState !== 1) return;
   if (!info) {
     ws.send(JSON.stringify({ t: 'kick', m: 'Your join ticket is invalid or has expired. Reload the page to try again.' }));
+    ws.close(4003, 'bad ticket');
+    return;
+  }
+  if (info.mode === 'studio') {
+    const placeId = info.placeId | 0;
+    let st = studios.get(placeId);
+    if (!st) {
+      st = new TeamSession(placeId, log);
+      studios.set(placeId, st);
+    }
+    s.studio = st;
+    s.joined = true;
+    const send = (str) => {
+      if (ws.readyState === 1) ws.send(str);
+    };
+    await st.join(cid, { id: info.userId | 0, name: String(info.username), role: info.role === 'owner' ? 'owner' : 'editor' }, send, (code, why) => ws.close(code, why));
+    for (const str of early.splice(0)) st.message(cid, str);
+    return;
+  }
+  if (info.mode && info.mode !== 'play') {
     ws.close(4003, 'bad ticket');
     return;
   }

@@ -1,3 +1,5 @@
+import { completions } from './reference.js';
+import { endpointUrl } from '../client/assets.js';
 import { el, classIconStyle } from './ui.js';
 import { brick, brickPalette, brickList } from '../shared/brickcolor.js';
 import { ENUMS, isCreatable, CLASSES } from '../shared/classes.js';
@@ -377,29 +379,93 @@ export function creatableClasses() {
   return [...BASIC.filter((c) => set.has(c)), ...all.filter((c) => !BASIC.includes(c)).sort()];
 }
 
-export class Objects {
+export class Toolbox {
   constructor(app, body) {
     this.app = app;
-    const box = el('div', 'st-objects', body);
-    const search = el('input', null, box);
-    search.type = 'text';
-    search.placeholder = 'Search objects';
-    search.addEventListener('keydown', (e) => e.stopPropagation());
-    const list = el('div', null, box);
-    const draw = () => {
-      list.replaceChildren();
-      const q = search.value.trim().toLowerCase();
-      for (const c of creatableClasses()) {
-        if (q && !c.toLowerCase().includes(q)) continue;
-        const row = el('div', 'st-obj', list);
-        const ic = el('div', 'st-cicon', row);
-        ic.style.cssText = classIconStyle(classIcon(c)) + ';width:16px;height:16px';
-        el('span', null, row, c);
-        row.addEventListener('click', () => this.app.insertObject(c));
-      }
-    };
-    search.addEventListener('input', draw);
-    draw();
+    const box = el('div', 'st-toolbox', body);
+    const top = el('div', 'st-tb-top', box);
+    this.set = el('select', null, top);
+    const sets = [['free', 'Free Models'], ['mine', 'My Models'], ['basic', 'Basic Objects']];
+    if (!endpointUrl('studioToolbox', app.cfg.placeId)) sets.splice(0, 2);
+    for (const [v, t] of sets) {
+      const o = el('option', null, this.set, t);
+      o.value = v;
+    }
+    this.search = el('input', null, top);
+    this.search.type = 'text';
+    this.search.placeholder = 'Search';
+    this.search.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') this.load(true);
+    });
+    this.list = el('div', 'st-tb-list', box);
+    this.more = el('button', 'st-tb-more', box, 'More');
+    this.more.hidden = true;
+    this.more.addEventListener('click', () => this.load(false));
+    this.set.addEventListener('change', () => {
+      this.search.value = '';
+      this.load(true);
+    });
+    let t = null;
+    this.search.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => this.load(true), this.set.value === 'basic' ? 0 : 350);
+    });
+    this.page = 1;
+    this.seq = 0;
+    this.load(true);
+  }
+
+  async load(reset) {
+    const set = this.set.value;
+    const q = this.search.value.trim();
+    if (reset) {
+      this.page = 1;
+      this.list.replaceChildren();
+      this.list.className = 'st-tb-list' + (set === 'basic' ? ' basic' : '');
+    }
+    this.more.hidden = true;
+    if (set === 'basic') return this.basic(q.toLowerCase());
+    const seq = ++this.seq;
+    const base = endpointUrl('studioToolbox', this.app.cfg.placeId);
+    const url = `${base}${base.includes('?') ? '&' : '?'}set=${set}&page=${this.page}&q=${encodeURIComponent(q)}`;
+    let data;
+    try {
+      const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      data = await r.json();
+    } catch {
+      data = null;
+    }
+    if (seq !== this.seq) return;
+    if (!data || !data.success) {
+      el('div', 'st-tb-empty', this.list, 'The toolbox could not be loaded.');
+      return;
+    }
+    if (!data.items.length && this.page === 1) el('div', 'st-tb-empty', this.list, set === 'mine' ? 'You have no models yet.' : 'No models found.');
+    for (const it of data.items) {
+      const cell = el('div', 'st-tb-item', this.list);
+      cell.title = `${it.name}\nby ${it.creator}`;
+      const img = el('img', null, cell);
+      img.alt = '';
+      img.loading = 'lazy';
+      img.draggable = false;
+      if (it.thumb) img.src = it.thumb;
+      el('div', 'st-tb-name', cell, it.name);
+      cell.addEventListener('click', () => this.app.insertAsset(it.id, it.name).catch((e) => this.app.print(String(e.message || e), 'err')));
+    }
+    this.page++;
+    this.more.hidden = !data.more;
+  }
+
+  basic(q) {
+    for (const c of creatableClasses()) {
+      if (q && !c.toLowerCase().includes(q)) continue;
+      const row = el('div', 'st-obj', this.list);
+      const ic = el('div', 'st-cicon', row);
+      ic.style.cssText = classIconStyle(classIcon(c)) + ';width:16px;height:16px';
+      el('span', null, row, c);
+      row.addEventListener('click', () => this.app.insertObject(c));
+    }
   }
 }
 
@@ -466,17 +532,54 @@ export class ScriptEditor {
       this.ta.style.height = this.pre.scrollHeight + 'px';
       this.ta.style.width = this.pre.scrollWidth + 'px';
     };
-    this.ta.addEventListener('input', () => {
+    this.code = code;
+    this.sync = sync;
+    this.acBox = el('div', 'st-ac', code);
+    this.acBox.hidden = true;
+    this.acBox.addEventListener('mousedown', (e) => e.preventDefault());
+    this.ac = null;
+    let typed = false;
+    this.ta.addEventListener('input', (e) => {
       sync();
       clearTimeout(timer);
       timer = setTimeout(() => onChange(this.ta.value), 400);
+      const d = e.data || '';
+      if (typed && (/^[\w.:]$/.test(d) || (this.ac && e.inputType && e.inputType.startsWith('delete')))) this.complete(false);
+      else if (!this.ac || !/^\w$/.test(d)) this.closeAc();
+      typed = false;
     });
     this.ta.addEventListener('blur', () => {
       clearTimeout(timer);
+      this.closeAc();
       onChange(this.ta.value);
     });
+    this.ta.addEventListener('click', () => this.closeAc());
     this.ta.addEventListener('keydown', (e) => {
       e.stopPropagation();
+      typed = e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete';
+      if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
+        e.preventDefault();
+        this.complete(true);
+        return;
+      }
+      if (this.ac) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          this.moveAc(e.key === 'ArrowDown' ? 1 : -1);
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          this.acceptAc();
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          this.closeAc();
+          return;
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') this.closeAc();
+      }
       if (e.key === 'Tab') {
         e.preventDefault();
         const s = this.ta.selectionStart, en = this.ta.selectionEnd;
@@ -490,6 +593,66 @@ export class ScriptEditor {
     });
     code.addEventListener('scroll', () => (this.gutter.scrollTop = code.scrollTop));
     sync();
+  }
+
+  complete(force) {
+    const caret = this.ta.selectionStart;
+    if (caret !== this.ta.selectionEnd) return this.closeAc();
+    const res = completions(this.ta.value, caret, { dm: this.script.dm, script: this.script });
+    if (!res || (!force && !res.word && !/[.:]$/.test(this.ta.value.slice(0, caret)))) return this.closeAc();
+    this.ac = { ...res, sel: 0 };
+    this.drawAc();
+  }
+
+  drawAc() {
+    const ac = this.ac;
+    const box = this.acBox;
+    box.replaceChildren();
+    ac.items.forEach((it, i) => {
+      const row = el('div', 'st-ac-row' + (i === ac.sel ? ' sel' : ''), box);
+      el('span', 'st-ac-kind k-' + it.kind, row, ({ property: 'P', method: 'M', event: 'E', child: 'C', keyword: 'K', local: 'L', function: 'F', global: 'G', enum: 'N', enumitem: 'N' })[it.kind] || '?');
+      el('span', 'st-ac-label', row, it.label);
+      el('span', 'st-ac-detail', row, it.detail);
+      row.addEventListener('click', () => {
+        ac.sel = i;
+        this.acceptAc();
+      });
+    });
+    const before = this.ta.value.slice(0, ac.from);
+    const line = before.split('\n').length - 1;
+    const lastLine = before.slice(before.lastIndexOf('\n') + 1);
+    let col = 0;
+    for (const ch of lastLine) col = ch === '\t' ? (Math.floor(col / 4) + 1) * 4 : col + 1;
+    if (!ScriptEditor.cw) {
+      const g = document.createElement('canvas').getContext('2d');
+      g.font = getComputedStyle(this.pre).font;
+      ScriptEditor.cw = g.measureText('M').width || 7.2;
+    }
+    box.style.left = Math.round(6 + col * ScriptEditor.cw) + 'px';
+    box.style.top = Math.round(2 + (line + 1) * 17) + 'px';
+    box.hidden = false;
+    const selRow = box.children[ac.sel];
+    if (selRow) selRow.scrollIntoView({ block: 'nearest' });
+  }
+
+  moveAc(d) {
+    const ac = this.ac;
+    ac.sel = (ac.sel + d + ac.items.length) % ac.items.length;
+    this.drawAc();
+  }
+
+  acceptAc() {
+    const ac = this.ac;
+    const it = ac && ac.items[ac.sel];
+    this.closeAc();
+    if (!it) return;
+    this.ta.setRangeText(it.insert, ac.from, this.ta.selectionStart, 'end');
+    this.ta.dispatchEvent(new Event('input'));
+  }
+
+  closeAc() {
+    this.ac = null;
+    this.acBox.hidden = true;
   }
 
   reload() {

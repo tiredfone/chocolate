@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## 26.11.2
+
+Chocolate now uses date-based versions (year, month, release).
+
+### Studio
+
+- Browser Studio (`studio/`) in the style of the 2012 Studio, usable on desktop and touch devices, with lossless 2012 XML place saving (`shared/rbxlx.js`) and `npm run studio-ui` to extract its icons from `RobloxApp.exe`. Guide and API reference in `docs/STUDIO.md`.
+- Team Create: the owner adds collaborators by username, and everyone edits the same place live through a session on the game server, with a Team Create pane for who is editing, the collaborator list and chat, and each editor's selection shown in their colour. Changes are lossless: every editor saves the same file.
+- Toolbox with the site's Free Models and your own models as a thumbnail grid with search, plus Basic Objects.
+- Script autocomplete for keywords, globals, libraries, locals, enums and the members of whatever `game.`, `workspace.`, `script.Parent.`, `:GetService(...)`, `:FindFirstChild(...)` or `Instance.new(...)` points at in the place.
+- Object Browser (View > Object Browser, Help > Object Reference) listing every class with its properties, functions and events.
+- Closer to the 2012 look: the Office 2007 blue frame, darker captions, a Test menu, and the 2012 tool cursors.
+- New site endpoints `studioTicket`, `studioCollaborators` and `studioToolbox`; collaborators may also load and save.
+
+### Client
+
+- The 2012 mouse cursors (`ArrowFarCursor`, `ArrowCursor`, the `DragCursor` hand over ClickDetectors) and `Mouse.Icon` support. The cursor stays visible while you hold the right mouse button to turn the camera.
+
+### Engine and server
 
 - Every catalog gear tested: each gets its own Mouse per equip (clicks no longer reach tools you put away), `Tool.GripPos/GripForward/GripRight/GripUp` exist and move the held tool, `LinkedSource` scripts run (Ban Hammer), and events no longer reach scripts in removed tools.
 - Animation support: `Humanoid:LoadAnimation`, `AnimationTrack` (`Play`, `Stop`, `AdjustSpeed`, `AdjustWeight`, `Length`, `KeyframeReached`, `Stopped`) and `GetPlayingAnimationTracks`, with `KeyframeSequence` assets blended onto the character's joints and replicated between players.
@@ -8,8 +26,6 @@
 - Characters no longer touch parts at the world origin when they spawn, which made kill bricks break them on every respawn and left tools and Reset dead until the next equip.
 - A character dies as soon as a script breaks its neck, not at its next rig rebuild.
 - The server only sends physics records that changed, instead of every awake part every other tick (about 66 KB per update in busy places).
-- Studio guide and API reference in `docs/STUDIO.md`.
-- Browser Studio (`studio/`) in the style of the 2012 Studio, usable on desktop and touch devices, with lossless 2012 XML place saving (`shared/rbxlx.js`) and `npm run studio-ui` to extract its icons from `RobloxApp.exe`.
 
 ## 0.1.0
 

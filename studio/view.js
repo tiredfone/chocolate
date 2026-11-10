@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as C from '../shared/cframe.js';
 import { publicPath } from '../client/assets.js';
+import { CursorLayer, CURSORS } from '../client/cursor.js';
 
 const FACE_PROPS = ['RightSurface', 'TopSurface', 'BackSurface', 'LeftSurface', 'BottomSurface', 'FrontSurface'];
 const AXES = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
@@ -50,6 +51,7 @@ export class StudioView {
     this.dist = 60;
     this.keys = new Set();
     this.pointers = new Map();
+    this.cursor = new CursorLayer(container);
     this.outlines = new THREE.Group();
     this.outlines.renderOrder = 998;
     renderer.scene.add(this.outlines);
@@ -380,6 +382,24 @@ export class StudioView {
     } else this.setHover(null);
   }
 
+  updateCursor() {
+    const t = this.app.tool;
+    const h = this.hoverInst;
+    const part = h && h.isA && h.isA('BasePart') ? h : null;
+    const tex = (n) => `rbxasset://textures/${n}.png`;
+    let c = h ? CURSORS.arrow : CURSORS.far;
+    if (this.drag && (this.drag.kind === 'orbit' || this.drag.kind === 'pan' || this.drag.kind === 'gesture')) c = CURSORS.far;
+    else if (this.drag && this.drag.move) c = tex(t === 'resize' || t === 'size' ? 'ResizeCursor' : 'GrabCursor');
+    else if (t === 'lock') c = tex(part && part.props.get('Locked') ? 'UnlockCursor' : 'LockCursor');
+    else if (t === 'anchor') c = tex(part && part.props.get('Anchored') ? 'UnAnchorCursor' : 'AnchorCursor');
+    else if (t === 'paint') c = tex('FillCursor');
+    else if (t === 'dropper') c = tex('DropperCursor');
+    else if (t === 'material') c = tex('MaterialCursor');
+    else if (t === 'resize' || t === 'size') c = h ? tex('ResizeCursor') : CURSORS.far;
+    else if (t.startsWith('surface')) c = tex({ 0: 'FlatCursor', 2: 'WeldCursor', 6: 'HingeCursor', 7: 'MotorCursor' }[+t.slice(7)] || 'ArrowCursor');
+    this.cursor.set(c);
+  }
+
   setHover(inst) {
     if (this.hoverInst === inst) return;
     this.hoverInst = inst;
@@ -660,5 +680,6 @@ export class StudioView {
   frame(dt) {
     this.updateCamera(dt);
     this.placeHandles();
+    this.updateCursor();
   }
 }

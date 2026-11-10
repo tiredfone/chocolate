@@ -38,6 +38,7 @@ Match 2012 behaviour, not modern Roblox: check what the script does with the val
 
 - `runtime.lua` is at the 200-local limit. Add state to an existing table.
 - Server-side `env` lacks browser functions, so every `def` must tolerate a missing `env.*`.
+- `memberIndex()` builds the methods table with a dummy host (`dm` and `env` mostly empty), so a `def` must only touch `host.dm` and `env` inside its function body. Studio's autocomplete and Object Browser read that index, so new members appear there automatically.
 - No comments in code.
 
 ## 4. Verify

@@ -7,7 +7,7 @@ $config = [
     'siteUrl' => 'http://127.0.0.1',
     'key' => '',
     'assetDir' => '',
-    'userAgent' => 'Chocolate/0.1',
+    'userAgent' => 'Chocolate/26.11.2',
     'endpoints' => [
         'ticket' => '/api/chocolate/ticket',
         'redeem' => '/api/chocolate/redeem',
@@ -22,6 +22,9 @@ $config = [
         'studio' => '/studio/{id}',
         'studioPlace' => '/api/chocolate/studio/place/{id}',
         'studioSave' => '/api/chocolate/studio/save/{id}',
+        'studioTicket' => '/api/chocolate/studio/ticket/{id}',
+        'studioCollaborators' => '/api/chocolate/studio/collaborators/{id}',
+        'studioToolbox' => '/api/chocolate/studio/toolbox',
         'login' => '/login',
     ],
 ];

@@ -8,12 +8,14 @@ import { Gui } from './gui.js';
 import { TouchInput, detectTouch } from './touch.js';
 import { T } from '../shared/luahost.js';
 import { configure, publicPath, endpointUrl, loadContentIndex } from './assets.js';
+import { CursorLayer, CURSORS } from './cursor.js';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent);
 configure(cfg);
 const pageUrl = (name, id) => endpointUrl(name, id) || '/';
 const root = document.getElementById('chocolate');
 const canvas = document.getElementById('chocolate-canvas');
+const cursor = new CursorLayer(canvas);
 const loading = document.getElementById('chocolate-loading');
 const status = document.getElementById('chocolate-status');
 const fatal = document.getElementById('chocolate-fatal');
@@ -288,7 +290,9 @@ function start(world, renderer, camera, gui, net) {
       const ray = renderer.pick(ms.ndc[0], ms.ndc[1]);
       ms.overGui = false;
       const cd = world.updateMouse(ray, renderer);
-      canvas.style.cursor = cd ? 'pointer' : world.equippedTool ? 'crosshair' : 'default';
+      const icon = (world.toolMouse && world.toolMouse.props.get('Icon')) || world.mouse.props.get('Icon');
+      cursor.set(icon || (cd ? CURSORS.hand : world.mouseHit && world.mouseHit.part ? CURSORS.arrow : CURSORS.far));
+      if (document.pointerLockElement === canvas) cursor.place(camera.firstPerson);
       renderer.frame(dt);
       gui.frame();
     } catch (e) {

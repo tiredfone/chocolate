@@ -73,11 +73,11 @@ export function writePlace(dm) {
   return serialize(dm, tops);
 }
 
-export function writeModel(dm, list) {
-  return serialize(dm, list);
+export function writeModel(dm, list, opts = {}) {
+  return serialize(dm, list, opts);
 }
 
-function serialize(dm, tops) {
+function serialize(dm, tops, opts = {}) {
   const used = new Set();
   const refs = new Map();
   const walkRefs = (inst) => {
@@ -89,7 +89,9 @@ function serialize(dm, tops) {
   const refFor = (inst) => {
     let r = refs.get(inst);
     if (r) return r;
-    if (inst.fileRef && !refs.has(inst)) r = inst.fileRef;
+    const forced = opts.refOf ? opts.refOf(inst) : null;
+    if (forced) r = forced;
+    else if (inst.fileRef && !refs.has(inst)) r = inst.fileRef;
     else {
       do r = 'RBX' + (next++).toString(16).toUpperCase(); while (used.has(r));
       used.add(r);
@@ -99,7 +101,8 @@ function serialize(dm, tops) {
   };
   const saved = new Set();
   const mark = (inst) => {
-    if (inst.props.get('Archivable') === false) return;
+    if (inst.props.get('Archivable') === false && !opts.keepAll) return;
+    if (opts.skip && !tops.includes(inst) && opts.skip(inst)) return;
     saved.add(inst);
     for (const c of inst.children) mark(c);
   };

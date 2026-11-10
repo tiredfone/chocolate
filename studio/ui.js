@@ -35,7 +35,7 @@ export const MENUS = [
     ['lock', 'Lock'], ['lockall', 'Unlock All'],
   ]],
   ['View', [
-    ['view:objects', 'Toolbox'], ['view:explorer', 'Explorer'], ['view:properties', 'Properties'], ['view:output', 'Output'], null,
+    ['view:objects', 'Toolbox'], ['view:explorer', 'Explorer'], ['view:properties', 'Properties'], ['view:output', 'Output'], ['objectbrowser', 'Object Browser'], null,
     ['fullscreen', 'Full Screen'],
   ]],
   ['Insert', [
@@ -49,10 +49,14 @@ export const MENUS = [
     ['up', 'Move Up'], ['down', 'Move Down'],
   ]],
   ['Tools', [
-    ['Test', [['playsolo', 'Play Solo']]], null,
-    ['joints', 'Manual Joints'],
+    ['joints', 'Manual Joints'], null,
+    ['objectbrowser', 'Object Browser'],
+  ]],
+  ['Test', [
+    ['playsolo', 'Play Solo'],
   ]],
   ['Help', [
+    ['objectbrowser', 'Object Reference'], null,
     ['about', 'About Studio...'],
   ]],
 ];

@@ -4,8 +4,9 @@ import { parsePlace } from '../shared/rbxl.js';
 import { writePlace, writeModel } from '../shared/rbxlx.js';
 import { endpointUrl, assetBytes } from '../client/assets.js';
 import { UI, SELECTION_MENU, el } from './ui.js';
-import { Explorer, Properties, Output, Objects, ScriptEditor, brickPicker, creatableClasses } from './panes.js';
+import { Explorer, Properties, Output, Toolbox, ScriptEditor, brickPicker, creatableClasses } from './panes.js';
 import { StudioView, partsOf, boundsOf } from './view.js';
+import { ObjectBrowser } from './browser.js';
 
 const TOOLS = ['drag', 'axis', 'resize', 'lock', 'anchor', 'paint', 'dropper', 'material', 'move', 'rotate', 'size', 'surface0', 'surface1', 'surface2', 'surface3', 'surface4', 'surface5', 'surface6', 'surface7'];
 const SERVICES = ['Workspace', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'SoundService', 'Debris'];
@@ -35,7 +36,7 @@ export class Studio {
     this.ui = new UI(root, this);
     this.explorer = new Explorer(this, this.ui.addPane('explorer', 'Explorer', 'right'));
     this.props = new Properties(this, this.ui.addPane('properties', 'Properties', 'right'));
-    this.objects = new Objects(this, this.ui.addPane('objects', 'Toolbox', 'left'));
+    this.objects = new Toolbox(this, this.ui.addPane('objects', 'Toolbox', 'left'));
     this.output = new Output(this.ui.addPane('output', 'Output', 'bottom'));
     this.ui.panes.get('objects').closed = false;
     this.viewEl = el('div', 'st-viewport', this.ui.docs);
@@ -294,6 +295,7 @@ export class Studio {
           if (n != null && n !== '') this.setProp(sel, 'Name', n);
           return;
         }
+        case 'objectbrowser': return this.openObjectBrowser();
         case 'insert:object': return this.insertObjectDialog();
         case 'insert:service': return this.insertService();
         case 'insert:model': return this.insertModel();
@@ -313,7 +315,7 @@ export class Studio {
           if (document.fullscreenElement) document.exitFullscreen();
           else document.documentElement.requestFullscreen?.().catch(() => {});
           return;
-        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio\nEdits places in the browser and saves them in the 2012 place format.');
+        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio 26.11.2\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
         default: return;
       }
     } catch (err) {
@@ -615,8 +617,15 @@ export class Studio {
     const id = await this.ui.prompt('Insert Model', 'Asset ID of the model');
     const n = parseInt(id, 10);
     if (!(n > 0)) return;
-    this.print(`Loading model ${n}...`);
-    const nodes = parsePlace(await assetBytes(n));
+    return this.insertAsset(n);
+  }
+
+  async insertAsset(n, label) {
+    this.print(`Loading ${label || 'model ' + n}...`);
+    const bytes = await assetBytes(n);
+    const head = new TextDecoder().decode(bytes.subarray(0, 8));
+    if (!head.startsWith('<roblox')) throw new Error(`${label || 'Asset ' + n} is not a model`);
+    const nodes = parsePlace(bytes);
     const ws = this.dm.services.get('Workspace');
     const made = this.dm.load(nodes, ws, { track: true });
     const tops = made.filter((m) => m.parent === ws);
@@ -628,7 +637,7 @@ export class Studio {
       this.translate(tops, [f.x - b.center[0], this.dropHeight(b) - b.min[1], f.z - b.center[2]], false);
     }
     this.add(tops, 'Insert Model');
-    this.print(`Inserted model ${n}`, 'info');
+    this.print(`Inserted ${label || 'model ' + n}`, 'info');
   }
 
   activate(inst) {
@@ -650,6 +659,15 @@ export class Studio {
       doc = { ed, script };
       this.docs.set(id, doc);
       this.ui.tab(id, script.props.get('Name'), () => this.showDoc(id), () => this.closeDoc(id));
+    }
+    this.showDoc(id);
+  }
+
+  openObjectBrowser() {
+    const id = 'browser';
+    if (!this.docs.has(id)) {
+      this.docs.set(id, { ed: new ObjectBrowser(this.ui.docs, this) });
+      this.ui.tab(id, 'Object Browser', () => this.showDoc(id), () => this.closeDoc(id));
     }
     this.showDoc(id);
   }

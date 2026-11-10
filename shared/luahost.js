@@ -1278,3 +1278,21 @@ function luaData() {
 }
 
 export { minutesOf, todOf, modelCFrame, partsOf, boundsOf, encodeAny, decodeArgs, enumName };
+
+export function memberIndex() {
+  const host = { dm: { services: new Map(), root: null }, env: {} };
+  const byClass = (map) => {
+    const out = new Map();
+    for (const [name, list] of map) for (const [cls] of list) {
+      if (!out.has(cls)) out.set(cls, new Set());
+      out.get(cls).add(name);
+    }
+    return out;
+  };
+  return {
+    methods: byClass(buildMethods(host)),
+    computed: byClass(buildComputed(host)),
+    events: new Map(Object.entries(EVENTS).map(([k, v]) => [k, new Set(v)])),
+    luaMethods: { ContextActionService: CAS_METHODS, Instance: ['WaitForChild', 'waitForChild'], BindableEvent: ['Fire'], BindableFunction: ['Invoke'] },
+  };
+}

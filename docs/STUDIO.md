@@ -1,11 +1,12 @@
 # Chocolate Studio
 
-Chocolate Studio is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner edit it, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
+Chocolate Studio (version 26.11.2) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
 
-Studio does not run scripts. Tools > Test > Play Solo saves the place and opens its play page, so testing happens in the real game.
+Studio does not run scripts. Test > Play Solo saves the place and opens its play page, so testing happens in the real game.
 
 - [Setup](#setup)
 - [Using Studio](#using-studio)
+- [Team Create](#team-create)
 - [Embedding Studio in a site](#embedding-studio-in-a-site)
 - [Host endpoints](#host-endpoints)
 - [Place file API](#place-file-api)
@@ -33,16 +34,18 @@ Characters look best with `content/fonts/head.mesh`. Some desktop client zips la
 
 | Area | What it does |
 | --- | --- |
-| Menu bar | File, Edit, View, Insert, Format, Tools, Help, with the 2012 shortcuts |
+| Menu bar | File, Edit, View, Insert, Format, Tools, Test, Help, with the 2012 shortcuts |
 | Standard toolbar | Save, Open, Cut, Copy, Paste, Undo, Redo, Group, Ungroup, Rotate, Tilt, Move Up, Move Down |
 | Edit toolbar | Drag, Move on axis, Resize, Lock, Anchor, Fill With Color, Pick Color, Change Material, and the Smooth, Glue, Weld, Studs, Inlets, Universal, Hinge and Motor surface tools |
 | Run toolbar | Run (saves and opens the game); Pause and Reset are disabled |
 | Camera toolbar | Pan, Tilt, Zoom, Look At Object, Zoom Extents |
 | Advanced toolbar | Move, Rotate and Resize Parts with handles, grid snapping (1 stud, 1/5 stud, off), Manual Joints, Toolbox |
-| Toolbox | Every object class you can insert, with search |
+| Toolbox | A set list and search box over a grid of thumbnails. Free Models lists the site's public models, My Models your own, and Basic Objects every object class you can insert. Click a model to drop it in front of the camera |
 | Explorer | The place tree. Click to select, Ctrl or Shift to multi-select, drag to reparent, double-click a script to open it, right-click (long press on touch) for the selection menu |
 | Properties | The selection's properties, grouped like 2012 (Appearance, Data, Behavior, Part, Surface Inputs, Surface) |
-| Output | Save results and errors |
+| Output | Save results, Team Create notices and errors |
+| Team Create | Who is editing now, the place's collaborators and a chat between editors (only in Team Create) |
+| Object Browser | A document tab listing every class, its inheritance and its properties, functions and events, with defaults and types. Open it with View > Object Browser or Help > Object Reference |
 
 ### Tools
 
@@ -62,6 +65,8 @@ Clicking a part selects its outermost model, as in 2012. Alt+click selects the p
 
 Click the active tool's button again to turn it off. With no tool, clicks and touches only move the camera. This is the easiest way to look around on a phone.
 
+The mouse uses the 2012 Studio cursors: the arrow, the grab hand while dragging, `ResizeCursor` for the resize tools, `LockCursor`/`UnlockCursor` and `AnchorCursor`/`UnAnchorCursor` depending on the part under the mouse, `FillCursor`, `DropperCursor`, `MaterialCursor`, and `FlatCursor`, `WeldCursor`, `HingeCursor` and `MotorCursor` for the surface tools.
+
 ### Camera
 
 | Input | Action |
@@ -79,7 +84,23 @@ Click the active tool's button again to turn it off. With no tool, clicks and to
 
 ### Keyboard shortcuts
 
-Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, Ctrl+X cut, Ctrl+C copy, Ctrl+V paste, Ctrl+Shift+V paste into, Ctrl+D duplicate, Ctrl+A select all, Ctrl+G group, Ctrl+U ungroup, Ctrl+R rotate, Ctrl+T tilt, Delete or Backspace delete, F look at. Inside the script editor, Tab inserts a tab and Ctrl+S saves the place.
+Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, Ctrl+X cut, Ctrl+C copy, Ctrl+V paste, Ctrl+Shift+V paste into, Ctrl+D duplicate, Ctrl+A select all, Ctrl+G group, Ctrl+U ungroup, Ctrl+R rotate, Ctrl+T tilt, Delete or Backspace delete, F look at. Inside the script editor, Tab inserts a tab, Ctrl+Space opens autocomplete and Ctrl+S saves the place.
+
+### Script editor and autocomplete
+
+Scripts open in their own tab with 2012 syntax colours. While you type a name, or right after `.` or `:`, a list of completions opens under the cursor:
+
+| You type | You get |
+| --- | --- |
+| A partial name | Lua keywords, globals (`game`, `workspace`, `script`, `wait`, `Instance`, `Vector3`, ...) and the locals, functions and loop variables in the script |
+| `game.` `workspace.` `script.Parent.` | The children that really exist at that point in the place, then the class's properties and events |
+| `x:` | The class's methods, including inherited ones (`FindFirstChild`, `GetService`, `LoadAnimation`, ...) |
+| `game:GetService("Players").`, `:FindFirstChild("Name").`, `:WaitForChild("Name").` | Resolved to that service or child |
+| `local p = Instance.new("Part")` then `p.` | The members of `Part` |
+| `math.` `string.` `table.` `coroutine.` `Vector3.` `CFrame.` `BrickColor.` `UDim2.` | The library or constructor functions |
+| `Enum.` `Enum.Material.` | Enum types and their items |
+
+Up and Down move through the list, Enter or Tab inserts the selection (methods get an opening parenthesis), and Escape closes it. Nothing is suggested inside strings or comments.
 
 ### Files
 
@@ -89,13 +110,67 @@ Ctrl+S save, Ctrl+Z undo, Ctrl+Y redo, Ctrl+X cut, Ctrl+C copy, Ctrl+V paste, Ct
 - File > Open loads an `.rbxl`, `.rbxlx`, `.rbxm` or `.rbxmx` file from your device. A place replaces everything after you confirm; a model is inserted into Workspace.
 - Insert > Model inserts a model by asset ID through the `asset` endpoint.
 
+### Toolbox
+
+The set list at the top of the Toolbox chooses what it shows:
+
+| Set | Contents |
+| --- | --- |
+| Free Models | Models anyone may use, newest first, from `studioToolbox` with `set=free` |
+| My Models | Your own models, including private ones, from `studioToolbox` with `set=mine` |
+| Basic Objects | Every class you can insert, as in Insert > Object |
+
+Type in the search box to filter by name. More loads the next page. Clicking a model loads it through the `asset` endpoint, drops it onto whatever is under the camera's focus and selects it; Undo removes it again.
+
 ### Phones and tablets
 
-The menus fold into the button at the top left, the toolbars scroll sideways, and Explorer, Properties, Toolbox and Output become tabs on a sheet at the bottom; tap the open tab again to close the sheet. Handles take a finger within about 34 pixels. Inputs use 16 pixel text so iOS does not zoom when you type.
+The menus fold into the button at the top left, the toolbars scroll sideways, and Explorer, Properties, Toolbox, Output and Team Create become tabs on a sheet at the bottom; tap the open tab again to close the sheet. Handles take a finger within about 34 pixels. Inputs use 16 pixel text so iOS does not zoom when you type.
+
+## Team Create
+
+Team Create lets several people edit one place at the same time. It is on whenever the page config has a `studioTicket` endpoint.
+
+### Who can edit
+
+The place's owner can always edit. The owner adds collaborators by username in the Team Create pane (and removes them with the cross next to their name). Collaborators can open Studio for the place, edit it and save it, but cannot change the collaborator list. A place can have up to 50 collaborators; banned users cannot be added and lose access.
+
+### How it works
+
+1. Studio asks `studioTicket` for a ticket and opens the game server's WebSocket with it. The site's `redeem` answers `mode: studio` and the editor's `role`.
+2. The server keeps one session per place. The first editor to join makes it load the place file (adding a locked baseplate to an empty place) with `track` on, so nothing in the file is lost.
+3. The server sends the whole place to each editor who joins, as lossless XML in which every instance's referent is its Team Create id.
+4. Every change an editor makes is turned into an operation by a DataModel observer: a property change, a move (deleting is a move to nil, so undo works), or a new subtree sent as XML. Changes are batched every 66 ms, so a drag sends about 15 updates a second.
+5. The server checks each operation, applies it to its copy and sends it to every editor in the order it received them. An editor ignores the echo of its own change when it has changed that property again since, so drags do not jump back. Everyone ends up with the same place, and the same file when they save.
+6. Saving still goes through `studioSave` from whichever editor presses Save. The others see "saved the place" in Output and their unsaved mark clears.
+
+Each editor has a colour. Their selection shows as a box in that colour in everyone else's viewport, and their name in that colour in the chat.
+
+The session stays on the server for 10 minutes after the last editor leaves, so a reconnecting editor finds unsaved work. After that, unsaved changes are gone: save before you leave.
+
+If Studio cannot join Team Create, it opens the place from `studioPlace` on its own and says so in Output. If the connection drops while editing, Studio tells you; your later changes stay on your screen only, so save them or reload to rejoin.
+
+### Protocol
+
+Messages are JSON over the game WebSocket. Instance ids (`g`) are `s<n>` for objects the server loaded and `c<connection>_<n>` for objects an editor created; the server rejects ids that do not carry the sender's prefix.
+
+| From | Message | Meaning |
+| --- | --- | --- |
+| server | `{ t: 'snap', you, prefix, role, users, xml, refs, dirty }` | The place, your connection id and the id prefix to use |
+| both | `{ t: 'b', ops: [...] }` | A batch of the operations below |
+| both | `{ t: 'p', s, g, n, v }` | Set property `n` of `g` to `v`. References are ids, vectors and CFrames arrays |
+| both | `{ t: 'm', s, g, p }` | Move `g` under `p`, or to nil when `p` is null |
+| both | `{ t: 'n', s, p, xml, refs }` | New objects under `p`. `refs` maps ids to the referents the objects had in the place file |
+| both | `{ t: 'sel', g: [...] }` | The sender's selection |
+| both | `{ t: 'chat', m }` | Chat, at most 200 characters |
+| client | `{ t: 'saved' }` | The sender saved the place |
+| server | `{ t: 'users', users, joined, left }` | Who is editing |
+| server | `{ t: 'nack', s, m }` | An operation was rejected |
+
+Server messages carry `u`, the sender's connection id, and `s`, the sender's sequence number.
 
 ## Embedding Studio in a site
 
-Studio is a static page plus two endpoints. The host renders a page like this for a user who may edit the place:
+Studio is a static page plus a few endpoints. The host renders a page like this for a user who may edit the place:
 
 ```html
 <!doctype html>
@@ -122,8 +197,12 @@ Studio is a static page plus two endpoints. The host renders a page like this fo
     "asset": "/asset/?id={id}",
     "studioPlace": "/api/chocolate/studio/place/{id}",
     "studioSave": "/api/chocolate/studio/save/{id}",
+    "studioTicket": "/api/chocolate/studio/ticket/{id}",
+    "studioCollaborators": "/api/chocolate/studio/collaborators/{id}",
+    "studioToolbox": "/api/chocolate/studio/toolbox",
     "play": "/play/{id}"
-  }
+  },
+  "role": "owner"
 }</script>
 </head>
 <body>
@@ -147,13 +226,17 @@ Add an import map entry with a `?v=` version for every `.js` file in `client/`, 
 | `endpoints.asset` | Raw asset bytes by ID: textures, meshes, Insert Model |
 | `endpoints.studioPlace` | Where to load the place from |
 | `endpoints.studioSave` | Where to save it. Leave it out for a read-only Studio; Save is then disabled |
+| `endpoints.studioTicket` | Team Create ticket. Leave it out to edit alone |
+| `endpoints.studioCollaborators` | Collaborator list for the Team Create pane |
+| `endpoints.studioToolbox` | Toolbox models. Leave it out to show only Basic Objects |
 | `endpoints.play` | Page opened by Run and Play Solo. Leave it out to disable them |
+| `role` | `owner` or `editor`; informational, the endpoints decide |
 
 Never put `key`, `siteUrl` or `assetDir` from `config.local.php` into the page.
 
 ## Host endpoints
 
-Both endpoints must check that the logged-in user may edit the place. Studio sends the session cookie with `credentials: 'same-origin'`.
+Every endpoint must check that the logged-in user may edit the place: its owner or one of its collaborators. Studio sends the session cookie with `credentials: 'same-origin'`, and POSTs carry the page's CSRF token in `X-CSRF-Token`.
 
 ### `studioPlace`: load
 
@@ -186,7 +269,7 @@ X-CSRF-Token: <csrf from the page config>
 
 What the host should do, in order:
 
-1. Reject logged-out users and anyone who does not own the place.
+1. Reject logged-out users and anyone who is not the owner or a collaborator.
 2. Check the CSRF token.
 3. Limit the body size. Solar uses 64 MB.
 4. Check that the body starts with `<roblox` and ends with `</roblox>`.
@@ -222,12 +305,38 @@ rename($tmp, $path);
 echo json_encode(['success' => true]);
 ```
 
+### `studioTicket`: join Team Create
+
+```
+POST /api/chocolate/studio/ticket/{id}
+X-CSRF-Token: <csrf>
+```
+
+Returns `{ "success": true, "ticket": "<64 hex>", "ws": "/chocolate/ws", "role": "owner" }`. Store only a hash of the ticket, let it expire after a minute and accept it once. When the game server redeems it through `redeem`, answer `{ ok: true, mode: 'studio', userId, username, placeId, role }`, checking again that the user may still edit. Solar keeps these tickets in `ChocolateStudioTickets`, apart from game tickets, so one kind can never be used as the other.
+
+### `studioCollaborators`: list and change collaborators
+
+```
+GET  /api/chocolate/studio/collaborators/{id}
+POST /api/chocolate/studio/collaborators/{id}   {"action": "add" | "remove", "username": "Name"}
+```
+
+Both return `{ success, role, owner: { id, name }, collaborators: [{ id, name }] }`. Any editor may list; only the owner may POST. Solar stores them in `ChocolateCollaborators (PlaceID, UserID, AddedBy, Added)`.
+
+### `studioToolbox`: models for the Toolbox
+
+```
+GET /api/chocolate/studio/toolbox?set=free|mine&q=<search>&page=<n>
+```
+
+Returns `{ success, more, items: [{ id, name, creator, thumb }] }`, 30 items a page. `name` is plain text; Studio never inserts it as HTML. `thumb` is an image URL or null.
+
 ### Other endpoints Studio uses
 
 | Endpoint | Used for |
 | --- | --- |
-| `asset` | Mesh, texture, decal, clothing and sky images, and Insert > Model. Must return raw bytes |
-| `play` | Opened in a new tab by Run and Tools > Test > Play Solo, after saving |
+| `asset` | Mesh, texture, decal, clothing and sky images, Toolbox models and Insert > Model. Must return raw bytes |
+| `play` | Opened in a new tab by Run and Test > Play Solo, after saving |
 
 ## Place file API
 
@@ -262,7 +371,7 @@ const xml = writePlace(dm);
 const model = writeModel(dm, [someModel, somePart]);
 ```
 
-`writePlace(dm)` returns the 2012 XML place file (`version="4"`). It writes every top-level item that came from the file, plus Workspace, Lighting, StarterGui and StarterPack. `writeModel(dm, list)` writes the given instances and their descendants as a model file; references between them are kept and references outside it become `null`.
+`writePlace(dm)` returns the 2012 XML place file (`version="4"`). It writes every top-level item that came from the file, plus Workspace, Lighting, StarterGui and StarterPack. `writeModel(dm, list, opts)` writes the given instances and their descendants as a model file; references between them are kept and references outside it become `null`. `opts.refOf(inst)` can return the referent to use for an instance, and `opts.skip(inst)` can leave a descendant out; Team Create uses both.
 
 What gets written for each instance:
 
@@ -292,6 +401,8 @@ An unchanged place round-trips exactly: parsing the output again gives the same 
 | `undoStack`, `redoStack` | Recorded actions: `{ name, undo, redo }` |
 | `ui` | The menus, toolbars and panes (`studio/ui.js`) |
 | `view` | Camera, picking and handles (`studio/view.js`); `view.focus`, `view.yaw`, `view.pitch` and `view.dist` place the camera |
+| `team` | The Team Create connection (`studio/teamcreate.js`), or undefined when editing alone: `team.users`, `team.gids.get(id)`, `team.send(message)` |
+| `objects` | The Toolbox pane |
 
 ### Methods
 
@@ -304,6 +415,8 @@ An unchanged place round-trips exactly: parsing the output again gives the same 
 | `setPositions(list, [x, y, z])` | Move parts to a position as one action |
 | `translate(list, [dx, dy, dz])` | Move by an offset as one action |
 | `insertObject(className, parent)` | Insert a new object, placed in front of the camera if it is a part |
+| `insertAsset(assetId, label)` | Load a model through `asset` and drop it in front of the camera, as the Toolbox does |
+| `openObjectBrowser()` | Open the Object Browser tab |
 | `remove(list)`, `reparent(list, target)`, `group(list)`, `ungroup(list)` | Edit the tree as undoable actions |
 | `copy(list)`, `paste(into)` | Clipboard |
 | `record(name, undo, redo)` | Add your own undoable action after you have applied it |
@@ -342,6 +455,7 @@ Every menu item and toolbar button calls `exec` with one of these.
 | `up`, `down` | Move the selection up or down one plate |
 | `lock`, `lockall` | Lock the selection, or unlock every part |
 | `insert:object`, `insert:service`, `insert:model` | Insert dialogs |
+| `objectbrowser` | Open the Object Browser |
 | `clearstarterpack` | Remove every tool in StarterPack |
 | `tool:drag`, `tool:axis`, `tool:resize`, `tool:move`, `tool:rotate`, `tool:size` | Selection and transform tools |
 | `tool:lock`, `tool:anchor`, `tool:paint`, `tool:dropper`, `tool:material` | Click tools |
@@ -358,6 +472,8 @@ Running the current tool's command again turns the tool off.
 ## Limitations
 
 - No Lua runs in Studio: no Run in place, command bar or Execute Script.
-- No terrain editing, Team Create, Find and Replace or web Toolbox catalog.
+- No terrain editing or Find and Replace.
+- Team Create has no script locking: two people typing in the same script overwrite each other's text, last change wins.
+- Autocomplete follows `local` aliases only one simple assignment deep and does not know the types of function results.
 - Pause and Reset on the Run toolbar are disabled.
 - Very large places (tens of thousands of parts) load and save slowly on phones.

@@ -5,6 +5,7 @@ import { parsePlace } from '../shared/rbxl.js';
 import { Physics } from '../shared/physics.js';
 import { Renderer } from '../client/render.js';
 import { Studio } from './studio.js';
+import { connectTeam, loadSnapshot, TeamSync } from './teamcreate.js';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent || '{}');
 configure(cfg);
@@ -22,16 +23,31 @@ async function placeBytes() {
 }
 
 async function boot() {
-  say('Loading place');
-  const [bytes] = await Promise.all([placeBytes(), RAPIER.init(), loadContentIndex()]);
+  let team = null, teamError = null;
+  if (endpointUrl('studioTicket', cfg.placeId)) {
+    say('Joining Team Create');
+    await Promise.all([RAPIER.init(), loadContentIndex()]);
+    team = await connectTeam(cfg).catch((e) => {
+      teamError = e;
+      return null;
+    });
+  }
   const dm = new DataModel('client');
   for (const s of ['Workspace', 'Lighting', 'StarterGui', 'StarterPack']) dm.service(s);
-  if (bytes && bytes.length) {
+  let gids = null;
+  if (team) {
     say('Reading place');
-    dm.load(parsePlace(bytes), dm.root, { track: true });
+    gids = loadSnapshot(dm, team.snap);
+  } else {
+    say('Loading place');
+    const [bytes] = await Promise.all([placeBytes(), RAPIER.init(), loadContentIndex()]);
+    if (bytes && bytes.length) {
+      say('Reading place');
+      dm.load(parsePlace(bytes), dm.root, { track: true });
+    }
   }
   const ws = dm.services.get('Workspace');
-  if (!ws.children.some((c) => c.isA && c.isA('BasePart'))) {
+  if (!team && !ws.children.some((c) => c.isA && c.isA('BasePart'))) {
     const base = dm.create('Part', null);
     base.props.set('Name', 'Baseplate');
     base.props.set('Anchored', true);
@@ -53,6 +69,8 @@ async function boot() {
   root.replaceChildren();
   const app = new Studio({ root, dm, renderer, physics, cfg });
   window.__studio = app;
+  if (team) app.team = new TeamSync(app, team, gids);
+  else if (teamError) app.print(`Team Create is unavailable (${teamError.message}). You are editing on your own; save before others edit.`, 'err');
   let last = performance.now();
   const loop = (now) => {
     const dt = Math.min(0.1, (now - last) / 1000);
