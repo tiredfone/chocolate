@@ -253,7 +253,7 @@ export class Controller {
   climbCheck(dir) {
     if (Math.hypot(dir[0], dir[2]) < 0.1) return false;
     const origin = [this.pos[0], this.pos[1] - 1.5, this.pos[2]];
-    for (const dy of [0, 1.5, 3]) {
+    for (const dy of [-0.8, 0, 1.5, 3]) {
       const o = [origin[0], origin[1] + dy, origin[2]];
       const r = this.ph.raycast(o, [dir[0] * 1.6, 0, dir[2] * 1.6], [this.model]);
       if (r.part && (r.part.ClassName === 'TrussPart' || this.ladderish(r.part))) return true;
@@ -308,6 +308,9 @@ export class Controller {
     if (climbing) {
       this.vel[1] = ws * 0.7;
       this.state = STATES.climb;
+      this.climbDir = dir;
+    } else if (this.state === STATES.climb && ml > 1e-3 && !platform && this.climbDir && dir[0] * this.climbDir[0] + dir[2] * this.climbDir[2] > 0.5) {
+      this.vel[1] = Math.max(this.vel[1], Math.sqrt(2 * GRAVITY * 2.4));
     } else {
       this.vel[1] -= GRAVITY * dt;
       this.jumpCooldown = Math.max(0, this.jumpCooldown - dt);
@@ -335,7 +338,10 @@ export class Controller {
       else this.state = this.vel[1] > 0 ? STATES.jump : STATES.fall;
     }
     if (platform) this.state = STATES.stand;
-    if (hum.props.get('AutoRotate') && ml > 1e-3 && !platform) {
+    const face = input.face;
+    if (face && Math.hypot(face[0], face[2]) > 1e-3 && !platform) {
+      this.yawCF = C.lookAt(0, 0, 0, face[0], 0, face[2]);
+    } else if (hum.props.get('AutoRotate') && ml > 1e-3 && !platform) {
       const target = C.lookAt(0, 0, 0, dir[0], 0, dir[2]);
       this.yawCF = C.lerp(C.rotOnly(this.yawCF), target, Math.min(1, dt * 12));
     }
@@ -375,7 +381,7 @@ export class CharacterProxy {
     const torso = this.model.findChild('Torso');
     if (!torso) return;
     if (this.blocking) {
-      this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0), this.body);
+      this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0).setEnabled(!this.seated), this.body);
       this.ph.byHandle.set(this.solid.handle, { part: torso, noRay: true, character: this.model, solidProxy: true });
     }
     const bt = this.body.translation(), br = this.body.rotation();
@@ -396,6 +402,11 @@ export class CharacterProxy {
       this.limbs.set(p, c);
       this.ph.byHandle.set(c.handle, { part: p, character: this.model, sensorOnly: true });
     }
+  }
+
+  setSeated(on) {
+    this.seated = !!on;
+    if (this.solid) this.solid.setEnabled(!on);
   }
 
   update(torsoCF, poses) {

@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## 26.11.3
+
+### Physics and vehicles
+
+- Hinge, Motor and SteppingMotor surfaces (and `Rotate`, `RotateP` and `RotateV` joints) are real hinges: the wheels of classic cars turn instead of being welded to the car.
+- VehicleSeats drive: W and S set Throttle, A and D set Steer, and the seat turns the wheels hinged to its chassis up to `MaxSpeed`, with `Torque` and `TurnSpeed`. Space gets out.
+- Cars no longer sink into the floor or fling at edges: the seated character's collision box was pushing the car.
+- NPCs whose rig is made of touching surfaces keep their joints instead of falling apart; Hinge and Motor surfaces join parts that overlap them, as 2012 wheels do.
+- Climbing a truss lasts until the feet clear it, then hops, so you can climb onto a ledge a little above the top.
+- Characters no longer spawn inside each other, which pushed one through thin floors and killed it.
+
+### Client
+
+- Shift lock: Shift locks the mouse to the centre, turns the camera with the mouse, puts the camera over the right shoulder and turns the character with it.
+- The sit pose plays in seats: `Humanoid.Seated` now fires on the player's own character.
+- F9 opens a developer console with the client's script output and, for the game's owner and developers, the server's.
+- Built-in `rbxasset://sounds/...` sounds play; only sounds with an asset id did.
+- Decals on a part's Top face are no longer upside down.
+- `redeem` can send member `perks`, which become a `SolarPerks` Configuration on the player; nametags use its name colour.
+
+### Server
+
+- `POST /kick` disconnects a user from every game and Team Create session, for hosts that ban or warn players.
+
+### Studio
+
+- Quotes and brackets close themselves, and typing inside `Instance.new("`, `GetService("`, `IsA("`, `FindFirstChild("` or `BrickColor.new("` suggests class, service, child or colour names.
+- Autocomplete lists `Parent` and `ClassName`.
+- Right-drag looks around from where the camera is, the wheel moves toward the point under the cursor, and the drag tool lands parts on locked parts.
+
+### Servers, badges and friends
 
 - The 2012 engine's loading screen: the default sky behind a grey panel counting Bricks and Connectors, instead of the newer LoadingScript, which this build did not run (`NewLoadingScreen` is now off).
 - Several servers per place: players fill the busiest public server with room, a new one starts when all are full, and each server has its own `game.JobId`. Tickets can ask for a particular server, a private server or a reserved server.

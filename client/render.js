@@ -780,7 +780,7 @@ export class Renderer {
         const e = 0.002;
         switch (face) {
           case 0: mesh.position.set(h[0] + e, 0, 0); mesh.rotation.y = Math.PI / 2; break;
-          case 1: mesh.position.set(0, h[1] + e, 0); mesh.rotation.x = -Math.PI / 2; break;
+          case 1: mesh.position.set(0, h[1] + e, 0); mesh.rotation.set(-Math.PI / 2, 0, Math.PI); break;
           case 2: mesh.position.set(0, 0, h[2] + e); break;
           case 3: mesh.position.set(-h[0] - e, 0, 0); mesh.rotation.y = -Math.PI / 2; break;
           case 4: mesh.position.set(0, -h[1] - e, 0); mesh.rotation.x = Math.PI / 2; break;

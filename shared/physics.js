@@ -3,7 +3,8 @@ import * as C from './cframe.js';
 export const GRAVITY = 196.2;
 const STEP = 1 / 60;
 const JOINABLE = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
-const RIGID_JOINTS = new Set(['Weld', 'ManualWeld', 'ManualGlue', 'Snap', 'Glue', 'Motor', 'Motor6D', 'Rotate', 'RotateP', 'RotateV', 'VelocityMotor']);
+const RIGID_JOINTS = new Set(['Weld', 'ManualWeld', 'ManualGlue', 'Snap', 'Glue', 'Motor', 'Motor6D', 'VelocityMotor']);
+const HINGE_JOINTS = new Set(['Rotate', 'RotateP', 'RotateV']);
 
 function quatOf(cf) {
   const q = C.toQuat(cf);
@@ -37,6 +38,7 @@ const FACE_AXES = [[0, 1], [1, 1], [2, 1], [0, -1], [1, -1], [2, -1]];
 function canJoin(a, b) {
   if (a === 9 || b === 9) return false;
   if (a === 2 || b === 2 || a === 1 || b === 1) return true;
+  if ((a >= 6 && a <= 8) || (b >= 6 && b <= 8)) return true;
   if (a === 0 || b === 0) return false;
   const set = new Set([a, b]);
   if (set.has(3) && (set.has(4) || set.has(5))) return true;
@@ -58,6 +60,12 @@ export class Physics {
     this.assemblies = new Set();
     this.dirty = new Set();
     this.autoJoints = new Map();
+    this.hinges = new Map();
+    this.hingesOf = new Map();
+    this.hingeSeq = 0;
+    this.hingesDirty = false;
+    this.fixedBody = null;
+    this.vehicleSeats = new Set();
     this.joints = new Set();
     this.movers = new Set();
     this.touching = new Map();
@@ -137,6 +145,7 @@ export class Physics {
     if (inst.isA('BasePart')) {
       if (inst.ClassName === 'Terrain') return;
       if (!this.parts.has(inst) && !this.excluded(inst)) this.addPart(inst);
+      if (inst.ClassName === 'VehicleSeat' && this.parts.has(inst)) this.vehicleSeats.add(inst);
     } else if (inst.isA('JointInstance')) {
       this.enterJoint(inst);
     } else if (inst.isA('BodyMover')) {
@@ -145,12 +154,24 @@ export class Physics {
   }
 
   leave(inst) {
-    if (inst.isA('BasePart')) this.removePart(inst);
+    if (inst.isA('BasePart')) {
+      this.vehicleSeats.delete(inst);
+      this.removePart(inst);
+    }
     else if (inst.isA('JointInstance')) this.leaveJoint(inst);
     else if (inst.isA('BodyMover')) this.movers.delete(inst);
   }
 
   enterJoint(j) {
+    if (HINGE_JOINTS.has(j.ClassName)) {
+      const a = j.props.get('Part0'), b = j.props.get('Part1');
+      if (!a || !b || a === b || !this.simulate) return;
+      if (!this.inWorld(j) && !this.inWorld(a)) return;
+      const c0 = j.props.get('C0');
+      const at = C.mul(a.props.get('CFrame'), c0);
+      this.addHinge(a, b, { joint: j, point: [at[0], at[1], at[2]], axis: [at[5], at[8], at[11]] });
+      return;
+    }
     if (!RIGID_JOINTS.has(j.ClassName)) return;
     const a = j.props.get('Part0'), b = j.props.get('Part1');
     if (!a || !b || a === b) return;
@@ -161,6 +182,7 @@ export class Physics {
   }
 
   leaveJoint(j, old, which) {
+    for (const [key, h] of this.hinges) if (h.inst === j) this.dropHingeKey(key);
     if (!this.joints.has(j)) return;
     this.joints.delete(j);
     const a = which === 'Part0' ? old : j.props.get('Part0');
@@ -231,6 +253,7 @@ export class Physics {
       rec.collider = null;
     }
     this.dropAuto(part);
+    this.dropHinges(part);
     const t = this.touching.get(part);
     if (t) {
       for (const o of t) {
@@ -289,8 +312,153 @@ export class Physics {
     this.autoJoints.delete(part);
   }
 
+  addHinge(a, b, spec) {
+    const key = ++this.hingeSeq;
+    const h = { key, a, b, point: spec.point, axis: spec.axis, inst: spec.joint || null, joint: null, b1: null, b2: null, lpA: null, laA: null, radiusA: 1, radiusB: 1 };
+    const cfA = a.props.get('CFrame'), cfB = b.props.get('CFrame');
+    const ia = C.inv(cfA), ib = C.inv(cfB);
+    h.lpA = C.point(ia, ...h.point);
+    h.laA = C.vector(ia, ...h.axis);
+    h.lpB = C.point(ib, ...h.point);
+    h.laB = C.vector(ib, ...h.axis);
+    const radiusOf = (part, la) => {
+      const sz = part.props.get('Size');
+      const ax = la.map(Math.abs);
+      const k = ax.indexOf(Math.max(...ax));
+      return Math.max(0.25, Math.max(...sz.filter((_, i) => i !== k)) / 2);
+    };
+    h.radiusA = radiusOf(a, h.laA);
+    h.radiusB = radiusOf(b, h.laB);
+    this.hinges.set(key, h);
+    for (const p of [a, b]) {
+      if (!this.hingesOf.has(p)) this.hingesOf.set(p, new Set());
+      this.hingesOf.get(p).add(key);
+    }
+    this.hingesDirty = true;
+    this.markDirty(a);
+    this.markDirty(b);
+  }
+
+  dropHingeKey(key) {
+    const h = this.hinges.get(key);
+    if (!h) return;
+    this.hinges.delete(key);
+    for (const p of [h.a, h.b]) {
+      const set = this.hingesOf.get(p);
+      if (set) {
+        set.delete(key);
+        if (!set.size) this.hingesOf.delete(p);
+      }
+      this.markDirty(p);
+    }
+    this.removeHingeJoint(h);
+  }
+
+  dropHinges(part) {
+    const set = this.hingesOf.get(part);
+    if (!set) return;
+    for (const key of [...set]) this.dropHingeKey(key);
+  }
+
+  removeHingeJoint(h) {
+    if (h.joint && h.b1 && h.b2 && this.world.getRigidBody(h.b1.handle) === h.b1 && this.world.getRigidBody(h.b2.handle) === h.b2) {
+      try {
+        this.world.removeImpulseJoint(h.joint, true);
+      } catch {}
+    }
+    h.joint = null;
+    h.b1 = h.b2 = null;
+  }
+
+  hingeBody(asm) {
+    if (asm.body) return asm.body;
+    if (!this.fixedBody) this.fixedBody = this.world.createRigidBody(this.R.RigidBodyDesc.fixed());
+    return this.fixedBody;
+  }
+
+  syncHinges() {
+    this.hingesDirty = false;
+    const R = this.R;
+    const pairs = new Map();
+    for (const h of this.hinges.values()) {
+      const ra = this.parts.get(h.a), rb = this.parts.get(h.b);
+      if (!ra || !rb || !ra.asm || !rb.asm || ra.asm === rb.asm || (!ra.asm.body && !rb.asm.body)) {
+        this.removeHingeJoint(h);
+        continue;
+      }
+      const b1 = this.hingeBody(ra.asm), b2 = this.hingeBody(rb.asm);
+      const pk = b1.handle < b2.handle ? b1.handle + ':' + b2.handle : b2.handle + ':' + b1.handle;
+      if (pairs.has(pk) && pairs.get(pk) !== h) {
+        this.removeHingeJoint(h);
+        continue;
+      }
+      pairs.set(pk, h);
+      if (h.joint && h.b1 === b1 && h.b2 === b2 && this.world.getRigidBody(b1.handle) === b1 && this.world.getRigidBody(b2.handle) === b2) continue;
+      this.removeHingeJoint(h);
+      const local = (body, part, lp, la) => {
+        const bcf = cfOf(body.translation(), body.rotation());
+        const inv = C.inv(bcf);
+        const pcf = part.props.get('CFrame');
+        const wp = C.point(pcf, ...lp), wa = C.vector(pcf, ...la);
+        return [C.point(inv, ...wp), C.vector(inv, ...wa)];
+      };
+      const [p1, a1] = local(b1, h.a, h.lpA, h.laA);
+      const [p2, a2] = local(b2, h.a, h.lpA, h.laA);
+      const v = (x) => ({ x: x[0], y: x[1], z: x[2] });
+      const data = R.JointData.revoluteWithAxes(v(p1), v(p2), v(a1), v(a2));
+      const joint = this.world.createImpulseJoint(data, b1, b2, true);
+      joint.setContactsEnabled(false);
+      h.joint = joint;
+      h.b1 = b1;
+      h.b2 = b2;
+    }
+  }
+
+  driveVehicles() {
+    for (const seat of this.vehicleSeats) {
+      const rec = this.parts.get(seat);
+      if (!rec || !rec.asm || !rec.asm.body || seat.props.get('Disabled')) continue;
+      const th = seat.props.get('Throttle') | 0, st = seat.props.get('Steer') | 0;
+      const on = !!seat.props.get('Occupant') && (th || st);
+      const cf = seat.props.get('CFrame');
+      const f = [-cf[5], -cf[8], -cf[11]], u = [cf[4], cf[7], cf[10]], rt = [cf[3], cf[6], cf[9]];
+      const spin = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
+      const maxSpeed = Math.max(0, seat.props.get('MaxSpeed') || 0);
+      const torque = Math.max(0, seat.props.get('Torque') || 0);
+      const turn = Math.max(0, seat.props.get('TurnSpeed') ?? 1);
+      for (const h of this.hinges.values()) {
+        if (!h.joint) continue;
+        const asmA = this.parts.get(h.a)?.asm, asmB = this.parts.get(h.b)?.asm;
+        let wheelPart, sign;
+        if (asmA === rec.asm && asmB !== rec.asm) {
+          wheelPart = h.b;
+          sign = 1;
+        } else if (asmB === rec.asm && asmA !== rec.asm) {
+          wheelPart = h.a;
+          sign = -1;
+        } else continue;
+        if (!on) {
+          h.joint.configureMotorVelocity(0, 0);
+          continue;
+        }
+        const wcf = wheelPart.props.get('CFrame');
+        const side = (wcf[0] - cf[0]) * rt[0] + (wcf[1] - cf[1]) * rt[1] + (wcf[2] - cf[2]) * rt[2];
+        const s = maxSpeed * Math.max(-1, Math.min(1, th - st * turn * Math.sign(side || 0)));
+        const pcf = h.a.props.get('CFrame');
+        const axis = C.vector(pcf, ...h.laA);
+        const wv = (spin[0] * axis[0] + spin[1] * axis[1] + spin[2] * axis[2]) * (s / (sign > 0 ? h.radiusB : h.radiusA)) * sign;
+        const wb = this.parts.get(wheelPart)?.asm?.body;
+        const m = wb ? wb.mass() : 1;
+        h.joint.configureMotorVelocity(wv, Math.max(0.5, torque * m * 0.02));
+        if (wb && wb.isSleeping()) wb.wakeUp();
+        if (rec.asm.body.isSleeping()) rec.asm.body.wakeUp();
+      }
+    }
+  }
+
   breakJoints(part) {
     this.dropAuto(part);
+    this.dropHinges(part);
     for (const j of [...this.joints]) {
       if (j.props.get('Part0') === part || j.props.get('Part1') === part) {
         if (!j.destroyed) this.dm.destroy(j);
@@ -358,10 +526,36 @@ export class Physics {
     for (const p of parts) {
       for (const o of this.gridNeighbours(g, p)) {
         if (o === p) continue;
-        const f = this.faceContact(p, o);
-        if (f && canJoin(surfaceOf(p, f[0]), surfaceOf(o, f[1]))) this.addAuto(p, o);
+        const f = this.faceContact(p, o, true);
+        if (!f) continue;
+        const sp = surfaceOf(p, f[0]), so = surfaceOf(o, f[1]);
+        if (!canJoin(sp, so)) continue;
+        const hp = sp >= 6 && sp <= 8, ho = so >= 6 && so <= 8;
+        if (hp || ho) {
+          const [hinge, other, face] = hp ? [p, o, f[0]] : [o, p, f[1]];
+          const known = this.hingesOf.get(hinge);
+          if (known && [...known].some((k) => {
+            const h = this.hinges.get(k);
+            return h && !h.inst && ((h.a === hinge && h.b === other) || (h.a === other && h.b === hinge));
+          })) continue;
+          const cf = hinge.props.get('CFrame'), sz = hinge.props.get('Size');
+          const [ax, sg] = FACE_AXES[face];
+          const n = [cf[3 + ax] * sg, cf[6 + ax] * sg, cf[9 + ax] * sg];
+          const pt = [cf[0] + n[0] * sz[ax] / 2, cf[1] + n[1] * sz[ax] / 2, cf[2] + n[2] * sz[ax] / 2];
+          this.addHinge(hinge, other, { point: pt, axis: n });
+        } else this.addAuto(p, o);
       }
     }
+  }
+
+  contactJointClass(a, b) {
+    const f = this.faceContact(a, b, true);
+    if (!f) return null;
+    const sa = surfaceOf(a, f[0]), sb = surfaceOf(b, f[1]);
+    if (!canJoin(sa, sb)) return null;
+    if (sa === 2 || sb === 2) return 'Weld';
+    if (sa === 1 || sb === 1) return 'Glue';
+    return 'Snap';
   }
 
   autoJoinAll() {
@@ -391,7 +585,7 @@ export class Physics {
     return out;
   }
 
-  faceContact(a, b) {
+  faceContact(a, b, deep = false) {
     const ca = a.props.get('CFrame'), cb = b.props.get('CFrame');
     const sa = a.props.get('Size'), sb = b.props.get('Size');
     for (let fa = 0; fa < 6; fa++) {
@@ -405,7 +599,11 @@ export class Physics {
         const ctrA = [ca[0] + na[0] * pa, ca[1] + na[1] * pa, ca[2] + na[2] * pa];
         const ctrB = [cb[0] + nb[0] * pb, cb[1] + nb[1] * pb, cb[2] + nb[2] * pb];
         const d = (ctrB[0] - ctrA[0]) * na[0] + (ctrB[1] - ctrA[1]) * na[1] + (ctrB[2] - ctrA[2]) * na[2];
-        if (Math.abs(d) > 0.05) continue;
+        if (Math.abs(d) > 0.08) {
+          if (!deep || d > 0 || -d > Math.min(sa[axA], sb[axB])) continue;
+          const ha = surfaceOf(a, fa), hb = surfaceOf(b, fb);
+          if (!(ha >= 6 && ha <= 8) && !(hb >= 6 && hb <= 8)) continue;
+        }
         if (this.overlap2d(ca, sa, axA, cb, sb, axB, na)) return [fa, fb];
       }
     }
@@ -435,7 +633,11 @@ export class Physics {
       this.pendingJoin.clear();
       this.makeJoints(list);
     }
-    if (!this.simulate || !this.dirty.size) return;
+    if (!this.simulate) return;
+    if (!this.dirty.size) {
+      if (this.hingesDirty) this.syncHinges();
+      return;
+    }
     const seeds = [...this.dirty].filter((p) => this.parts.has(p));
     this.dirty.clear();
     const seen = new Set();
@@ -445,6 +647,7 @@ export class Physics {
       for (const p of group) seen.add(p);
       this.buildAssembly(group);
     }
+    this.syncHinges();
   }
 
   connected(start) {
@@ -671,6 +874,7 @@ export class Physics {
     this.acc = Math.min(this.acc + dt, STEP * 4);
     while (this.acc >= STEP) {
       this.applyMovers(STEP);
+      if (this.vehicleSeats.size) this.driveVehicles();
       this.world.step(this.events);
       this.acc -= STEP;
       this.drainEvents();

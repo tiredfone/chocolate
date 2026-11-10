@@ -1,6 +1,6 @@
 # Chocolate
 
-Version 26.11.2.
+Version 26.11.3.
 
 Chocolate is a browser port of the 2012 game client. It runs places in the browser with three.js for rendering, Rapier for physics and a Lua 5.1 VM compiled to WebAssembly, and it runs the client's real CoreScripts unmodified. A Node server simulates each place and replicates it to players over a WebSocket.
 
@@ -72,7 +72,7 @@ Endpoints use `{id}` as a placeholder. Paths are relative to `siteUrl` on the se
 | Endpoint | Used by | Contract |
 | --- | --- | --- |
 | `ticket` | browser | `POST {placeId, server}` as JSON with the page's CSRF token in `X-CSRF-Token`. `server` is optional: `job:<id>` for a particular public server, `private:<id>[:<code>]` or `reserved:<id>:<code>`. Returns `{ success, ticket, ws }` |
-| `redeem` | server | `POST ticket=...` with `X-Chocolate-Key`. Returns `{ ok, mode, userId, username, placeId, ... }` and must accept each ticket once. `mode` is `play` for a game ticket (with `membership`, `age`, `dev`, and optionally `maxPlayers`, `allowGear` (false to spawn players without their equipped gear; gear is given when it is left out) and `serverKey`: `job:<id>`, `priv:<id>` or `res:<id>`) or `studio` for a Team Create ticket (with `role`: `owner` or `editor`). A response without `mode` is treated as `play` |
+| `redeem` | server | `POST ticket=...` with `X-Chocolate-Key`. Returns `{ ok, mode, userId, username, placeId, ... }` and must accept each ticket once. `mode` is `play` for a game ticket (with `membership`, `age`, `dev`, and optionally `maxPlayers`, `allowGear` (false to spawn players without their equipped gear; gear is given when it is left out) and `serverKey`: `job:<id>`, `priv:<id>` or `res:<id>`) or `studio` for a Team Create ticket (with `role`: `owner` or `editor`). A response without `mode` is treated as `play`. Optional `perks: { badge, chatColor, nameColor }` become the player's `SolarPerks` |
 | `asset` | both | Raw asset bytes by ID |
 | `place` | server | Place file by ID, only needed when `assetDir` is empty |
 | `coreScript` | both | Lua source by ID. A leading signature line starting with `%` is stripped |
@@ -132,6 +132,7 @@ The server answers two local HTTP requests on its port, which must not be proxie
 | --- | --- |
 | `GET /status` | `{ ok, places: [{ id, job, kind, privateId, max, ready, started, players, users: [{ id, name }] }], studio: [{ id, users }] }`: every running server and Team Create session |
 | `POST /shutdown` with `X-Chocolate-Key` and `{ job }` or `{ placeId }` | Stops that server, or every server of the place, telling its players "This server was shut down" |
+| `POST /kick` with `X-Chocolate-Key` and `{ userId, reason }` | Disconnects every game and Team Create connection of that user with the reason, for example when the host bans them. Answers `{ ok, kicked }` |
 
 ## How a join works
 

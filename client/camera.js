@@ -13,7 +13,11 @@ export class CameraController {
     this.dragging = false;
     this.firstPerson = false;
     this.locked = false;
+    this.shiftLock = false;
     this.keyYaw = 0;
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement !== canvas && this.shiftLock) this.shiftLock = false;
+    });
     this.cf = C.cf(0, 20, 20);
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button === 2) {
@@ -31,11 +35,11 @@ export class CameraController {
     window.addEventListener('pointerup', (e) => {
       if (e.button === 2 && this.dragging) {
         this.dragging = false;
-        if (document.pointerLockElement === canvas && !this.firstPerson) document.exitPointerLock();
+        if (document.pointerLockElement === canvas && !this.firstPerson && !this.shiftLock) document.exitPointerLock();
       }
     });
     window.addEventListener('pointermove', (e) => {
-      if (this.dragging || (this.firstPerson && document.pointerLockElement === canvas)) {
+      if (this.dragging || ((this.firstPerson || this.shiftLock) && document.pointerLockElement === canvas)) {
         this.yaw -= e.movementX * 0.006;
         this.pitch -= e.movementY * 0.006;
         this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
@@ -48,6 +52,42 @@ export class CameraController {
       this.targetZoom = Math.max(0.5, Math.min(400, this.targetZoom * f));
       if (this.targetZoom < 1.2 && e.deltaY < 0) this.targetZoom = 0.5;
     }, { passive: false });
+  }
+
+  shiftLockAllowed() {
+    const sp = this.world.dm.services.get('StarterPlayer');
+    if (sp && sp.props.get('EnableMouseLockOption') === false) return false;
+    const type = this.world.camera.props.get('CameraType');
+    return type !== 6 && type !== 0;
+  }
+
+  toggleShiftLock() {
+    if (!this.shiftLock && !this.shiftLockAllowed()) return;
+    this.shiftLock = !this.shiftLock;
+    const canvas = this.canvas;
+    if (this.shiftLock) {
+      try {
+        if (document.pointerLockElement !== canvas && canvas.requestPointerLock) {
+          const r = canvas.requestPointerLock();
+          if (r && r.catch) r.catch(() => {
+            this.shiftLock = false;
+          });
+        }
+      } catch {
+        this.shiftLock = false;
+      }
+    } else if (document.pointerLockElement === canvas && !this.firstPerson && !this.dragging) document.exitPointerLock();
+  }
+
+  mouseLocked() {
+    return document.pointerLockElement === this.canvas && (this.shiftLock || this.firstPerson);
+  }
+
+  faceDir() {
+    if (!this.mouseLocked()) return null;
+    const type = this.world.camera.props.get('CameraType');
+    if (type === 6 || type === 0) return null;
+    return this.forwardFlat();
   }
 
   rotateBy(dx, dy) {
@@ -93,12 +133,21 @@ export class CameraController {
     if (fp !== this.firstPerson) {
       this.firstPerson = fp;
       if (world.ownModel) for (const d of world.ownModel.descendants()) if (d.isA('BasePart')) this.renderer.setLocalTransparency(d, fp ? 1 : null);
-      if (!fp && document.pointerLockElement === this.canvas && !this.dragging) document.exitPointerLock();
+      if (!fp && document.pointerLockElement === this.canvas && !this.dragging && !this.shiftLock) document.exitPointerLock();
     }
     if (type === 6 || type === 0) {
       this.cf = cam.props.get('CFrame');
     } else {
       const focus = this.subjectPos();
+      if (focus && this.shiftLock && !fp && document.pointerLockElement === this.canvas) {
+        const rt = this.rightFlat();
+        const want = [focus[0] + rt[0] * 1.75, focus[1], focus[2] + rt[2] * 1.75];
+        const ignore = world.ownModel ? [world.ownModel] : [];
+        const hit = world.physics.raycast(focus, [want[0] - focus[0], 0, want[2] - focus[2]], ignore, (p) => p.props.get('Transparency') < 0.95 && p.props.get('CanCollide'));
+        const k = hit.part ? Math.max(0, Math.hypot(hit.point[0] - focus[0], hit.point[2] - focus[2]) - 0.3) / 1.75 : 1;
+        focus[0] += rt[0] * 1.75 * k;
+        focus[2] += rt[2] * 1.75 * k;
+      }
       if (focus) {
         const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
         const back = [Math.sin(this.yaw) * cp, -sp, Math.cos(this.yaw) * cp];

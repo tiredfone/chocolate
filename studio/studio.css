@@ -977,6 +977,7 @@ html, body {
 .st-ac-kind.k-method, .st-ac-kind.k-function { background: #9b4de8; }
 .st-ac-kind.k-event { background: #e8a23c; }
 .st-ac-kind.k-child { background: #2fa84f; }
+.st-ac-kind.k-class { background: #b0653a; }
 .st-ac-kind.k-keyword { background: #00007f; }
 .st-ac-kind.k-local { background: #1fb5b5; }
 .st-ac-kind.k-enum, .st-ac-kind.k-enumitem { background: #7a8a1f; }

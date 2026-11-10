@@ -1,6 +1,6 @@
 # Chocolate Studio
 
-Chocolate Studio (version 26.11.2) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
+Chocolate Studio (version 26.11.3) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
 
 Studio does not run scripts. Test > Play Solo saves the place and opens its play page, so testing happens in the real game.
 
@@ -71,9 +71,9 @@ The mouse uses the 2012 Studio cursors: the arrow, the grab hand while dragging,
 
 | Input | Action |
 | --- | --- |
-| Right drag | Orbit |
+| Right drag | Look around from where the camera is |
 | Middle drag | Pan |
-| Wheel | Zoom |
+| Wheel | Move toward the point under the cursor; Ctrl+wheel zooms |
 | W A S D, Q E | Fly; hold Shift to go faster |
 | Arrow keys | Turn and tilt |
 | F | Look at the selection |
@@ -99,8 +99,15 @@ Scripts open in their own tab with 2012 syntax colours. While you type a name, o
 | `local p = Instance.new("Part")` then `p.` | The members of `Part` |
 | `math.` `string.` `table.` `coroutine.` `Vector3.` `CFrame.` `BrickColor.` `UDim2.` | The library or constructor functions |
 | `Enum.` `Enum.Material.` | Enum types and their items |
+| `Instance.new("` | Every class that can be created |
+| `:GetService("` | Every service |
+| `:IsA("` `:FindFirstChildOfClass("` | Every class name |
+| `:FindFirstChild("` `:WaitForChild("` | The names of the object's children |
+| `BrickColor.new("` | BrickColor names |
 
-Up and Down move through the list, Enter or Tab inserts the selection (methods get an opening parenthesis), and Escape closes it. Nothing is suggested inside strings or comments.
+Up and Down move through the list, Enter or Tab inserts the selection (methods get `()` with the cursor inside), and Escape closes it. Apart from the string arguments above, nothing is suggested inside strings or comments.
+
+Quotes and brackets close themselves: typing `"`, `'`, `(`, `[` or `{` inserts the pair with the cursor inside, or wraps the selected text. Typing the closing character steps over it, and Backspace between an empty pair deletes both. A quote is not paired after a letter or inside a string or comment.
 
 ### Files
 

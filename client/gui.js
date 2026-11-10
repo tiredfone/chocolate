@@ -480,6 +480,12 @@ export class Gui {
         const b = brickOf(pl.props.get('TeamColor'));
         color = `rgb(${Math.round(b.r * 255)},${Math.round(b.g * 255)},${Math.round(b.b * 255)})`;
       }
+      else if (pl) {
+        const perk = pl.findChild('SolarPerks');
+        const nc = perk && perk.findChild('NameColor');
+        const v = nc && nc.ClassName === 'Color3Value' ? nc.props.get('Value') : null;
+        if (v) color = `rgb(${Math.round(v[0] * 255)},${Math.round(v[1] * 255)},${Math.round(v[2] * 255)})`;
+      }
       const key = name + '|' + color;
       if (t.key !== key) {
         t.key = key;

@@ -212,6 +212,25 @@ export class StudioView {
     c.updateMatrixWorld();
   }
 
+  look(dx, dy) {
+    const cp = Math.cos(this.pitch);
+    const px = this.focus.x + Math.sin(this.yaw) * cp * this.dist;
+    const py = this.focus.y - Math.sin(this.pitch) * this.dist;
+    const pz = this.focus.z + Math.cos(this.yaw) * cp * this.dist;
+    this.yaw -= dx * 0.006;
+    this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch - dy * 0.006));
+    const np = Math.cos(this.pitch);
+    this.focus.set(px - Math.sin(this.yaw) * np * this.dist, py + Math.sin(this.pitch) * this.dist, pz - Math.cos(this.yaw) * np * this.dist);
+  }
+
+  dolly(e, inward) {
+    const ray = this.ray(e);
+    const hit = this.pick(e, { locked: true });
+    const far = hit.part ? Math.hypot(hit.point[0] - ray.origin.x, hit.point[1] - ray.origin.y, hit.point[2] - ray.origin.z) : this.dist;
+    const step = Math.max(0.5, Math.min(200, far * 0.2)) * (inward ? 1 : -1);
+    this.focus.addScaledVector(ray.direction, step);
+  }
+
   orbit(dx, dy) {
     this.yaw -= dx * 0.008;
     this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch - dy * 0.008));
@@ -272,7 +291,8 @@ export class StudioView {
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this.zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12);
+      if (e.ctrlKey) this.zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12);
+      else this.dolly(e, e.deltaY < 0);
     }, { passive: false });
     el.addEventListener('pointerdown', (e) => this.down(e));
     el.addEventListener('pointermove', (e) => this.move(e));
@@ -306,7 +326,7 @@ export class StudioView {
     }
     if (this.pointers.size > 2) return;
     if (e.button === 2) {
-      this.drag = { kind: 'orbit' };
+      this.drag = { kind: e.pointerType === 'mouse' ? 'look' : 'orbit' };
       return;
     }
     if (e.button === 1) {
@@ -346,6 +366,10 @@ export class StudioView {
     if (d.kind === 'orbit' || (d.kind === 'orbit-or-tap' && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) > 8)) {
       d.kind = 'orbit';
       this.orbit(dx, dy);
+      return;
+    }
+    if (d.kind === 'look') {
+      this.look(dx, dy);
       return;
     }
     if (d.kind === 'pan') {
@@ -388,7 +412,7 @@ export class StudioView {
     const part = h && h.isA && h.isA('BasePart') ? h : null;
     const tex = (n) => `rbxasset://textures/${n}.png`;
     let c = h ? CURSORS.arrow : CURSORS.far;
-    if (this.drag && (this.drag.kind === 'orbit' || this.drag.kind === 'pan' || this.drag.kind === 'gesture')) c = CURSORS.far;
+    if (this.drag && (this.drag.kind === 'orbit' || this.drag.kind === 'look' || this.drag.kind === 'pan' || this.drag.kind === 'gesture')) c = CURSORS.far;
     else if (this.drag && this.drag.move) c = tex(t === 'resize' || t === 'size' ? 'ResizeCursor' : 'GrabCursor');
     else if (t === 'lock') c = tex(part && part.props.get('Locked') ? 'UnlockCursor' : 'LockCursor');
     else if (t === 'anchor') c = tex(part && part.props.get('Anchored') ? 'UnAnchorCursor' : 'AnchorCursor');
@@ -647,7 +671,7 @@ export class StudioView {
     return {
       kind: 'drag',
       move: (ev) => {
-        const h = this.pick(ev, { ignore: targets });
+        const h = this.pick(ev, { ignore: targets, locked: true });
         let x, z, bottom;
         if (h.part) {
           x = h.point[0] + offset[0];
@@ -662,7 +686,7 @@ export class StudioView {
         }
         const g = app.grid;
         const dx = snap(x - b0.center[0], g), dz = snap(z - b0.center[2], g);
-        const dy = snap(bottom - b0.min[1], g > 0 ? Math.min(g, 0.2) : 0);
+        const dy = bottom - b0.min[1];
         if (!moved && Math.abs(dx) + Math.abs(dz) + Math.abs(dy) < 1e-6) return;
         moved = true;
         app.restore(start);

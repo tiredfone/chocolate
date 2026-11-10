@@ -580,6 +580,7 @@ export class ScriptEditor {
         }
         if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') this.closeAc();
       }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && this.autoPair(e)) return;
       if (e.key === 'Tab') {
         e.preventDefault();
         const s = this.ta.selectionStart, en = this.ta.selectionEnd;
@@ -595,11 +596,70 @@ export class ScriptEditor {
     sync();
   }
 
+  insert(text, caretAt, selEnd) {
+    const ta = this.ta;
+    const s = ta.selectionStart;
+    let ok = false;
+    try {
+      ok = document.execCommand('insertText', false, text);
+    } catch {}
+    if (!ok) {
+      ta.setRangeText(text, s, ta.selectionEnd, 'end');
+      ta.dispatchEvent(new Event('input'));
+    }
+    ta.setSelectionRange(s + caretAt, s + (selEnd ?? caretAt));
+  }
+
+  autoPair(e) {
+    const PAIRS = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
+    const ta = this.ta, v = ta.value, s = ta.selectionStart, en = ta.selectionEnd;
+    const next = v[s] || '', prev = v[s - 1] || '';
+    const k = e.key;
+    if (k === 'Backspace' && s === en && s > 0 && PAIRS[prev] && PAIRS[prev] === next) {
+      e.preventDefault();
+      ta.setSelectionRange(s - 1, s + 1);
+      this.insert('', 0);
+      this.closeAc();
+      return true;
+    }
+    if ((k === ')' || k === ']' || k === '}') && s === en && next === k) {
+      e.preventDefault();
+      ta.setSelectionRange(s + 1, s + 1);
+      this.closeAc();
+      return true;
+    }
+    if (!PAIRS[k]) return false;
+    const close = PAIRS[k];
+    if (s !== en) {
+      e.preventDefault();
+      const inner = v.slice(s, en);
+      this.insert(k + inner + close, 1, 1 + inner.length);
+      return true;
+    }
+    const quote = k === '"' || k === "'";
+    if (quote) {
+      if (next === k) {
+        e.preventDefault();
+        ta.setSelectionRange(s + 1, s + 1);
+        this.closeAc();
+        return true;
+      }
+      const line = v.slice(v.lastIndexOf('\n', s - 1) + 1, s);
+      const open = line.replace(/\\./g, '').split(k).length % 2 === 0;
+      if (/\w/.test(prev) || open || /--/.test(line.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, ''))) return false;
+    }
+    if (next && !/[\s)\]},;]/.test(next)) return false;
+    e.preventDefault();
+    this.insert(k + close, 1);
+    if (quote || k === '(') this.complete(false);
+    return true;
+  }
+
   complete(force) {
     const caret = this.ta.selectionStart;
     if (caret !== this.ta.selectionEnd) return this.closeAc();
     const res = completions(this.ta.value, caret, { dm: this.script.dm, script: this.script });
-    if (!res || (!force && !res.word && !/[.:]$/.test(this.ta.value.slice(0, caret)))) return this.closeAc();
+    if (!res || (!force && !res.string && !res.word && !/[.:]$/.test(this.ta.value.slice(0, caret)))) return this.closeAc();
     this.ac = { ...res, sel: 0 };
     this.drawAc();
   }
@@ -610,7 +670,7 @@ export class ScriptEditor {
     box.replaceChildren();
     ac.items.forEach((it, i) => {
       const row = el('div', 'st-ac-row' + (i === ac.sel ? ' sel' : ''), box);
-      el('span', 'st-ac-kind k-' + it.kind, row, ({ property: 'P', method: 'M', event: 'E', child: 'C', keyword: 'K', local: 'L', function: 'F', global: 'G', enum: 'N', enumitem: 'N' })[it.kind] || '?');
+      el('span', 'st-ac-kind k-' + it.kind, row, ({ property: 'P', method: 'M', event: 'E', child: 'C', keyword: 'K', local: 'L', function: 'F', global: 'G', enum: 'N', enumitem: 'N', class: 'T' })[it.kind] || '?');
       el('span', 'st-ac-label', row, it.label);
       el('span', 'st-ac-detail', row, it.detail);
       row.addEventListener('click', () => {
@@ -646,8 +706,19 @@ export class ScriptEditor {
     const it = ac && ac.items[ac.sel];
     this.closeAc();
     if (!it) return;
-    this.ta.setRangeText(it.insert, ac.from, this.ta.selectionStart, 'end');
-    this.ta.dispatchEvent(new Event('input'));
+    const ta = this.ta;
+    const end = ta.selectionStart;
+    let text = it.insert;
+    let back = 0;
+    if (text.endsWith('(')) {
+      if (ta.value[end] === '(') text = text.slice(0, -1);
+      else {
+        text += ')';
+        back = 1;
+      }
+    }
+    ta.setSelectionRange(ac.from, end);
+    this.insert(text, text.length - back);
   }
 
   closeAc() {

@@ -95,6 +95,13 @@ function startInstance(placeId, kind, privateId, max, allowGear) {
   return p;
 }
 
+function cleanPerks(p) {
+  if (!p || typeof p !== 'object') return null;
+  const hex = (c) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : null);
+  const badge = typeof p.badge === 'string' && /^\/asset\/\?id=\d{1,12}$/.test(p.badge) ? p.badge : '';
+  return { badge, chatColor: hex(p.chatColor), nameColor: hex(p.nameColor) };
+}
+
 function chooseInstance(info) {
   const placeId = info.placeId | 0;
   const max = Math.max(1, Math.min(100, (info.maxPlayers | 0) || DEFAULT_MAX));
@@ -195,7 +202,7 @@ async function sendPresence() {
     await fetch(PRESENCE, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.2', 'Content-Type': 'application/json', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3', 'Content-Type': 'application/json', 'X-Chocolate-Key': KEY },
       body: JSON.stringify({ users }),
     });
   } catch {
@@ -211,7 +218,7 @@ async function redeem(ticket) {
     const r = await fetch(REDEEM, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.2', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
       body: new URLSearchParams({ ticket }).toString(),
     });
     if (!r.ok) return null;
@@ -228,6 +235,45 @@ const server = http.createServer((req, res) => {
   if (req.url === '/status' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(statusJson()));
+    return;
+  }
+  if (req.url === '/kick' && req.method === 'POST') {
+    const given = String(req.headers['x-chocolate-key'] || '');
+    const ok = given.length === KEY.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(KEY));
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > 4096) req.destroy();
+    });
+    req.on('end', () => {
+      if (!ok) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      let q = {};
+      try {
+        q = JSON.parse(body || '{}');
+      } catch {}
+      const uid = q.userId | 0;
+      const reason = String(q.reason || 'You have been removed from the game').slice(0, 300);
+      let n = 0;
+      if (uid > 0) {
+        for (const s of [...sockets.values()]) {
+          if (s.userId !== uid) continue;
+          try {
+            s.ws.send(JSON.stringify({ t: 'kick', m: reason }));
+          } catch {}
+          try {
+            s.ws.close(4000, 'kicked');
+          } catch {}
+          n++;
+        }
+      }
+      if (n) log(`kicked user ${uid} from ${n} session(s)`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, kicked: n }));
+    });
     return;
   }
   if (req.url === '/shutdown' && req.method === 'POST') {
@@ -327,6 +373,7 @@ wss.on('connection', async (ws, req, url) => {
   }
   const info = await redeem(ticket);
   if (ws.readyState !== 1) return;
+  if (info) s.userId = info.userId | 0;
   if (!info) {
     ws.send(JSON.stringify({ t: 'kick', m: 'Your join ticket is invalid or has expired. Reload the page to try again.' }));
     ws.close(4003, 'bad ticket');
@@ -363,7 +410,7 @@ wss.on('connection', async (ws, req, url) => {
   clearTimeout(p.idleTimer);
   s.place = p;
   p.members.set(cid, { id: info.userId | 0, name: String(info.username) });
-  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev } });
+  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks) } });
   s.joined = true;
   for (const str of early.splice(0)) p.worker.postMessage({ t: 'msg', cid, data: str });
   log(`${p.tag} ${info.username} (${info.userId}) connected`);

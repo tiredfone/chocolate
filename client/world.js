@@ -4,7 +4,7 @@ import { ScriptHost } from '../shared/luahost.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
 import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES } from '../shared/humanoid.js';
-import { loadAudio, assetId, loadCoreSources, assetBytes } from './assets.js';
+import { loadAudio, assetId, builtin, loadCoreSources, assetBytes } from './assets.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 
@@ -684,6 +684,10 @@ export class ClientWorld {
         rec.rig.build();
       }
       const seat = this.seated();
+      if ((seat || null) !== (own.seatedOn || null)) {
+        own.seatedOn = seat || null;
+        dm.emit(own.hum, 'Seated', !!seat, seat || null);
+      }
       if (seat) {
         if (input.jump) this.net.send({ t: 'jump' });
         if (seat.ClassName === 'VehicleSeat') {
@@ -705,7 +709,7 @@ export class ClientWorld {
             dm.emit(own.hum, 'MoveToFinished', true);
           } else move = d;
         } else if (move && Math.hypot(move[0], move[2]) > 1e-3) own.moveTo = null;
-        const r = own.ctrl.update(dt, { move: move || [0, 0, 0], jump: input.jump });
+        const r = own.ctrl.update(dt, { move: move || [0, 0, 0], jump: input.jump, face: input.face });
         rec.cf = r.cf;
         rec.vel = r.vel;
         if (r.state !== rec.state) {
@@ -792,7 +796,7 @@ export class ClientWorld {
     const ctx = this.ensureAudio();
     if (!ctx) return;
     const url = s.props.get('SoundId');
-    if (!assetId(url)) return;
+    if (!assetId(url) && !builtin(url)) return;
     this.stopSound(s);
     const token = {};
     this.sounds.set(s, { token });

@@ -1,5 +1,6 @@
 import { CLASSES, ENUMS, isService } from '../shared/classes.js';
 import { memberIndex } from '../shared/luahost.js';
+import { BRICK } from '../shared/brickcolor.js';
 
 export const KEYWORDS = ['and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while'];
 
@@ -60,6 +61,12 @@ export function classMembers(cls) {
   const ix = idx();
   const props = [], methods = [], events = [];
   const seen = { p: new Set(), m: new Set(), e: new Set() };
+  if (info.chain.includes('Instance')) {
+    for (const [name, type] of [['Parent', 'Ref'], ['ClassName', 'string']]) {
+      seen.p.add(name);
+      props.push({ name, type, from: 'Instance' });
+    }
+  }
   for (const c of info.chain) {
     const ci = CLASSES.get(c);
     for (const [name, p] of ci.own) {
@@ -209,8 +216,47 @@ function inStringOrComment(before) {
   return /["']/.test(stripped);
 }
 
+function stringCompletions(before, ctx) {
+  const m = /([A-Za-z_]\w*(?:\s*(?:[.:]\s*[A-Za-z_]\w*\s*(?:\((?:[^()]|\([^()]*\))*\))?|\[\s*(?:"[^"]*"|'[^']*')\s*\]))*)\s*([.:])\s*([A-Za-z_]\w*)\s*\(\s*(["'])([^"'\n]*)$/.exec(before);
+  if (!m) return null;
+  const [, objExpr, sep, method, , partial] = m;
+  const fn = method.toLowerCase();
+  let names = null, kind = 'global', detail = '';
+  if (objExpr === 'Instance' && sep === '.' && fn === 'new') {
+    names = [...CLASSES.values()].filter((c) => !c.abstract && !c.service && !c.nocreate).map((c) => c.name);
+    kind = 'class';
+    detail = 'Instance';
+  } else if (sep === ':' && (fn === 'getservice' || fn === 'service' || fn === 'findservice')) {
+    names = [...CLASSES.values()].filter((c) => c.service).map((c) => c.name);
+    kind = 'class';
+    detail = 'Service';
+  } else if (sep === ':' && (fn === 'isa' || fn === 'findfirstchildofclass' || fn === 'findfirstchildwhichisa' || fn === 'getchildrenofclass')) {
+    names = [...CLASSES.keys()];
+    kind = 'class';
+    detail = 'Class';
+  } else if (sep === ':' && (fn === 'findfirstchild' || fn === 'waitforchild' || fn === 'findfirstdescendant')) {
+    const t = resolveExpr(objExpr, { ...ctx, text: before });
+    if (t && t.inst) names = [...new Set(t.inst.children.map((c) => String(c.props.get('Name'))))];
+    kind = 'child';
+    detail = 'Child';
+  } else if (objExpr === 'BrickColor' && sep === '.' && fn === 'new') {
+    names = [...new Set([...BRICK.values()].map((b) => b.name))];
+    kind = 'enumitem';
+    detail = 'BrickColor';
+  }
+  if (!names) return null;
+  const low = partial.toLowerCase();
+  const items = names
+    .filter((n) => n.toLowerCase().startsWith(low) && n !== partial)
+    .sort((a, b) => a.localeCompare(b))
+    .map((n) => ({ label: n, kind, detail, insert: n }));
+  return items.length ? { from: before.length - partial.length, to: before.length, word: partial, string: true, items: items.slice(0, 300) } : null;
+}
+
 export function completions(text, caret, ctx) {
   const before = text.slice(0, caret);
+  const str = stringCompletions(before, ctx);
+  if (str) return str;
   if (inStringOrComment(before)) return null;
   const word = /([A-Za-z_]\w*)?$/.exec(before)[1] || '';
   const start = caret - word.length;

@@ -9,11 +9,13 @@ import { TouchInput, detectTouch } from './touch.js';
 import { T } from '../shared/luahost.js';
 import { configure, publicPath, endpointUrl, loadContentIndex, contentUrl } from './assets.js';
 import { CursorLayer, CURSORS } from './cursor.js';
+import { DevConsole } from './devconsole.js';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent);
 configure(cfg);
 const pageUrl = (name, id) => endpointUrl(name, id) || '/';
 const root = document.getElementById('chocolate');
+const devConsole = new DevConsole(root);
 const canvas = document.getElementById('chocolate-canvas');
 const cursor = new CursorLayer(canvas);
 const loading = document.getElementById('chocolate-loading');
@@ -144,6 +146,7 @@ async function boot() {
     else pending.push(m);
   });
   net.on('out', (m) => {
+    devConsole.add('server', m.k, m.m);
     if (!world || !world.ready) return;
     const ls = world.dm.services.get('LogService');
     if (ls) world.dm.emit(ls, 'MessageOut', '[server] ' + m.m, T.e('MessageType', m.k === 'error' ? 3 : m.k === 'warn' ? 2 : 0));
@@ -177,6 +180,7 @@ async function boot() {
         zoomCamera: (d) => camera && camera.zoomBy(Math.exp(-d * 0.15)),
         log: (k, msg, where) => {
           const line = where ? `${where}: ${msg}` : msg;
+          devConsole.add('client', k, line);
           if (k === 'error') console.error(line);
           else console.log(line);
         },
@@ -237,6 +241,11 @@ function start(world, renderer, camera, gui, net) {
   let jumpQueued = false;
   const KEYMAP = { w: 'forward', arrowup: 'forward', s: 'back', arrowdown: 'back', a: 'left', d: 'right' };
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'F9') {
+      e.preventDefault();
+      if (!e.repeat) devConsole.toggle();
+      return;
+    }
     if (gui.isTyping()) return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
     const dm = world.dm;
@@ -261,6 +270,7 @@ function start(world, renderer, camera, gui, net) {
       jumpQueued = true;
       e.preventDefault();
     }
+    if (k === 'shift') camera.toggleShiftLock();
     if (k === 'arrowleft') camera.keyYaw = 1;
     if (k === 'arrowright') camera.keyYaw = -1;
     if (k === 'i') camera.zoomBy(1 / 1.25);
@@ -334,18 +344,24 @@ function start(world, renderer, camera, gui, net) {
       sd = tm[0];
     }
     const move = [f[0] * fw + rt[0] * sd, 0, f[2] * fw + rt[2] * sd];
-    const input = { move, jump: held.has(' ') || jumpQueued || world.touchJump, forward: fw > 0.3, back: fw < -0.3, left: sd < -0.3, right: sd > 0.3 };
+    const input = { move, face: camera.faceDir(), jump: held.has(' ') || jumpQueued || world.touchJump, forward: fw > 0.3, back: fw < -0.3, left: sd < -0.3, right: sd > 0.3 };
     jumpQueued = false;
     world.touchJump = false;
     try {
       world.update(dt, input);
       camera.update(dt);
+      if (camera.mouseLocked()) {
+        const cr = canvas.getBoundingClientRect();
+        ms.x = cr.width / 2;
+        ms.y = cr.height / 2;
+        ms.ndc = [0, 0];
+      }
       const ray = renderer.pick(ms.ndc[0], ms.ndc[1]);
       ms.overGui = false;
       const cd = world.updateMouse(ray, renderer);
       const icon = (world.toolMouse && world.toolMouse.props.get('Icon')) || world.mouse.props.get('Icon');
-      cursor.set(icon || (cd ? CURSORS.hand : world.mouseHit && world.mouseHit.part ? CURSORS.arrow : CURSORS.far));
-      if (document.pointerLockElement === canvas) cursor.place(camera.firstPerson);
+      cursor.set(camera.shiftLock && camera.mouseLocked() && !camera.firstPerson ? CURSORS.mouseLock : icon || (cd ? CURSORS.hand : world.mouseHit && world.mouseHit.part ? CURSORS.arrow : CURSORS.far));
+      if (document.pointerLockElement === canvas) cursor.place(camera.mouseLocked());
       renderer.frame(dt);
       gui.frame();
     } catch (e) {

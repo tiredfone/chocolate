@@ -315,7 +315,7 @@ export class Studio {
           if (document.fullscreenElement) document.exitFullscreen();
           else document.documentElement.requestFullscreen?.().catch(() => {});
           return;
-        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio 26.11.2\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
+        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio 26.11.3\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
         default: return;
       }
     } catch (err) {

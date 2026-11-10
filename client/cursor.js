@@ -7,6 +7,7 @@ export const CURSORS = {
   arrow: 'rbxasset://textures/ArrowCursor.png',
   far: 'rbxasset://textures/ArrowFarCursor.png',
   hand: 'rbxasset://textures/DragCursor.png',
+  mouseLock: 'rbxasset://textures/MouseLockedCursor.png',
 };
 
 function fromImage(src) {

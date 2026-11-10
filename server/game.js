@@ -92,7 +92,10 @@ export class Game {
     this.io.log(`[place ${this.placeId} ${this.kind === 'public' ? this.jobId : this.kind + ' ' + this.privateId}] [${kind}]${where ? ' ' + where + ':' : ''} ${msg}`);
     if (kind === 'error' || kind === 'print' || kind === 'warn') {
       const line = JSON.stringify({ t: 'out', k: kind, m: String(msg).slice(0, 2000) });
-      for (const c of this.clients.values()) if (c.dev) this.io.send(c.cid, line);
+      if (!this.outHistory) this.outHistory = [];
+      this.outHistory.push(line);
+      if (this.outHistory.length > 200) this.outHistory.shift();
+      for (const c of this.clients.values()) if (c.dev && c.ready) this.io.send(c.cid, line);
     }
   }
 
@@ -329,7 +332,28 @@ export class Game {
     bp.props.set('Name', 'Backpack');
     const gui = dm.create('PlayerGui', player);
     gui.props.set('Name', 'PlayerGui');
-    for (const o of dm.observers) if (o.created) { o.created(player); o.created(bp); o.created(gui); }
+    const perks = user.perks;
+    const made = [player, bp, gui];
+    if (perks && (perks.badge || perks.chatColor || perks.nameColor)) {
+      const cfg = dm.create('Configuration', player);
+      cfg.props.set('Name', 'SolarPerks');
+      made.push(cfg);
+      if (perks.badge) {
+        const v = dm.create('StringValue', cfg);
+        v.props.set('Name', 'Badge');
+        v.props.set('Value', perks.badge);
+        made.push(v);
+      }
+      for (const [key, name] of [['chatColor', 'ChatColor'], ['nameColor', 'NameColor']]) {
+        if (!perks[key]) continue;
+        const n = parseInt(perks[key].slice(1), 16);
+        const v = dm.create('Color3Value', cfg);
+        v.props.set('Name', name);
+        v.props.set('Value', [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255]);
+        made.push(v);
+      }
+    }
+    for (const o of dm.observers) if (o.created) for (const x of made) o.created(x);
     this.assignTeam(player);
     const client = { cid, user, player, ready: false, seq: 0, lastChat: 0, dev: !!user.dev };
     this.clients.set(cid, client);
@@ -341,6 +365,7 @@ export class Game {
     this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, you: player.id, user: { id: user.id, name: user.name }, snap }));
     rc.ready = true;
     client.ready = true;
+    if (client.dev && this.outHistory) for (const line of this.outHistory) this.io.send(cid, line);
     for (const s of this.anims.snapshot()) this.io.send(cid, JSON.stringify({ t: 'anim', op: 'play', ...s }));
     dm.emit(players, 'PlayerAdded', player);
     this.broadcast({ t: 'sys', m: `${user.name} has joined the game.` });
@@ -452,14 +477,40 @@ export class Game {
       pool = neutral.length ? neutral : spawns;
     }
     if (!pool.length) pool = spawns;
+    const others = [];
+    for (const rec of this.chars.values()) {
+      if (rec.dead || !rec.model || rec.model.destroyed) continue;
+      const cf = rec.torsoCF;
+      if (cf) others.push([cf[0], cf[1], cf[2]]);
+    }
+    const free = (x, y, z) => others.every((o) => Math.hypot(o[0] - x, o[2] - z) > 3 || Math.abs(o[1] - y) > 6);
+    const lift = (x, y, z) => {
+      let top = y;
+      for (const o of others) if (Math.hypot(o[0] - x, o[2] - z) <= 3) top = Math.max(top, o[1] + 5.5);
+      return top;
+    };
     if (pool.length) {
       const s = pool[Math.floor(Math.random() * pool.length)];
       const cf = s.props.get('CFrame'), sz = s.props.get('Size');
       const top = cf[1] + Math.abs(cf[7]) * sz[1] / 2 + Math.abs(cf[6]) * sz[0] / 2 + Math.abs(cf[8]) * sz[2] / 2;
-      return { pos: [cf[0] + (Math.random() - 0.5) * Math.max(0, sz[0] - 2), top + 3.2, cf[2] + (Math.random() - 0.5) * Math.max(0, sz[2] - 2)], spawn: s };
+      const y = top + 3.2;
+      let x = cf[0], z = cf[2];
+      for (let i = 0; i < 12; i++) {
+        const spread = i < 6 ? 0 : 3;
+        x = cf[0] + (Math.random() - 0.5) * (Math.max(0, sz[0] - 2) + spread * 2);
+        z = cf[2] + (Math.random() - 0.5) * (Math.max(0, sz[2] - 2) + spread * 2);
+        if (free(x, y, z)) return { pos: [x, y, z], spawn: s };
+      }
+      return { pos: [x, lift(x, y, z), z], spawn: s };
     }
-    const r = this.physics.raycast([0, 500, 0], [0, -1000, 0], []);
-    return { pos: [0, (r.part ? r.point[1] : 0) + 3.2, 0], spawn: null };
+    const chars = [...this.chars.keys()];
+    for (let i = 0; i < 12; i++) {
+      const x = i ? (Math.random() - 0.5) * 16 : 0, z = i ? (Math.random() - 0.5) * 16 : 0;
+      const r = this.physics.raycast([x, 500, z], [0, -1000, 0], chars);
+      const y = (r.part ? r.point[1] : 0) + 3.2;
+      if (free(x, y, z) || i === 11) return { pos: [x, free(x, y, z) ? y : lift(x, y, z), z], spawn: null };
+    }
+    return { pos: [0, 3.2, 0], spawn: null };
   }
 
   async loadCharacter(player) {
@@ -612,6 +663,34 @@ export class Game {
     }
   }
 
+  surfaceJoints(model) {
+    const dm = this.dm;
+    const parts = model.children.filter((c) => c.isA('BasePart'));
+    const linked = new Set();
+    for (const d of model.descendants()) {
+      if (!d.isA('JointInstance')) continue;
+      const a = d.props.get('Part0'), b = d.props.get('Part1');
+      if (a && b) linked.add(a.id + ':' + b.id).add(b.id + ':' + a.id);
+    }
+    for (let i = 0; i < parts.length; i++) {
+      for (let k = i + 1; k < parts.length; k++) {
+        const a = parts[i], b = parts[k];
+        if (linked.has(a.id + ':' + b.id)) continue;
+        const cls = this.physics.contactJointClass(a, b);
+        if (!cls) continue;
+        const j = dm.create(cls, null);
+        j.props.set('Name', cls);
+        j.props.set('Part0', a);
+        j.props.set('Part1', b);
+        j.props.set('C0', C.mul(C.inv(a.props.get('CFrame')), b.props.get('CFrame')));
+        j.props.set('C1', C.cf(0, 0, 0));
+        for (const o of dm.observers) if (o.created) o.created(j);
+        dm.setParent(j, a);
+        linked.add(a.id + ':' + b.id).add(b.id + ':' + a.id);
+      }
+    }
+  }
+
   trackChar(model) {
     if (this.chars.has(model)) return this.chars.get(model);
     const hum = model.findChildOfClass('Humanoid');
@@ -620,8 +699,13 @@ export class Game {
     if (!hum || !torso || !head || !this.dm.inWorkspace(model)) return null;
     if (torso.props.get('Anchored')) return null;
     if (hum.props.get('Health') <= 0) return null;
+    let rig = new Rig(model);
+    if (!rig.parts || !rig.parts.has(head)) {
+      this.surfaceJoints(model);
+      rig = new Rig(model);
+    }
     const rec = {
-      model, hum, rig: new Rig(model), proxy: null, owner: null, ctrl: null, torsoCF: torso.props.get('CFrame'),
+      model, hum, rig, proxy: null, owner: null, ctrl: null, torsoCF: torso.props.get('CFrame'),
       vel: [0, 0, 0], state: STATES.idle, tpSeq: 1, dead: false, dirty: false, moveTo: null, seat: null, lastHealth: hum.props.get('Health'),
     };
     rec.proxy = new CharacterProxy(this.physics, model);
@@ -816,6 +900,7 @@ export class Game {
     for (const o of dm.observers) if (o.created) o.created(w);
     dm.setParent(w, seat);
     rec.seat = { seat, weld: w };
+    if (rec.proxy) rec.proxy.setSeated(true);
     dm.setProp(rec.hum, 'Sit', true);
     dm.setProp(seat, 'Occupant', rec.hum);
     dm.emit(rec.hum, 'Seated', true, seat);
@@ -825,6 +910,7 @@ export class Game {
     if (!rec.seat) return;
     const { seat, weld } = rec.seat;
     rec.seat = null;
+    if (rec.proxy) rec.proxy.setSeated(false);
     this.lastSit.set(rec.model, this.t);
     if (!weld.destroyed) this.dm.destroy(weld);
     if (!seat.destroyed) {
