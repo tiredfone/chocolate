@@ -71,6 +71,10 @@ async function boot() {
   net.on('close', (ev) => {
     if (!kicked) showFatal('Connection lost', ev.code === 4003 ? 'Your join ticket was not accepted. Reload the page to try again.' : 'The connection to the game server was closed.');
   });
+  net.on('anim', (m) => {
+    if (world && world.ready) world.remoteAnim(m);
+    else pending.push(m);
+  });
   net.on('rep', (m) => {
     if (world && world.ready) world.applyRep(m);
     else pending.push(m);
@@ -161,7 +165,7 @@ async function boot() {
       });
       if (touch) new TouchInput(world, renderer, gui, root, canvas);
       world.ready = true;
-      for (const p of pending.splice(0)) world.applyRep(p);
+      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else world.applyRep(p);
       loading.hidden = true;
       document.addEventListener('fullscreenchange', () => {
         const us = world.host._userSettings;
@@ -245,7 +249,7 @@ function start(world, renderer, camera, gui, net) {
     ms.x = e.clientX - r.left;
     ms.y = e.clientY - r.top;
     ms.ndc = [(ms.x / r.width) * 2 - 1, -(ms.y / r.height) * 2 + 1];
-    world.dm.emit(world.mouse, 'Move');
+    world.emitMouse('Move');
   });
   canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'touch') return;
@@ -258,7 +262,7 @@ function start(world, renderer, camera, gui, net) {
     if (e.button === 0 && ms.down) world.mouseUp(0);
   });
   canvas.addEventListener('wheel', (e) => {
-    world.dm.emit(world.mouse, e.deltaY > 0 ? 'WheelBackward' : 'WheelForward');
+    world.emitMouse(e.deltaY > 0 ? 'WheelBackward' : 'WheelForward');
   });
   let last = performance.now();
   let pingT = 0;

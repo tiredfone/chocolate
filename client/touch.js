@@ -145,7 +145,7 @@ export class TouchInput {
     ms.x = x / k;
     ms.y = y / k;
     ms.ndc = [(ms.x / r.width) * 2 - 1, -(ms.y / r.height) * 2 + 1];
-    world.dm.emit(world.mouse, 'Move');
+    world.emitMouse('Move');
     world.updateMouse(this.renderer.pick(ms.ndc[0], ms.ndc[1]), this.renderer);
     world.mouseDown(0);
     setTimeout(() => {

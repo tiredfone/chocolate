@@ -736,7 +736,8 @@ local function fireLocal(key, ...)
     for i = 1, #list do snapshot[i] = list[i] end
     for i = 1, #snapshot do
       local c = snapshot[i]
-      if c.connected then
+      local sid = c.script and idOf[c.script]
+      if c.connected and (not sid or J.running(sid)) then
         local co = newThread(c.fn)
         scriptOf[co] = c.script
         resume(co, ...)

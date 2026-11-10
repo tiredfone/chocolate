@@ -40,6 +40,7 @@ const EVENTS = {
   TeleportService: ['ItemChanged'],
   PointsService: ['PointsAwarded'],
   CollectionService: ['ItemAdded', 'ItemRemoved'],
+  AnimationTrack: ['KeyframeReached', 'Stopped'],
 };
 EVENTS.Players.push('PlayerChatted', 'FriendRequestEvent');
 EVENTS.Player.push('FriendStatusChanged', 'OnTeleport');
@@ -238,6 +239,8 @@ export class ScriptHost {
     this.step = null;
     this.asyncId = 1;
     this.running = new Set();
+    this.linked = new Map();
+    this.linkedPending = new Set();
     this.ghosts = new Map();
     this.libraries = new Map();
     this.guiKeys = new Set();
@@ -297,6 +300,7 @@ export class ScriptHost {
         return q;
       },
       alive: (id) => !this.killed || !this.killed.has(id),
+      running: (id) => this.running.has(id),
       log: (kind, msg, id) => this.log(kind, msg, id),
       now: (what) => (what === 'tick' ? Date.now() / 1000 : (Date.now() - this.t0) / 1000),
       side: this.side,
@@ -432,6 +436,22 @@ export class ScriptHost {
 
   startScript(inst) {
     this.running.add(inst.id);
+    const url = inst.ClassName !== 'CoreScript' && !inst.props.get('Source') && this.env.linkedSource ? inst.props.get('LinkedSource') : null;
+    if (url && !this.linked.has(inst.id)) {
+      if (this.linkedPending.has(inst.id)) return;
+      this.linkedPending.add(inst.id);
+      Promise.resolve()
+        .then(() => this.env.linkedSource(url))
+        .then((src) => this.linked.set(inst.id, typeof src === 'string' ? src : ''), (e) => {
+          this.linked.set(inst.id, '');
+          this.logs('warn', `${inst.props.get('Name')}: LinkedSource ${url} failed: ${e && e.message ? e.message : e}`, null);
+        })
+        .then(() => {
+          this.linkedPending.delete(inst.id);
+          if (this.running.has(inst.id) && !inst.destroyed) this.queue.push('start', inst.id);
+        });
+      return;
+    }
     this.queue.push('start', inst.id);
   }
 
@@ -572,7 +592,7 @@ export class ScriptHost {
       const args = decodeArgs(this.dm, raw);
       if (method === '__source') {
         const out = ['ok'];
-        encodeAny(out, inst.props.get('Source') || (this.env.sourceOf ? this.env.sourceOf(inst) : ''));
+        encodeAny(out, inst.props.get('Source') || this.linked.get(inst.id) || (this.env.sourceOf ? this.env.sourceOf(inst) : ''));
         return out;
       }
       const list = this.methods.get(method);
@@ -885,12 +905,28 @@ function buildMethods(host) {
   def('Move', 'Humanoid', (h, [dir]) => { if (env.humanoidMove) env.humanoidMove(h, dir); return null; });
   def('EquipTool', 'Humanoid', (h, [tool]) => { if (env.equipTool) env.equipTool(h, tool); return null; });
   def('UnequipTools', 'Humanoid', (h) => { if (env.unequipTools) env.unequipTools(h); return null; });
-  def('LoadAnimation loadAnimation', 'Humanoid', (h, [anim]) => (env.loadAnimation ? env.loadAnimation(h, anim) : null));
+  def('LoadAnimation loadAnimation', 'Humanoid', (h, [anim]) => {
+    if (!(anim instanceof Instance) || anim.ClassName !== 'Animation') throw new Error('LoadAnimation requires an Animation object');
+    const tr = dm.create('AnimationTrack', null);
+    tr.props.set('Name', anim.props.get('Name'));
+    tr.props.set('Animation', anim);
+    tr.data = { hum: h };
+    return tr;
+  });
+  const trackOp = (tr, op, a, b, c) => {
+    if (env.animate && tr.data && tr.data.hum) env.animate(tr, op, a, b, c);
+    return null;
+  };
+  const optNum = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  def('Play play', 'AnimationTrack', (tr, [fade, weight, speed]) => trackOp(tr, 'play', optNum(fade), optNum(weight), optNum(speed)));
+  def('Stop stop', 'AnimationTrack', (tr, [fade]) => trackOp(tr, 'stop', optNum(fade)));
+  def('AdjustSpeed', 'AnimationTrack', (tr, [speed]) => trackOp(tr, 'speed', optNum(speed)));
+  def('AdjustWeight', 'AnimationTrack', (tr, [weight, fade]) => trackOp(tr, 'weight', optNum(weight), optNum(fade)));
   def('GetState', 'Humanoid', (h) => T.e('HumanoidStateType', h.data && h.data.state != null ? h.data.state : 8));
   def('ChangeState', 'Humanoid', (h, [s]) => { if (env.changeState) env.changeState(h, s); return null; });
   def('SetStateEnabled', 'Humanoid', () => null);
   def('SetDesiredAngle', 'Motor', (m, [a]) => { dm.setProp(m, 'DesiredAngle', +a || 0, { lua: true }); return null; });
-  def('GetPlayingAnimationTracks', 'Humanoid', () => T.list([]));
+  def('GetPlayingAnimationTracks', 'Humanoid', (h) => T.list(env.playingTracks ? env.playingTracks(h) : []));
 
   def('Play play', 'Sound', (s) => { dm.setProp(s, 'IsPlaying', true, { force: true, op: 'play' }); if (env.sound) env.sound(s, 'play'); dm.emit(s, 'Played'); return null; });
   def('Stop stop', 'Sound', (s) => { dm.setProp(s, 'IsPlaying', false, { force: true, op: 'stop' }); if (env.sound) env.sound(s, 'stop'); dm.emit(s, 'Stopped'); return null; });
@@ -1081,6 +1117,10 @@ function buildComputed(host) {
     const cf = p.props.get('CFrame');
     return T.v3([cf[0], cf[1], cf[2]]);
   });
+  def('GripPos', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[0], g[1], g[2]]); });
+  def('GripRight', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[3], g[6], g[9]]); });
+  def('GripUp', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[4], g[7], g[10]]); });
+  def('GripForward', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([-g[5], -g[8], -g[11]]); });
   def('Rotation', 'BasePart', (p) => {
     const c = p.props.get('CFrame');
     const r02 = Math.max(-1, Math.min(1, c[5]));
@@ -1141,6 +1181,17 @@ function buildSetters(host) {
     const cf = p.props.get('CFrame');
     dm.setProp(p, 'CFrame', C.withPos(cf, v[0], v[1], v[2]), { lua: true, position: true });
   });
+  const gripSet = (idx, sign) => (t, a) => {
+    const v = v3(a);
+    const g = t.props.get('Grip').slice();
+    for (let i = 0; i < 3; i++) g[idx[i]] = v[i] * sign;
+    if (!C.isFiniteCF(g)) return;
+    dm.setProp(t, 'Grip', g, { lua: true });
+  };
+  def('GripPos', 'Tool', gripSet([0, 1, 2], 1));
+  def('GripRight', 'Tool', gripSet([3, 6, 9], 1));
+  def('GripUp', 'Tool', gripSet([4, 7, 10], 1));
+  def('GripForward', 'Tool', gripSet([5, 8, 11], -1));
   def('Rotation', 'BasePart', (p, a) => {
     const v = v3(a);
     const cf = p.props.get('CFrame');

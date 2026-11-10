@@ -97,7 +97,8 @@ export class Rig {
       const base = out.get(p);
       if (!base) continue;
       const c0 = j.props.get('C0'), c1 = j.props.get('C1');
-      const rot = jointAngleCF(j);
+      const ang = jointAngleCF(j);
+      const rot = j.anim ? (ang ? C.mul(ang, j.anim) : j.anim) : ang;
       let cf;
       if (forward) {
         const mid = rot ? C.mul(c0, rot) : c0;
@@ -348,7 +349,10 @@ export class CharacterProxy {
     this.ph = physics;
     this.model = model;
     this.R = physics.R;
-    this.body = physics.world.createRigidBody(this.R.RigidBodyDesc.kinematicPositionBased());
+    const torso = model.findChild('Torso');
+    const t0 = torso ? torso.props.get('CFrame') : C.cf();
+    const q0 = C.toQuat(t0);
+    this.body = physics.world.createRigidBody(this.R.RigidBodyDesc.kinematicPositionBased().setTranslation(t0[0], t0[1], t0[2]).setRotation({ x: q0[0], y: q0[1], z: q0[2], w: q0[3] }));
     this.limbs = new Map();
     this.solid = null;
     this.sensors = opts.sensors !== false;
@@ -374,11 +378,17 @@ export class CharacterProxy {
       this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0), this.body);
       this.ph.byHandle.set(this.solid.handle, { part: torso, noRay: true, character: this.model, solidProxy: true });
     }
+    const bt = this.body.translation(), br = this.body.rotation();
+    const inv = C.inv(C.fromQuat(bt.x, bt.y, bt.z, br.x, br.y, br.z, br.w));
     for (const p of this.model.descendants()) {
       if (!p.isA('BasePart')) continue;
       const s = p.props.get('Size');
       const pad = this.sensors ? 0.12 : 0;
+      const local = C.mul(inv, p.props.get('CFrame'));
+      const lq = C.toQuat(local);
       const d = this.R.ColliderDesc.cuboid(s[0] / 2 + pad, s[1] / 2 + pad, s[2] / 2 + pad)
+        .setTranslation(local[0], local[1], local[2])
+        .setRotation({ x: lq[0], y: lq[1], z: lq[2], w: lq[3] })
         .setSensor(true)
         .setActiveCollisionTypes(this.R.ActiveCollisionTypes.ALL);
       if (this.sensors) d.setActiveEvents(this.R.ActiveEvents.COLLISION_EVENTS);
@@ -480,6 +490,15 @@ export function attachAccessory(dm, model, acc) {
   handle.props.set('CFrame', C.mul(C.mul(head.props.get('CFrame'), C.cf(0, 0.5, 0)), C.inv(ap)));
   handle.props.set('CanCollide', false);
   handle.props.set('Anchored', false);
+}
+
+export function syncGrip(dm, tool) {
+  const model = tool.parent;
+  const handle = tool.findChild('Handle');
+  const arm = model && model.findChild && model.findChild('Right Arm');
+  const w = arm && arm.findChild('RightGrip');
+  if (!w || !handle || w.props.get('Part1') !== handle) return;
+  dm.setProp(w, 'C1', gripOf(tool).slice());
 }
 
 export function gripWeld(dm, model, tool) {

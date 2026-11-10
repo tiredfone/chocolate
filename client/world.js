@@ -3,9 +3,10 @@ import { applyRecords, decodeValue, encodeValue } from '../shared/codec.js';
 import { ScriptHost } from '../shared/luahost.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
-import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, STATES } from '../shared/humanoid.js';
+import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES } from '../shared/humanoid.js';
 import { loadAudio, assetId, loadCoreSources, assetBytes } from './assets.js';
 import { parsePlace } from '../shared/rbxl.js';
+import { Animations, animAssetId } from '../shared/animator.js';
 
 export const STARTER_SCRIPT = 37801172;
 export const LOADING_SCRIPT = 158948138;
@@ -29,6 +30,7 @@ export class ClientWorld {
     this.keys = new Set();
     this.selectedBin = null;
     this.equippedTool = null;
+    this.toolMouse = null;
     this.mouseSendAcc = 0;
     this.sounds = new Map();
     this.audio = null;
@@ -81,6 +83,7 @@ export class ClientWorld {
     uis.props.set('MouseEnabled', !this.touch);
     uis.props.set('KeyboardEnabled', !this.touch);
     this.host = new ScriptHost(dm, this.env());
+    this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
     await this.host.init(luaFactory, runtimeSrc);
     if (this.coreSources.get(LOADING_SCRIPT)) this.addCoreScript(LOADING_SCRIPT, this.robloxGui, 'CoreScripts/LoadingScript');
     if (this.coreSources.get(STARTER_SCRIPT)) this.addCoreScript(STARTER_SCRIPT, dm.services.get('ScriptContext'), 'StarterScript');
@@ -246,6 +249,14 @@ export class ClientWorld {
       equipTool: (h, tool) => { if (tool && this.ownModel && h.parent === this.ownModel) this.net.send({ t: 'equip', id: tool.id }); },
       unequipTools: (h) => { if (this.equippedTool) this.net.send({ t: 'unequip', id: this.equippedTool.id }); },
       sound: (s, op) => this.playSound(s, op),
+      animate: (tr, op, a, b, c) => {
+        const hum = tr.data.hum;
+        const anim = tr.props.get('Animation');
+        const id = animAssetId(anim && anim.props.get('AnimationId'));
+        this.anims.op(hum, 'l' + tr.id, op, id, a, b, c, tr);
+        if (this.net && hum.id > 0 && this.ownModel && hum.parent === this.ownModel) this.net.send({ t: 'anim', h: hum.id, k: tr.id, op, id, a, b, c });
+      },
+      playingTracks: (h) => this.anims.playing(h),
       humanoidMoveTo: (h, pos) => {
         if (this.own && h === this.own.hum) this.own.moveTo = pos ? pos.slice() : null;
       },
@@ -253,7 +264,7 @@ export class ClientWorld {
       focusTextBox: (t, on) => this.hooks.focusTextBox && this.hooks.focusTextBox(t, on),
       isKeyDown: (k) => this.keys.has(String(k).toLowerCase()),
       setMessage: (m) => this.hooks.setMessage && this.hooks.setMessage(m),
-      breakJoints: () => null,
+      breakJoints: (p) => { if (this.ownModel && p.id > 0 && p.isDescendantOf(this.ownModel)) this.net.send({ t: 'break', id: p.id }); return null; },
       makeJoints: () => null,
       connectedParts: (p) => [p],
       touchingParts: () => [],
@@ -266,6 +277,11 @@ export class ClientWorld {
         model.props.set('Name', 'Model');
         dm.load(parsePlace(bytes), model);
         return model;
+      },
+      linkedSource: async (url) => {
+        const id = assetId(url);
+        if (!id) return '';
+        return new TextDecoder().decode(await assetBytes(id));
       },
       bubbleChat: (part, msg) => this.hooks.bubble && this.hooks.bubble(part, msg),
     };
@@ -287,10 +303,15 @@ export class ClientWorld {
   }
 
   onChange(inst, name, old, opts) {
+    if (name === 'Grip' && inst.ClassName === 'Tool' && !(opts && opts.remote)) syncGrip(this.dm, inst);
     if (name === 'Value' && !(opts && opts.remote) && inst.id > 0 && inst.isA('ValueBase') && this.ownsValue(inst)) {
       const p = inst.info.all.get('Value');
       const v = p ? encodeValue(p.type, inst.props.get('Value')) : undefined;
       if (v !== undefined) this.net.send({ t: 'val', id: inst.id, v });
+    }
+    if (name === 'Health' && !(opts && opts.remote) && inst.id > 0 && inst.ClassName === 'Humanoid' && this.ownModel && inst.parent === this.ownModel) {
+      const v = inst.props.get('Health');
+      if (Number.isFinite(v)) this.net.send({ t: 'hp', v });
     }
     if (inst.ClassName === 'Player' && name === 'Character') {
       const now = inst.props.get('Character');
@@ -457,9 +478,12 @@ export class ClientWorld {
     if (tool.ClassName === 'Tool') {
       if (inChar && !wasChar) {
         this.equippedTool = tool;
-        this.dm.emit(tool, 'Equipped', this.mouse);
+        this.dm.emit(tool, 'Equipped', this.openToolMouse());
       } else if (!inChar && wasChar) {
-        if (this.equippedTool === tool) this.equippedTool = null;
+        if (this.equippedTool === tool) {
+          this.equippedTool = null;
+          this.toolMouse = null;
+        }
         this.dm.emit(tool, 'Unequipped');
       }
     }
@@ -483,12 +507,13 @@ export class ClientWorld {
       if (this.equippedTool) this.net.send({ t: 'unequip', id: this.equippedTool.id });
       const on = this.selectedBin !== item;
       if (this.selectedBin) {
+        this.toolMouse = null;
         this.dm.emit(this.selectedBin, 'Deselected');
         this.net.send({ t: 'hop', id: this.selectedBin.id, on: false });
       }
       this.selectedBin = on ? item : null;
       if (on) {
-        this.dm.emit(item, 'Selected', this.mouse);
+        this.dm.emit(item, 'Selected', this.openToolMouse());
         this.net.send({ t: 'hop', id: item.id, on: true });
       }
       if (this.hooks.backpackChanged) this.hooks.backpackChanged();
@@ -503,11 +528,26 @@ export class ClientWorld {
     if (this.equippedTool && this.equippedTool.props.get('CanBeDropped')) this.net.send({ t: 'drop', id: this.equippedTool.id });
   }
 
+  openToolMouse() {
+    const m = this.dm.create('PlayerMouse', null);
+    m.props.set('Name', 'Mouse');
+    for (const k of ['Hit', 'Origin', 'Target', 'X', 'Y', 'ViewSizeX', 'ViewSizeY']) m.props.set(k, this.mouse.props.get(k));
+    this.toolMouse = m;
+    return m;
+  }
+
+  emitMouse(ev, ...args) {
+    this.dm.emit(this.mouse, ev, ...args);
+    if (this.toolMouse) this.dm.emit(this.toolMouse, ev, ...args);
+  }
+
   updateMouse(ray, renderer) {
     const ignore = [];
     if (this.ownModel) ignore.push(this.ownModel);
-    const tf = this.mouse.props.get('TargetFilter');
-    if (tf) ignore.push(tf);
+    for (const mm of [this.mouse, this.toolMouse]) {
+      const tf = mm && mm.props.get('TargetFilter');
+      if (tf) ignore.push(tf);
+    }
     const dir = [ray.dir[0] * 1000, ray.dir[1] * 1000, ray.dir[2] * 1000];
     const hit = this.physics.raycast(ray.origin, dir, ignore);
     const m = this.mouse;
@@ -518,6 +558,7 @@ export class ClientWorld {
     const k = this.guiScale();
     m.props.set('X', (this.mouseState.x * k) | 0);
     m.props.set('Y', (this.mouseState.y * k) | 0);
+    if (this.toolMouse) for (const key of ['Origin', 'Hit', 'Target', 'X', 'Y']) this.toolMouse.props.set(key, m.props.get(key));
     this.mouseHit = hit;
     let cd = null;
     if (hit.part && !this.mouseState.overGui) {
@@ -540,7 +581,7 @@ export class ClientWorld {
     if (button !== 0) return;
     this.mouseState.down = true;
     this.mouseState.pressCD = this.mouseState.hoverCD;
-    this.dm.emit(this.mouse, 'Button1Down');
+    this.emitMouse('Button1Down');
     if (this.equippedTool) {
       if (this.equippedTool.props.get('Enabled')) this.dm.emit(this.equippedTool, 'Activated');
       this.sendMouse(true);
@@ -554,7 +595,7 @@ export class ClientWorld {
   mouseUp(button) {
     if (button !== 0) return;
     this.mouseState.down = false;
-    this.dm.emit(this.mouse, 'Button1Up');
+    this.emitMouse('Button1Up');
     if (this.equippedTool) {
       this.dm.emit(this.equippedTool, 'Deactivated');
       this.net.send({ t: 'act', id: this.equippedTool.id, down: false });
@@ -584,13 +625,13 @@ export class ClientWorld {
 
   keyDown(k) {
     this.keys.add(k);
-    this.dm.emit(this.mouse, 'KeyDown', k);
+    this.emitMouse('KeyDown', k);
     if ((this.equippedTool || this.selectedBin) && k.length === 1) this.net.send({ t: 'key', k, down: true });
   }
 
   keyUp(k) {
     this.keys.delete(k);
-    this.dm.emit(this.mouse, 'KeyUp', k);
+    this.emitMouse('KeyUp', k);
     if ((this.equippedTool || this.selectedBin) && k.length === 1) this.net.send({ t: 'key', k, down: false });
   }
 
@@ -676,6 +717,7 @@ export class ClientWorld {
         }
       }
     }
+    if (this.anims) this.anims.step(dt, (inst, ev, arg) => this.dm.emit(inst, ev, arg));
     for (const rec of this.chars.values()) {
       if (rec.dirty) {
         rec.dirty = false;
@@ -696,6 +738,12 @@ export class ClientWorld {
     }
     this.physics.world.step();
     this.sendMouse(false);
+  }
+
+  remoteAnim(m) {
+    const hum = this.dm.byId.get(m.h);
+    if (!this.anims || !hum || hum.ClassName !== 'Humanoid' || typeof m.k !== 'string') return;
+    this.anims.op(hum, 'r' + m.k, m.op, m.id | 0, m.a, m.b, m.c, null, m.st);
   }
 
   setVolume(v) {

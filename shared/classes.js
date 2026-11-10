@@ -223,6 +223,7 @@ const DEFS = {
     aliases: { maxHealth: 'MaxHealth', Health_XML: 'Health' },
   },
   Animation: { base: 'Instance', props: 'AnimationId:Content' },
+  AnimationTrack: { base: 'Instance', props: 'Animation:Ref Length:number=0 IsPlaying:bool=false', nocreate: true },
   ClickDetector: { base: 'Instance', props: 'MaxActivationDistance:number=32' },
   Explosion: { base: 'Instance', props: 'BlastPressure:number=500000 BlastRadius:number=4 Position:V3 ExplosionType:enum=1 DestroyJointRadiusPercent:number=1 Visible:bool=true' },
   ForceField: { base: 'Instance' },

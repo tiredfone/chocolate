@@ -8,9 +8,10 @@ import { DataModel } from '../shared/instance.js';
 import { ScriptHost, T } from '../shared/luahost.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
-import { buildCharacter, attachAccessory, gripWeld, liveCharacterOf, Rig, Controller, CharacterProxy, partColorProps, STATES } from '../shared/humanoid.js';
+import { buildCharacter, attachAccessory, gripWeld, syncGrip, liveCharacterOf, Rig, Controller, CharacterProxy, partColorProps, STATES } from '../shared/humanoid.js';
 import { Replicator } from './replicator.js';
-import { placeBytes, assetNodes, appearance, luaSource } from './assets.js';
+import { Animations, animAssetId } from '../shared/animator.js';
+import { placeBytes, assetNodes, appearance, luaSource, assetBytes, assetIdOf } from './assets.js';
 import { endpoint } from './config.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,13 @@ function finiteArr(a, n) {
   return a;
 }
 
+function physSame(a, b) {
+  for (let i = 1; i < 4; i++) if (Math.abs(a[i] - b[i]) > 0.01) return false;
+  for (let i = 4; i < 13; i++) if (Math.abs(a[i] - b[i]) > 0.002) return false;
+  for (let i = 13; i < 16; i++) if (Math.abs(a[i] - b[i]) > 0.05) return false;
+  return true;
+}
+
 export class Game {
   constructor(placeId, io) {
     this.placeId = placeId;
@@ -66,6 +74,7 @@ export class Game {
     this.clients = new Map();
     this.chars = new Map();
     this.mice = new Map();
+    this.toolMice = new Map();
     this.store = new Map();
     this.t = 0;
     this.frame = 0;
@@ -121,6 +130,7 @@ export class Game {
       },
     });
     this.host = new ScriptHost(dm, this.env());
+    this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
     for (const [name, id] of Object.entries(SERVER_LIBRARIES)) this.host.libraries.set(name, String(id));
     await this.host.init(() => Lua.create(), RUNTIME);
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
@@ -153,6 +163,11 @@ export class Game {
         model.props.set('Name', 'Model');
         dm.load(nodes, model);
         return model;
+      },
+      linkedSource: async (url) => {
+        const id = assetIdOf(url);
+        if (!id) return '';
+        return new TextDecoder().decode(await assetBytes(id));
       },
       mouseFor: (pl) => this.mouseOf(pl),
       kick: (pl, msg) => {
@@ -190,7 +205,15 @@ export class Game {
       },
       findSpace: (m, parts, cf, target) => this.findSpace(m, parts, cf, target),
       changeState: () => null,
-      loadAnimation: () => null,
+      animate: (tr, op, a, b, c) => {
+        const hum = tr.data.hum;
+        const anim = tr.props.get('Animation');
+        const id = animAssetId(anim && anim.props.get('AnimationId'));
+        const k = 's' + tr.id;
+        this.anims.op(hum, k, op, id, a, b, c, tr);
+        if (hum.id > 0 && hum.repWas && hum.repWas.rep) this.broadcast({ t: 'anim', h: hum.id, k, op, id, a, b, c });
+      },
+      playingTracks: (h) => this.anims.playing(h),
     };
   }
 
@@ -225,6 +248,20 @@ export class Game {
     const players = this.dm.services.get('Players');
     for (const p of players.children) if (p.ClassName === 'Player' && p.props.get('Character') === model) return p;
     return null;
+  }
+
+  openToolMouse(pl) {
+    const base = this.mouseOf(pl);
+    const m = this.dm.create('PlayerMouse', null);
+    for (const k of ['Name', 'Hit', 'Origin', 'Target', 'X', 'Y', 'ViewSizeX', 'ViewSizeY']) m.props.set(k, base.props.get(k));
+    this.toolMice.set(pl, m);
+    return m;
+  }
+
+  emitMouse(pl, ev, ...args) {
+    this.dm.emit(this.mouseOf(pl), ev, ...args);
+    const t = this.toolMice.get(pl);
+    if (t) this.dm.emit(t, ev, ...args);
   }
 
   mouseOf(pl) {
@@ -273,6 +310,7 @@ export class Game {
     this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, you: player.id, user: { id: user.id, name: user.name }, snap }));
     rc.ready = true;
     client.ready = true;
+    for (const s of this.anims.snapshot()) this.io.send(cid, JSON.stringify({ t: 'anim', op: 'play', ...s }));
     dm.emit(players, 'PlayerAdded', player);
     this.broadcast({ t: 'sys', m: `${user.name} has joined the game.` });
     if (players.props.get('CharacterAutoLoads')) this.loadCharacter(player).catch((e) => this.log('error', 'LoadCharacter: ' + e.message));
@@ -290,6 +328,7 @@ export class Game {
     if (ch && !ch.destroyed) this.dm.destroy(ch);
     if (!pl.destroyed) this.dm.destroy(pl);
     this.mice.delete(pl);
+    this.toolMice.delete(pl);
     this.broadcast({ t: 'sys', m: `${c.user.name} has left the game.` });
   }
 
@@ -540,6 +579,7 @@ export class Game {
   }
 
   watchChange(inst, name, old, opts) {
+    if (name === 'Grip' && inst.ClassName === 'Tool') syncGrip(this.dm, inst);
     if (inst.ClassName === 'Humanoid' && name === 'Health') {
       this.dm.emit(inst, 'HealthChanged', inst.props.get('Health'));
     }
@@ -623,6 +663,7 @@ export class Game {
         this.die(rec);
         continue;
       }
+      if (!rec.dirty && rec.rig.order && rec.rig.order.some((e) => e[1].destroyed || !e[1].isDescendantOf(model))) rec.dirty = true;
       if (rec.dirty) {
         rec.dirty = false;
         rec.rig.build();
@@ -802,7 +843,7 @@ export class Game {
     if (tool.props.get('RequiresHandle') !== false) gripWeld(dm, model, tool);
     const rec = this.chars.get(model);
     if (rec) rec.dirty = true;
-    dm.emit(tool, 'Equipped', pl ? this.mouseOf(pl) : null);
+    dm.emit(tool, 'Equipped', pl ? this.openToolMouse(pl) : null);
   }
 
   unequip(pl, tool, model) {
@@ -813,6 +854,7 @@ export class Game {
     const grip = arm && arm.findChild('RightGrip');
     if (grip) dm.destroy(grip);
     const bp = pl && pl.findChildOfClass('Backpack');
+    if (pl) this.toolMice.delete(pl);
     dm.emit(tool, 'Unequipped');
     if (bp) dm.setParent(tool, bp);
     else dm.destroy(tool);
@@ -920,6 +962,7 @@ export class Game {
         const arm = model.findChild('Right Arm');
         const grip = arm && arm.findChild('RightGrip');
         if (grip) dm.destroy(grip);
+        this.toolMice.delete(pl);
         dm.emit(tool, 'Unequipped');
         const h = tool.findChild('Handle');
         if (h && h.isA('BasePart')) {
@@ -933,13 +976,12 @@ export class Game {
       case 'act': {
         const tool = this.ownedInst(c, m.id, 'Tool');
         if (!tool || tool.parent !== model || !rec) return;
-        const mouse = this.mouseOf(pl);
         if (m.down) {
           if (tool.props.get('Enabled')) dm.emit(tool, 'Activated');
-          dm.emit(mouse, 'Button1Down');
+          this.emitMouse(pl, 'Button1Down');
         } else {
           dm.emit(tool, 'Deactivated');
-          dm.emit(mouse, 'Button1Up');
+          this.emitMouse(pl, 'Button1Up');
         }
         break;
       }
@@ -947,7 +989,11 @@ export class Game {
         const bin = this.ownedInst(c, m.id, 'HopperBin');
         if (!bin || bin.parent !== pl.findChildOfClass('Backpack')) return;
         dm.setProp(bin, 'Active', !!m.on);
-        dm.emit(bin, m.on ? 'Selected' : 'Deselected', this.mouseOf(pl));
+        if (m.on) dm.emit(bin, 'Selected', this.openToolMouse(pl));
+        else {
+          this.toolMice.delete(pl);
+          dm.emit(bin, 'Deselected');
+        }
         break;
       }
       case 'mouse': {
@@ -964,7 +1010,36 @@ export class Game {
         mouse.props.set('Target', tg && tg.isA('BasePart') ? tg : null);
         if (m.x != null) mouse.props.set('X', m.x | 0);
         if (m.y != null) mouse.props.set('Y', m.y | 0);
-        if (m.b) dm.emit(mouse, m.b === 'down' ? 'Button1Down' : m.b === 'up' ? 'Button1Up' : m.b === 'move' ? 'Move' : 'Idle');
+        const tm = this.toolMice.get(pl);
+        if (tm) for (const key of ['Hit', 'Origin', 'Target', 'X', 'Y']) tm.props.set(key, mouse.props.get(key));
+        if (m.b) this.emitMouse(pl, m.b === 'down' ? 'Button1Down' : m.b === 'up' ? 'Button1Up' : m.b === 'move' ? 'Move' : 'Idle');
+        break;
+      }
+      case 'anim': {
+        const hum = dm.byId.get(m.h | 0);
+        if (!rec || !hum || hum !== rec.hum || !Animations.validOp(m.op)) return;
+        const k = Number(m.k) | 0;
+        const id = Number(m.id) | 0;
+        const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-100, Math.min(100, v)) : undefined);
+        if (m.op === 'play' && id <= 0) return;
+        const key = 'c' + c.cid + ':' + k;
+        const a = n(m.a), b = n(m.b), cc = n(m.c);
+        this.anims.op(hum, key, m.op, id, a, b, cc);
+        this.broadcast({ t: 'anim', h: hum.id, k: key, op: m.op, id, a, b, c: cc }, c);
+        break;
+      }
+      case 'hp': {
+        const hum = rec && rec.hum;
+        const v = Number(m.v);
+        if (!hum || hum.destroyed || rec.dead || !Number.isFinite(v)) return;
+        if (v < hum.props.get('Health')) dm.setProp(hum, 'Health', Math.max(0, v));
+        break;
+      }
+      case 'break': {
+        const part = dm.byId.get(m.id | 0);
+        if (!rec || rec.dead || !part || part.destroyed || !part.isA('BasePart') || !part.isDescendantOf(model)) return;
+        this.physics.breakJoints(part);
+        rec.dirty = true;
         break;
       }
       case 'val': {
@@ -988,7 +1063,7 @@ export class Game {
       case 'key': {
         const k = cleanText(m.k, 8).toLowerCase();
         if (!k) return;
-        dm.emit(this.mouseOf(pl), m.down ? 'KeyDown' : 'KeyUp', k);
+        this.emitMouse(pl, m.down ? 'KeyDown' : 'KeyUp', k);
         break;
       }
       case 'chat': {
@@ -1066,7 +1141,11 @@ export class Game {
       asm.sentSleep = sleeping;
       for (const p of asm.parts) {
         if (!p.repWas || !p.repWas.rep) continue;
-        out.push(Replicator.physRecord(p));
+        const r = Replicator.physRecord(p);
+        const last = p.phSent;
+        if (last && physSame(last, r)) continue;
+        p.phSent = r;
+        out.push(r);
       }
     }
     return out;
@@ -1084,6 +1163,7 @@ export class Game {
         this.dm.emit(rs, 'Stepped', this.t, dt);
         this.dm.emit(rs, 'Heartbeat', dt);
       }
+      this.anims.step(dt, (inst, ev, arg) => this.dm.emit(inst, ev, arg));
       this.updateChars(dt);
       this.handleExplosions();
       this.physics.step(dt);
