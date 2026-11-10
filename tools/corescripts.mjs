@@ -80,7 +80,6 @@ const env = {
 host = new ScriptHost(dm, env);
 host.logs = (k, m, w) => { if (k !== 'print') logs.push(`${k} ${w || ''}: ${String(m).split('\n')[0]}`); };
 await host.init(() => Lua.create(), fs.readFileSync(CH + '/shared/runtime.lua', 'utf8'));
-env.addCoreScript(158948138, rg, 'CoreScripts/LoadingScript');
 env.addCoreScript(37801172, dm.services.get('ScriptContext'), 'StarterScript');
 let shot = null;
 let t = 0;

@@ -18,7 +18,7 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
 
 | Path | Contents |
 | --- | --- |
-| `client/` | Browser client: `main.js` boot, `world.js` client DataModel and engine-built GUI, `render.js`, `shade2012.js` 2012 materials and lighting, `particles2012.js` 2012 particle systems, `gui.js`, `camera.js`, `cursor.js` 2012 mouse cursors, `touch.js`, `assets.js`, `net.js` |
+| `client/` | Browser client: `main.js` boot, `world.js` client DataModel and engine-built GUI, `render.js`, `shade2012.js` 2012 materials and lighting, `particles2012.js` 2012 particle systems, `gui.js`, `camera.js`, `cursor.js` 2012 mouse cursors, `touch.js`, `assets.js`, `net.js`, `avatarview.js` standalone character viewer |
 | `client/vendor/` | Bundled three.js, Rapier, wasmoon and the Lua wasm |
 | `client/ui/` | Touch images the desktop content lacks, built from the iOS app by `tools/ipa-ui.mjs`. Gitignored |
 | `shared/` | Code used by both sides: `instance.js` DataModel, `classes.js` classes and enums, `luahost.js` engine API, `runtime.lua` Lua scheduler and datatypes, `physics.js`, `humanoid.js`, `animator.js` KeyframeSequence animation, `rbxl.js` place parser, `rbxlx.js` place writer, `teamsync.js` Team Create sync |
@@ -71,8 +71,8 @@ Endpoints use `{id}` as a placeholder. Paths are relative to `siteUrl` on the se
 
 | Endpoint | Used by | Contract |
 | --- | --- | --- |
-| `ticket` | browser | `POST {placeId}` as JSON with the page's CSRF token in `X-CSRF-Token`. Returns `{ success, ticket, ws }` |
-| `redeem` | server | `POST ticket=...` with `X-Chocolate-Key`. Returns `{ ok, mode, userId, username, placeId, ... }` and must accept each ticket once. `mode` is `play` for a game ticket (with `membership`, `age`, `dev`) or `studio` for a Team Create ticket (with `role`: `owner` or `editor`). A response without `mode` is treated as `play` |
+| `ticket` | browser | `POST {placeId, server}` as JSON with the page's CSRF token in `X-CSRF-Token`. `server` is optional: `job:<id>` for a particular public server, `private:<id>[:<code>]` or `reserved:<id>:<code>`. Returns `{ success, ticket, ws }` |
+| `redeem` | server | `POST ticket=...` with `X-Chocolate-Key`. Returns `{ ok, mode, userId, username, placeId, ... }` and must accept each ticket once. `mode` is `play` for a game ticket (with `membership`, `age`, `dev`, and optionally `maxPlayers`, `allowGear` (false to spawn players without their equipped gear; gear is given when it is left out) and `serverKey`: `job:<id>`, `priv:<id>` or `res:<id>`) or `studio` for a Team Create ticket (with `role`: `owner` or `editor`). A response without `mode` is treated as `play` |
 | `asset` | both | Raw asset bytes by ID |
 | `place` | server | Place file by ID, only needed when `assetDir` is empty |
 | `coreScript` | both | Lua source by ID. A leading signature line starting with `%` is stripped |
@@ -81,6 +81,8 @@ Endpoints use `{id}` as a placeholder. Paths are relative to `siteUrl` on the se
 | `gears` | server | Equipped gear IDs for a user, any separator. Leave empty to give no gear |
 | `gamePage`, `play`, `login` | browser | Pages to send the player to on leaving, teleporting or when logged out |
 | `studioPlace`, `studioSave`, `studioTicket`, `studioCollaborators`, `studioToolbox` | browser | Studio; see [docs/STUDIO.md](docs/STUDIO.md) |
+| `presence` | server | `POST { users: [{ id, kind, place }] }` as JSON with `X-Chocolate-Key`: everyone playing (`kind: play`) or in Team Create (`kind: studio`) right now. Sent a second after any join or leave, every 60 seconds and at startup (empty), so the host can replace what it had |
+| `social` | server | `POST { action, ... }` as JSON with `X-Chocolate-Key`, answering `{ ok: true, ... }`. `award { userId, badgeId, placeId }` → `{ awarded, message }` (the host checks the badge belongs to the place and the user is playing it; the message is shown in chat); `hasBadge { userId, badgeId }` → `{ has }`; `statuses { userId, others: [ids] }` → `{ statuses: { id: FriendStatus } }`; `request` and `revoke { from, to }` → `{ status, event }` (FriendStatus and FriendRequestEvent values); `friendsOnline { userId, max }` → `{ friends: [{ VisitorId, UserName, IsOnline, LocationType, LastLocation, PlaceId }] }`. Without it, badges are never awarded and nobody is friends |
 
 ## Embedding
 
@@ -91,7 +93,7 @@ The host page provides the import map, the `#chocolate-config` JSON and the DOM 
 <script type="application/json" id="chocolate-config">{"placeId":1,"placeName":"Place","csrf":"...","version":1,"publicPath":"/chocolate","websocketPath":"/chocolate/ws","endpoints":{"ticket":"...","asset":"...","coreScript":"...","gamePage":"...","play":"...","login":"..."}}</script>
 <div id="chocolate">
   <canvas id="chocolate-canvas" tabindex="0"></canvas>
-  <div id="chocolate-loading" class="ch-overlay ch-boot"><div class="ch-boot-loading">Loading</div><p id="chocolate-status" class="ch-boot-status"></p></div>
+  <div id="chocolate-loading" class="ch-overlay ch-boot"><div class="ch-boot-panel"><span>Bricks:</span><span id="chocolate-bricks">0</span><span>Connectors:</span><span id="chocolate-connectors">0</span></div><p id="chocolate-status" class="ch-boot-status" role="status"></p></div>
   <div id="chocolate-fatal" class="ch-overlay" hidden><h2></h2><p></p></div>
 </div>
 <script type="module" src="/chocolate/client/main.js"></script>
@@ -101,6 +103,12 @@ Only pass the browser endpoints listed above. Never send `key`, `siteUrl` or `as
 
 Give every module under `client/` and `shared/` a version in the import map, for example `"/chocolate/client/world.js": "/chocolate/client/world.js?v=<mtime>"`, and load `main.js` with the same versioned URL. Modules import each other by relative path, so without these entries browsers and service workers keep serving old copies after an update. Put the same version in `#chocolate-config` as `version`; the client adds it to `runtime.lua` and `content-index.json`.
 
+## Avatar viewer
+
+`client/avatarview.js` shows one character on its own canvas, for a host's avatar editor. `mountAvatarView(canvas, cfg)` takes the same `#chocolate-config` fields as the game page (only the `asset` endpoint is needed) and returns a view; `view.set({ assets: [ids], colors: { Head: 24, Torso: 23, ... } })` dresses it the way the game server dresses a player: hats, faces, heads, clothing, packages and one gear held in the right hand. Assets are parsed once and cached, so changing an outfit redraws at once. Drag to turn the character. It renders at most 30 frames a second and only while something changes.
+
+Package body parts (`CharacterMesh`) replace the limb mesh with the package's mesh and keep the clothing atlas, in the viewer and in games.
+
 ## Studio
 
 `studio/` is a place editor in the style of the 2012 Studio: the 2012 menus, toolbars, Explorer icons and tool cursors, the Drag, Move, Resize, Rotate, Lock, Anchor, Paint, Material and surface tools with grid snapping, Explorer, Properties, Output, script tabs, undo and redo, and lossless saving in the 2012 XML format. The Toolbox lists the site's free models and your own models with thumbnails, plus Basic Objects. The script editor completes Lua keywords, globals, libraries and the members of whatever an expression points at in the place (`game.Workspace.`, `script.Parent:`). The Object Browser (View > Object Browser or Help > Object Reference) lists every class with its properties, functions and events. It works on phones and tablets with a bottom sheet, a camera thumbstick and a camera-only mode. It runs no scripts; Play Solo saves and opens the game.
@@ -109,12 +117,28 @@ Team Create lets the owner and the collaborators they add edit a place together.
 
 The host serves a Studio page and the `studioPlace`, `studioSave`, `studioTicket`, `studioCollaborators` and `studioToolbox` endpoints. See [docs/STUDIO.md](docs/STUDIO.md) for setup, the page and endpoint contracts, Team Create, the place file API (`parsePlace`, `writePlace`, `writeModel`), the `window.__studio` API and every command.
 
+## Servers
+
+Each place can have several servers at once, each a worker thread with its own job id (`game.JobId`). A server holds at most `maxPlayers` players (from `redeem`, 20 when it says nothing).
+
+- A player with no `serverKey` goes to the public server of that place with the most players that still has room, and a new public server starts when every one is full.
+- `job:<id>` asks for one public server; when it is gone or full, the player goes to another as above.
+- `priv:<id>` and `res:<id>` are private and reserved servers. Each has one server of its own, started on the first join; when it is full, the player is turned away with "This server is full".
+- A server stops 90 seconds after its last player leaves.
+
+The server answers two local HTTP requests on its port, which must not be proxied to the internet:
+
+| Request | Answer |
+| --- | --- |
+| `GET /status` | `{ ok, places: [{ id, job, kind, privateId, max, ready, started, players, users: [{ id, name }] }], studio: [{ id, users }] }`: every running server and Team Create session |
+| `POST /shutdown` with `X-Chocolate-Key` and `{ job }` or `{ placeId }` | Stops that server, or every server of the place, telling its players "This server was shut down" |
+
 ## How a join works
 
 1. The page asks the host for a ticket, then opens the WebSocket with it.
-2. The server redeems the ticket with the host and starts a worker for the place if none is running.
+2. The server redeems the ticket with the host and picks a server for it, starting one if needed (see Servers).
 3. The worker creates the Player, sets `CharacterAppearance`, loads the character from `appearance` and `bodyColors`, and gives StarterPack tools plus the gear from `gears` on every spawn.
-4. The client applies the snapshot, creates the engine-built `RobloxGui.ControlFrame`, then runs the LoadingScript (158948138) and the StarterScript (37801172), which loads the other CoreScripts.
+4. While it loads, the page shows the 2012 engine's loading screen: the default sky behind a grey panel counting Bricks (parts) and Connectors (joints). The client applies the snapshot, creates the engine-built `RobloxGui.ControlFrame` and runs the StarterScript (37801172), which loads the other CoreScripts; the loading screen counts up to the place's totals and fades out.
 
 A Studio ticket goes to the same WebSocket. When `redeem` answers `mode: studio`, the server puts the connection in that place's Team Create session instead of a game worker.
 

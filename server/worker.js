@@ -2,6 +2,10 @@ import { parentPort, workerData } from 'worker_threads';
 import { Game } from './game.js';
 
 const game = new Game(workerData.placeId, {
+  jobId: workerData.jobId,
+  kind: workerData.kind,
+  privateId: workerData.privateId,
+  allowGear: workerData.allowGear !== false,
   send: (cid, data) => parentPort.postMessage({ t: 'send', cid, data }),
   kick: (cid, reason) => parentPort.postMessage({ t: 'kick', cid, reason }),
   log: (line) => parentPort.postMessage({ t: 'log', line }),
@@ -20,7 +24,7 @@ parentPort.on('message', (m) => {
 
 function dispatch(m) {
   if (m.t === 'join') game.join(m.cid, m.user).catch((e) => {
-    parentPort.postMessage({ t: 'log', line: `[place ${workerData.placeId}] join failed: ${e.stack || e.message}` });
+    parentPort.postMessage({ t: 'log', line: `[place ${workerData.placeId} ${workerData.jobId}] join failed: ${e.stack || e.message}` });
     parentPort.postMessage({ t: 'kick', cid: m.cid, reason: 'Could not join the game' });
   });
   else if (m.t === 'msg') game.message(m.cid, m.data);

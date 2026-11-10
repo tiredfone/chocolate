@@ -13,6 +13,7 @@ import { Replicator } from './replicator.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 import { placeBytes, assetNodes, appearance, luaSource, assetBytes, assetIdOf } from './assets.js';
 import { endpoint } from './config.js';
+import { social } from './social.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME = fs.readFileSync(path.join(HERE, '../shared/runtime.lua'), 'utf8');
@@ -69,6 +70,10 @@ function physSame(a, b) {
 export class Game {
   constructor(placeId, io) {
     this.placeId = placeId;
+    this.jobId = io.jobId || '';
+    this.kind = io.kind || 'public';
+    this.privateId = io.privateId || 0;
+    this.allowGear = io.allowGear !== false;
     this.io = io;
     this.dm = new DataModel('server');
     this.clients = new Map();
@@ -84,7 +89,7 @@ export class Game {
   }
 
   log(kind, msg, where) {
-    this.io.log(`[place ${this.placeId}] [${kind}]${where ? ' ' + where + ':' : ''} ${msg}`);
+    this.io.log(`[place ${this.placeId} ${this.kind === 'public' ? this.jobId : this.kind + ' ' + this.privateId}] [${kind}]${where ? ' ' + where + ':' : ''} ${msg}`);
     if (kind === 'error' || kind === 'print' || kind === 'warn') {
       const line = JSON.stringify({ t: 'out', k: kind, m: String(msg).slice(0, 2000) });
       for (const c of this.clients.values()) if (c.dev) this.io.send(c.cid, line);
@@ -107,6 +112,7 @@ export class Game {
     }
     dm.load(nodes.filter((n) => dm.services.has(n.cls) || ['Workspace', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'SoundService', 'ReplicatedStorage', 'ServerStorage', 'ServerScriptService', 'Players', 'Debris', 'StarterPlayer', 'ReplicatedFirst', 'Chat'].includes(n.cls)), dm.root);
     dm.root.props.set('PlaceId', this.placeId);
+    if (dm.root.info.all.has('JobId')) dm.root.props.set('JobId', this.jobId);
     dm.root.props.set('Name', 'Game');
     const ws = dm.services.get('Workspace');
     if (!ws.findChildOfClass('Camera')) {
@@ -191,6 +197,31 @@ export class Game {
         const pl = this.playerOfChar(h.parent);
         for (const c of [...h.parent.children]) if (c.ClassName === 'Tool') this.unequip(pl, c, h.parent);
       },
+      awardBadge: async (uid, bid) => {
+        const pl = [...this.clients.values()].map((c) => c.player).find((p) => p.props.get('userId') === uid);
+        if (!pl || !(bid > 0)) return false;
+        const r = await social('award', { userId: uid, badgeId: bid, placeId: this.placeId });
+        if (r && r.awarded && r.message) this.broadcast({ t: 'sys', m: cleanText(String(r.message), 200) });
+        return !!(r && r.awarded);
+      },
+      hasBadge: async (uid, bid) => {
+        if (!(uid > 0) || !(bid > 0)) return false;
+        const r = await social('hasBadge', { userId: uid, badgeId: bid });
+        return !!(r && r.has);
+      },
+      areFriends: async (pl, uid) => {
+        const me = pl && pl.props.get('userId');
+        if (!me || !(uid > 0) || uid === me) return false;
+        if (this.friends && this.friends.has(this.friendKey(me, uid))) return this.friends.get(this.friendKey(me, uid)) === 2;
+        const r = await social('statuses', { userId: me, others: [uid] });
+        return !!(r && r.statuses && r.statuses[uid] === 2);
+      },
+      friendsOnline: async (pl, max) => {
+        const r = await social('friendsOnline', { userId: pl.props.get('userId'), max });
+        return r && Array.isArray(r.friends) ? r.friends : [];
+      },
+      friendStatus: (pl, other) => this.friendStatusOf(pl, other),
+      friendRequest: (pl, other, on) => { this.changeFriendship(pl, other, on).catch(() => {}); },
       setMessage: (m) => this.broadcast({ t: 'msg', m: m == null ? null : cleanText(m, 500) }),
       teleport: (placeId, pl) => {
         const c = pl && this.clientOf(pl);
@@ -313,7 +344,54 @@ export class Game {
     for (const s of this.anims.snapshot()) this.io.send(cid, JSON.stringify({ t: 'anim', op: 'play', ...s }));
     dm.emit(players, 'PlayerAdded', player);
     this.broadcast({ t: 'sys', m: `${user.name} has joined the game.` });
+    this.loadFriendStatuses(client).catch(() => {});
     if (players.props.get('CharacterAutoLoads')) this.loadCharacter(player).catch((e) => this.log('error', 'LoadCharacter: ' + e.message));
+  }
+
+  friendKey(a, b) {
+    return `${a}:${b}`;
+  }
+
+  friendStatusOf(pl, other) {
+    if (!this.friends) this.friends = new Map();
+    const a = pl && pl.props.get('userId'), b = other && other.props.get('userId');
+    if (!a || !b || a === b) return 1;
+    return this.friends.get(this.friendKey(a, b)) || 1;
+  }
+
+  setFriendStatus(a, b, st) {
+    if (!this.friends) this.friends = new Map();
+    const rev = st === 3 ? 4 : st === 4 ? 3 : st;
+    this.friends.set(this.friendKey(a.props.get('userId'), b.props.get('userId')), st);
+    this.friends.set(this.friendKey(b.props.get('userId'), a.props.get('userId')), rev);
+    const ca = this.clientOf(a), cb = this.clientOf(b);
+    if (ca) this.io.send(ca.cid, JSON.stringify({ t: 'fs', s: { [b.id]: st } }));
+    if (cb) this.io.send(cb.cid, JSON.stringify({ t: 'fs', s: { [a.id]: rev } }));
+  }
+
+  async loadFriendStatuses(client) {
+    const me = client.player;
+    const others = [...this.clients.values()].filter((c) => c !== client).map((c) => c.player);
+    if (!others.length) return;
+    const r = await social('statuses', { userId: me.props.get('userId'), others: others.map((o) => o.props.get('userId')) });
+    if (!r || !r.statuses || me.destroyed) return;
+    for (const o of others) {
+      const st = r.statuses[o.props.get('userId')];
+      if (st && !o.destroyed) this.setFriendStatus(me, o, st | 0);
+    }
+  }
+
+  async changeFriendship(pl, other, on) {
+    if (!pl || !other || pl === other || other.ClassName !== 'Player' || !other.parent) return;
+    const now = Date.now();
+    if (!this.friendTimes) this.friendTimes = new Map();
+    if (now - (this.friendTimes.get(pl) || 0) < 1500) return;
+    this.friendTimes.set(pl, now);
+    const r = await social(on ? 'request' : 'revoke', { from: pl.props.get('userId'), to: other.props.get('userId') });
+    if (!r || pl.destroyed || other.destroyed) return;
+    this.setFriendStatus(pl, other, r.status | 0 || 1);
+    const ca = this.clientOf(pl), cb = this.clientOf(other);
+    if (r.event != null) for (const c of [ca, cb]) if (c) this.io.send(c.cid, JSON.stringify({ t: 'fre', a: pl.id, b: other.id, e: r.event | 0 }));
   }
 
   leave(cid) {
@@ -431,7 +509,7 @@ export class Game {
         const k = dm.clone(c);
         if (k) dm.setParent(k, bp);
       }
-      for (const tpl of await this.gearFor(player, look.gear)) {
+      for (const tpl of this.allowGear ? await this.gearFor(player, look.gear) : []) {
         if (player.destroyed || bp.destroyed) break;
         const k = dm.clone(tpl);
         if (k) dm.setParent(k, bp);
@@ -948,6 +1026,11 @@ export class Game {
         const tool = this.ownedInst(c, m.id, 'Tool');
         if (!tool || !rec || (tool.parent !== pl.findChildOfClass('Backpack') && tool.parent !== model)) return;
         this.equip(pl, tool, model);
+        break;
+      }
+      case 'friend': {
+        const other = this.dm.byId.get(m.id | 0);
+        if (other && other.ClassName === 'Player') this.changeFriendship(pl, other, !!m.on).catch(() => {});
         break;
       }
       case 'unequip': {

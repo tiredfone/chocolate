@@ -124,6 +124,15 @@ local function dec1(a, i)
     i = i + 2
     for k = 1, n do t[k], i = dec1(a, i) end
     return t, i
+  elseif tag == "d" then
+    local n = a[i + 1]
+    local t = {}
+    i = i + 2
+    for k = 1, n do
+      local key = a[i]
+      t[key], i = dec1(a, i + 1)
+    end
+    return t, i
   end
   return nil, i + 1
 end
@@ -1267,6 +1276,74 @@ local function step(t)
   end
   pollEvents()
   return #sleeping
+end
+
+
+function CAS.closeNote(f)
+  local list = CAS.notes or {}
+  for i = #list, 1, -1 do
+    if list[i] == f then table.remove(list, i) end
+  end
+  pcall(function() f:Remove() end)
+  for i, g in ipairs(list) do
+    pcall(function() g.Position = UDim2.new(1, -236, 1, -84 - (i - 1) * 72) end)
+  end
+end
+
+LuaMethods.SendNotification = function(self, id, title, text, image, duration, callback)
+  if SIDE ~= "client" then return end
+  local core = call(0, "GetService", "CoreGui")
+  local rg = core and core:FindFirstChild("RobloxGui")
+  if not rg then return end
+  CAS.notes = CAS.notes or {}
+  local f = InstanceLib.new("ImageButton")
+  f.Name = "Notification"
+  f.Size = UDim2.new(0, 226, 0, 64)
+  f.Position = UDim2.new(1, -236, 1, -84 - #CAS.notes * 72)
+  f.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
+  f.BackgroundTransparency = 0.25
+  f.BorderSizePixel = 0
+  f.AutoButtonColor = false
+  f.ZIndex = 9
+  local x = 10
+  if type(image) == "string" and image ~= "" then
+    local im = InstanceLib.new("ImageLabel", f)
+    im.Size = UDim2.new(0, 48, 0, 48)
+    im.Position = UDim2.new(0, 8, 0, 8)
+    im.BackgroundTransparency = 1
+    im.Image = image
+    im.ZIndex = 10
+    x = 64
+  end
+  local t = InstanceLib.new("TextLabel", f)
+  t.BackgroundTransparency = 1
+  t.Position = UDim2.new(0, x, 0, 8)
+  t.Size = UDim2.new(1, -x - 8, 0, 18)
+  t.Font = "ArialBold"
+  t.FontSize = "Size14"
+  t.TextColor3 = Color3.new(1, 1, 1)
+  t.TextXAlignment = "Left"
+  t.Text = tostring(title or "")
+  t.ZIndex = 10
+  local d = InstanceLib.new("TextLabel", f)
+  d.BackgroundTransparency = 1
+  d.Position = UDim2.new(0, x, 0, 28)
+  d.Size = UDim2.new(1, -x - 8, 0, 30)
+  d.Font = "Arial"
+  d.FontSize = "Size12"
+  d.TextColor3 = Color3.new(0.85, 0.85, 0.85)
+  d.TextXAlignment = "Left"
+  d.TextYAlignment = "Top"
+  d.TextWrap = true
+  d.Text = tostring(text or "")
+  d.ZIndex = 10
+  CAS.notes[#CAS.notes + 1] = f
+  f.MouseButton1Click:connect(function()
+    CAS.closeNote(f)
+    if type(callback) == "function" then CAS.run(callback) end
+  end)
+  f.Parent = rg
+  luaDelay(tonumber(duration) or 5, function() CAS.closeNote(f) end)
 end
 
 return {

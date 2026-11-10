@@ -47,10 +47,10 @@ EVENTS.Player.push('FriendStatusChanged', 'OnTeleport');
 
 const ASYNC = new Set(['LoadAsset', 'loadAsset', 'GetProductInfo', 'AwardBadge', 'UserHasBadge', 'IsInGroup', 'GetRankInGroup', 'GetRoleInGroup', 'IsFriendsWith', 'isFriendsWith', 'isInGroup', 'PlayerOwnsAsset', 'GetCollectibles', 'SaveNumber', 'LoadNumber', 'SaveString', 'LoadString', 'SaveBoolean', 'LoadBoolean', 'SaveInstance', 'LoadInstance', 'WaitForDataReady', 'waitForDataReady', 'GetFriendsOnline', 'LoadCharacter', 'loadCharacter', 'GetUserIdFromNameAsync', 'GetNameFromUserIdAsync', 'HttpGet', 'PostAsync', 'GetAsync']);
 
-const ENGINE_FLAGS = new Set(['NewLoadingScreen']);
+const ENGINE_FLAGS = new Set([]);
 const CAS_METHODS = ['BindAction', 'BindActionToInputTypes', 'UnbindAction', 'UnbindAllActions', 'GetAllBoundActionInfo', 'GetBoundActionInfo', 'SetTitle', 'SetImage', 'SetDescription', 'SetPosition', 'CallFunction', 'FireActionButtonFoundSignal', 'GetButton'];
 const CAS_SIDE = new Set(CAS_METHODS);
-const LUA_SIDE = new Set(['WaitForChild', 'waitForChild', 'Fire', 'Invoke', 'AddCenterDialog', 'RemoveCenterDialog', ...CAS_METHODS]);
+const LUA_SIDE = new Set(['WaitForChild', 'waitForChild', 'Fire', 'Invoke', 'AddCenterDialog', 'RemoveCenterDialog', 'SendNotification', ...CAS_METHODS]);
 
 const eventIndex = new Map();
 for (const [cls, list] of Object.entries(EVENTS)) for (const e of list) {
@@ -86,6 +86,7 @@ export const T = {
   bc: (v) => new Typed('bc', v),
   e: (type, v) => new Typed('e', [type, v]),
   list: (v) => new Typed('l', v),
+  dict: (v) => new Typed('d', v),
   ray: (o, d) => new Typed('ray', [...o, ...d]),
 };
 
@@ -98,6 +99,13 @@ function encodeAny(out, v) {
     if (v.tag === 'l') {
       out.push('l', v.v.length);
       for (const x of v.v) encodeAny(out, x);
+    } else if (v.tag === 'd') {
+      const keys = Object.keys(v.v);
+      out.push('d', keys.length);
+      for (const k of keys) {
+        out.push(k);
+        encodeAny(out, v.v[k]);
+      }
     } else if (v.tag === 'e') out.push('e', v.v[0], v.v[1]);
     else if (v.tag === 'bc') out.push('bc', v.v);
     else out.push(v.tag, ...v.v);
@@ -531,7 +539,7 @@ export class ScriptHost {
       if (LUA_SIDE.has(k)) {
         if (k === 'Fire' && !inst.isA('BindableEvent')) return null;
         if (k === 'Invoke' && !inst.isA('BindableFunction')) return null;
-        if ((k === 'AddCenterDialog' || k === 'RemoveCenterDialog') && inst.ClassName !== 'GuiService') return null;
+        if ((k === 'AddCenterDialog' || k === 'RemoveCenterDialog' || k === 'SendNotification') && inst.ClassName !== 'GuiService') return null;
         if (CAS_SIDE.has(k) && inst.ClassName !== 'ContextActionService') return null;
         return k;
       }
@@ -868,7 +876,7 @@ function buildMethods(host) {
   def('GetRankInGroup', 'Player', (pl, [g]) => (env.groupRank ? env.groupRank(pl, +g).then((v) => [v | 0]) : Promise.resolve([0])));
   def('GetRoleInGroup', 'Player', (pl, [g]) => (env.groupRole ? env.groupRole(pl, +g).then((v) => [String(v)]) : Promise.resolve(['Guest'])));
   def('IsFriendsWith isFriendsWith', 'Player', (pl, [u]) => (env.areFriends ? env.areFriends(pl, +u).then((v) => [!!v]) : Promise.resolve([false])));
-  def('GetFriendsOnline', 'Player', () => Promise.resolve([T.list([])]));
+  def('GetFriendsOnline', 'Player', (pl, [max]) => (env.friendsOnline ? env.friendsOnline(pl, max == null ? 200 : +max) : Promise.resolve([])).then((list) => [T.list((list || []).map((f) => T.dict(f)))]));
   def('WaitForDataReady waitForDataReady', 'Player', () => Promise.resolve([true]));
   for (const [m, kind] of [['SaveNumber', 'n'], ['SaveString', 's'], ['SaveBoolean', 'b']]) {
     def(m, 'Player', (pl, [k, v]) => (env.saveData ? env.saveData(pl, String(k), kind, v).then(() => []) : Promise.resolve([])));
@@ -905,6 +913,8 @@ function buildMethods(host) {
   def('Move', 'Humanoid', (h, [dir]) => { if (env.humanoidMove) env.humanoidMove(h, dir); return null; });
   def('EquipTool', 'Humanoid', (h, [tool]) => { if (env.equipTool) env.equipTool(h, tool); return null; });
   def('UnequipTools', 'Humanoid', (h) => { if (env.unequipTools) env.unequipTools(h); return null; });
+  def('Disable', 'HopperBin', (b) => { if (env.deselectBin) env.deselectBin(b); return null; });
+  def('ToggleSelect', 'HopperBin', (b) => { if (env.toggleBin) env.toggleBin(b); return null; });
   def('LoadAnimation loadAnimation', 'Humanoid', (h, [anim]) => {
     if (!(anim instanceof Instance) || anim.ClassName !== 'Animation') throw new Error('LoadAnimation requires an Animation object');
     const tr = dm.create('AnimationTrack', null);
@@ -940,7 +950,8 @@ function buildMethods(host) {
 
   def('AwardBadge', 'BadgeService', (s, [uid, bid]) => (env.awardBadge ? env.awardBadge(+uid, +bid).then((v) => [!!v]) : Promise.resolve([false])));
   def('UserHasBadge', 'BadgeService', (s, [uid, bid]) => (env.hasBadge ? env.hasBadge(+uid, +bid).then((v) => [!!v]) : Promise.resolve([false])));
-  def('IsDisabled IsLegal', 'BadgeService', () => false);
+  def('IsDisabled', 'BadgeService', () => false);
+  def('IsLegal', 'BadgeService', () => true);
 
   def('GetProductInfo', 'MarketplaceService', (s, [id]) => Promise.resolve([T.list([])]));
   def('PromptPurchase PromptProductPurchase PromptGamePassPurchase', 'MarketplaceService', () => null);
@@ -1029,8 +1040,9 @@ function buildMethods(host) {
   def('GetUseCoreScriptHealthBar', 'Players', () => true);
   def('SetOldSchoolBackpack', 'LocalBackpack', () => null);
   def('GetOldSchoolBackpack', 'LocalBackpack', () => false);
-  def('RequestFriendship RevokeFriendship', 'Player', () => null);
-  def('GetFriendStatus', 'Player', () => T.e('FriendStatus', 1));
+  def('RequestFriendship', 'Player', (pl, [other]) => { if (env.friendRequest && other) env.friendRequest(pl, other, true); return null; });
+  def('RevokeFriendship', 'Player', (pl, [other]) => { if (env.friendRequest && other) env.friendRequest(pl, other, false); return null; });
+  def('GetFriendStatus', 'Player', (pl, [other]) => T.e('FriendStatus', env.friendStatus && other ? env.friendStatus(pl, other) : 1));
   def('SetSuperSafeChat SetUnder13 SetMembershipType SetAccountAge', 'Player', () => null);
   def('SignalPromptProductPurchaseFinished SignalPromptPurchaseFinished SignalClientPurchaseSuccess SignalServerLuaDialogClosed', 'MarketplaceService', () => null);
   def('TeleportCancel', 'TeleportService', () => null);
@@ -1121,6 +1133,10 @@ function buildComputed(host) {
   def('GripRight', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[3], g[6], g[9]]); });
   def('GripUp', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[4], g[7], g[10]]); });
   def('GripForward', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([-g[5], -g[8], -g[11]]); });
+  def('AttachmentPos', 'Accoutrement', (t) => { const g = t.props.get('AttachmentPoint'); return T.v3([g[0], g[1], g[2]]); });
+  def('AttachmentRight', 'Accoutrement', (t) => { const g = t.props.get('AttachmentPoint'); return T.v3([g[3], g[6], g[9]]); });
+  def('AttachmentUp', 'Accoutrement', (t) => { const g = t.props.get('AttachmentPoint'); return T.v3([g[4], g[7], g[10]]); });
+  def('AttachmentForward', 'Accoutrement', (t) => { const g = t.props.get('AttachmentPoint'); return T.v3([-g[5], -g[8], -g[11]]); });
   def('Rotation', 'BasePart', (p) => {
     const c = p.props.get('CFrame');
     const r02 = Math.max(-1, Math.min(1, c[5]));
@@ -1192,6 +1208,17 @@ function buildSetters(host) {
   def('GripRight', 'Tool', gripSet([3, 6, 9], 1));
   def('GripUp', 'Tool', gripSet([4, 7, 10], 1));
   def('GripForward', 'Tool', gripSet([5, 8, 11], -1));
+  const attachSet = (idx, sign) => (t, a) => {
+    const v = v3(a);
+    const g = t.props.get('AttachmentPoint').slice();
+    for (let i = 0; i < 3; i++) g[idx[i]] = v[i] * sign;
+    if (!C.isFiniteCF(g)) return;
+    dm.setProp(t, 'AttachmentPoint', g, { lua: true });
+  };
+  def('AttachmentPos', 'Accoutrement', attachSet([0, 1, 2], 1));
+  def('AttachmentRight', 'Accoutrement', attachSet([3, 6, 9], 1));
+  def('AttachmentUp', 'Accoutrement', attachSet([4, 7, 10], 1));
+  def('AttachmentForward', 'Accoutrement', attachSet([5, 8, 11], -1));
   def('Rotation', 'BasePart', (p, a) => {
     const v = v3(a);
     const cf = p.props.get('CFrame');

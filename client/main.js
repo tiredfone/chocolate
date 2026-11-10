@@ -7,7 +7,7 @@ import { CameraController } from './camera.js';
 import { Gui } from './gui.js';
 import { TouchInput, detectTouch } from './touch.js';
 import { T } from '../shared/luahost.js';
-import { configure, publicPath, endpointUrl, loadContentIndex } from './assets.js';
+import { configure, publicPath, endpointUrl, loadContentIndex, contentUrl } from './assets.js';
 import { CursorLayer, CURSORS } from './cursor.js';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent);
@@ -25,13 +25,37 @@ function setStatus(t) {
   status.textContent = t;
 }
 
-const bootText = loading.querySelector('.ch-boot-loading');
-let bootDots = 0;
-const bootTimer = setInterval(() => {
-  if (loading.hidden) return clearInterval(bootTimer);
-  bootDots = (bootDots + 1) % 6;
-  if (bootText) bootText.textContent = 'Loading' + '.'.repeat(bootDots);
-}, 300);
+const bricksEl = document.getElementById('chocolate-bricks');
+const connectorsEl = document.getElementById('chocolate-connectors');
+loading.style.backgroundImage = `url("${contentUrl('sky/null_plainsky512_ft.jpg')}")`;
+
+function finishLoading(world) {
+  const ws = world.dm.services.get('Workspace');
+  let bricks = 0, connectors = 0;
+  for (const d of ws ? ws.descendants() : []) {
+    if (d.isA('BasePart')) bricks++;
+    else if (d.isA('JointInstance')) connectors++;
+  }
+  const total = bricks + connectors;
+  const ms = Math.min(2200, 350 + total * 1.5);
+  const t0 = performance.now();
+  return new Promise((resolve) => {
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / ms);
+      if (bricksEl) bricksEl.textContent = String(Math.round(bricks * k));
+      if (connectorsEl) connectorsEl.textContent = String(Math.round(connectors * k));
+      if (k < 1) requestAnimationFrame(step);
+      else setTimeout(() => {
+        loading.classList.add('ch-boot-done');
+        setTimeout(() => {
+          loading.hidden = true;
+          resolve();
+        }, 450);
+      }, 250);
+    };
+    requestAnimationFrame(step);
+  });
+}
 
 function showFatal(title, detail) {
   loading.hidden = true;
@@ -45,7 +69,7 @@ async function ticket() {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': cfg.csrf },
-    body: JSON.stringify({ placeId: cfg.placeId }),
+    body: JSON.stringify(cfg.server ? { placeId: cfg.placeId, server: cfg.server } : { placeId: cfg.placeId }),
   });
   const j = await r.json().catch(() => null);
   if (!r.ok || !j || !j.ticket) throw new Error((j && j.error) || 'Could not get a join ticket');
@@ -97,6 +121,28 @@ async function boot() {
     if (p && gui) gui.bubble(p, m.m);
   });
   net.on('msg', (m) => gui && gui.setHint(m.m));
+  const applyFs = (m) => {
+    if (!m.s) return;
+    for (const [id, st] of Object.entries(m.s)) {
+      const other = world.dm.byId.get(+id);
+      const prev = world.friendStatus.get(+id) || 1;
+      world.friendStatus.set(+id, st | 0);
+      if (other && world.player && prev !== (st | 0)) world.dm.emit(world.player, 'FriendStatusChanged', other, T.e('FriendStatus', st | 0));
+    }
+  };
+  const applyFre = (m) => {
+    const a = world.dm.byId.get(m.a | 0), b = world.dm.byId.get(m.b | 0);
+    const players = world.dm.services.get('Players');
+    if (a && b && players) world.dm.emit(players, 'FriendRequestEvent', a, b, T.e('FriendRequestEvent', m.e | 0));
+  };
+  net.on('fs', (m) => {
+    if (world && world.ready) applyFs(m);
+    else pending.push(m);
+  });
+  net.on('fre', (m) => {
+    if (world && world.ready) applyFre(m);
+    else pending.push(m);
+  });
   net.on('out', (m) => {
     if (!world || !world.ready) return;
     const ls = world.dm.services.get('LogService');
@@ -167,8 +213,8 @@ async function boot() {
       });
       if (touch) new TouchInput(world, renderer, gui, root, canvas);
       world.ready = true;
-      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else world.applyRep(p);
-      loading.hidden = true;
+      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else world.applyRep(p);
+      finishLoading(world);
       document.addEventListener('fullscreenchange', () => {
         const us = world.host._userSettings;
         const gs = us && us.findChild('GameSettings');
@@ -268,7 +314,14 @@ function start(world, renderer, camera, gui, net) {
   });
   let last = performance.now();
   let pingT = 0;
+  const FRAME_MS = 1000 / 30;
+  let due = last;
   const loop = (now) => {
+    if (now < due - 1) {
+      requestAnimationFrame(loop);
+      return;
+    }
+    due = due + FRAME_MS < now ? now + FRAME_MS : due + FRAME_MS;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     const f = camera.forwardFlat(), rt = camera.rightFlat();

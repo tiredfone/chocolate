@@ -9,7 +9,6 @@ import { parsePlace } from '../shared/rbxl.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 
 export const STARTER_SCRIPT = 37801172;
-export const LOADING_SCRIPT = 158948138;
 export const SETTINGS_SCRIPT = 46295863;
 export const TOUCH_CONTROLS_SCRIPT = 153556783;
 
@@ -30,6 +29,7 @@ export class ClientWorld {
     this.keys = new Set();
     this.selectedBin = null;
     this.equippedTool = null;
+    this.friendStatus = new Map();
     this.toolMouse = null;
     this.mouseSendAcc = 0;
     this.sounds = new Map();
@@ -69,7 +69,7 @@ export class ClientWorld {
       changed: (inst, name, old, opts) => this.onChange(inst, name, old, opts),
     });
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
-    this.coreSources = await loadCoreSources([LOADING_SCRIPT, STARTER_SCRIPT]).catch(() => new Map());
+    this.coreSources = await loadCoreSources([STARTER_SCRIPT]).catch(() => new Map());
     const coreGui = dm.service('CoreGui');
     this.robloxGui = dm.create('ScreenGui', null);
     this.robloxGui.props.set('Name', 'RobloxGui');
@@ -85,7 +85,6 @@ export class ClientWorld {
     this.host = new ScriptHost(dm, this.env());
     this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
     await this.host.init(luaFactory, runtimeSrc);
-    if (this.coreSources.get(LOADING_SCRIPT)) this.addCoreScript(LOADING_SCRIPT, this.robloxGui, 'CoreScripts/LoadingScript');
     if (this.coreSources.get(STARTER_SCRIPT)) this.addCoreScript(STARTER_SCRIPT, dm.services.get('ScriptContext'), 'StarterScript');
     for (const d of dm.root.descendants()) if (d.isA('Sound') && d.props.get('IsPlaying')) this.playSound(d, 'play');
   }
@@ -248,6 +247,15 @@ export class ClientWorld {
       raycast: (o, d, ig) => this.physics.raycast(o, d, ig),
       equipTool: (h, tool) => { if (tool && this.ownModel && h.parent === this.ownModel) this.net.send({ t: 'equip', id: tool.id }); },
       unequipTools: (h) => { if (this.equippedTool) this.net.send({ t: 'unequip', id: this.equippedTool.id }); },
+      deselectBin: (b) => { if (this.selectedBin === b) this.toggleSlot(b); },
+      friendStatus: (pl, other) => (pl === this.player && other ? this.friendStatus.get(other.id) || 1 : 1),
+      friendRequest: (pl, other, on) => { if (pl === this.player && other && other !== pl && other.ClassName === 'Player') this.net.send({ t: 'friend', id: other.id, on: !!on }); },
+      areFriends: (pl, uid) => {
+        const players = this.dm.services.get('Players');
+        const other = players && players.children.find((c) => c.ClassName === 'Player' && c.props.get('userId') === uid);
+        return Promise.resolve(!!(pl === this.player && other && this.friendStatus.get(other.id) === 2));
+      },
+      toggleBin: (b) => { if (b && b.parent && this.ownModel && b.parent.ClassName === 'Backpack') this.toggleSlot(b); },
       sound: (s, op) => this.playSound(s, op),
       animate: (tr, op, a, b, c) => {
         const hum = tr.data.hum;
@@ -380,7 +388,17 @@ export class ClientWorld {
     this.own = { model, hum: rec.hum, ctrl, rec, moveTo: null, last: null };
     this.ownModel = model;
     rec.cf = m.c;
+    if (this.equippedTool && this.equippedTool.parent !== model) {
+      this.equippedTool = null;
+      this.toolMouse = null;
+    }
+    const held = model.children.find((c) => c.ClassName === 'Tool');
+    if (held && this.equippedTool !== held) {
+      this.equippedTool = held;
+      this.dm.emit(held, 'Equipped', this.openToolMouse());
+    }
     if (this.hooks.ownCharacter) this.hooks.ownCharacter(model);
+    if (held && this.hooks.backpackChanged) this.hooks.backpackChanged();
   }
 
   applyRep(msg) {

@@ -25,6 +25,8 @@ $config = [
         'studioTicket' => '/api/chocolate/studio/ticket/{id}',
         'studioCollaborators' => '/api/chocolate/studio/collaborators/{id}',
         'studioToolbox' => '/api/chocolate/studio/toolbox',
+        'presence' => '/api/chocolate/presence',
+        'social' => '/api/chocolate/social',
         'login' => '/login',
     ],
 ];

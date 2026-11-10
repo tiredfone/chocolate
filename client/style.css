@@ -545,24 +545,49 @@ html, body {
 }
 
 .ch-overlay.ch-boot {
-  background: rgb(48, 90, 206);
+  background-color: #8fb3d9;
+  background-size: max(135%, 160vh) auto;
+  background-repeat: no-repeat;
+  background-position: 50% 78%;
+  animation: ch-boot-drift 40s ease-in-out infinite alternate;
   gap: 0;
+  transition: opacity 0.4s ease;
 }
 
-.ch-boot-loading {
-  font: 700 36px "Source Sans 3", "Segoe UI", Arial, sans-serif;
+.ch-overlay.ch-boot.ch-boot-done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes ch-boot-drift {
+  from { background-position: 30% 76%; }
+  to { background-position: 70% 80%; }
+}
+
+.ch-boot-panel {
+  display: grid;
+  grid-template-columns: 27% 24% 40% 9%;
+  align-items: center;
+  width: min(70%, 900px);
+  min-height: clamp(64px, 31%, 30vw);
+  margin-top: 4%;
+  padding: 0 4% 0 7%;
+  box-sizing: border-box;
+  background: rgba(190, 190, 190, 0.5);
   color: #fff;
-  min-width: 10ch;
-  text-align: center;
+  font: 400 clamp(13px, 2.4vw, 22px) Arial, Helvetica, sans-serif;
+  text-align: left;
+}
+
+.ch-boot-panel span {
+  white-space: nowrap;
 }
 
 .ch-overlay p.ch-boot-status {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 20px;
-  max-width: none;
-  text-align: center;
-  font: 700 18px "Source Sans 3", "Segoe UI", Arial, sans-serif;
-  color: #fff;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }

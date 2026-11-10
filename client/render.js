@@ -161,6 +161,16 @@ const SKY_FS = `uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom; uni
 void main(){ vec3 d = normalize(vDir); float h = d.y; vec3 c = h > 0.0 ? mix(horizon, top, pow(clamp(h,0.0,1.0),0.55)) : mix(horizon, bottom, clamp(-h*3.0,0.0,1.0));
 float s = max(dot(d, normalize(sunDir)), 0.0); c += vec3(1.0,0.95,0.8) * (pow(s, 900.0) * 1.6 + pow(s, 12.0) * 0.18) * sunVis; gl_FragColor = vec4(c, 1.0); }`;
 
+const PACKAGE_PART = { Torso: 1, 'Left Arm': 2, 'Right Arm': 3, 'Left Leg': 4, 'Right Leg': 5 };
+
+function packageMesh(part) {
+  const n = PACKAGE_PART[part.props.get('Name')];
+  const m = part.parent;
+  if (!n || !m) return 0;
+  for (const c of m.children) if (c.ClassName === 'CharacterMesh' && c.props.get('BodyPart') === n && c.props.get('MeshId') > 0) return c.props.get('MeshId');
+  return 0;
+}
+
 export class Renderer {
   constructor(canvas, world) {
     this.world = world;
@@ -367,7 +377,7 @@ export class Renderer {
     if (inside && inst.parent) this.touchParent(inst);
     else if (!inside) for (const v of this.visuals.values()) if (v.part && (v.decalSrc === inst || v.meshSrc === inst)) this.rebuild(v.part);
     if (inst.ClassName === 'Sky' || (inst.parent && inst.parent.ClassName === 'Lighting')) this.applyLighting();
-    if (['Shirt', 'Pants', 'ShirtGraphic', 'BodyColors'].includes(inst.ClassName)) for (const v of this.visuals.values()) if (v.part && v.part.parent) this.clothingDirty.add(v.part.parent);
+    if (['Shirt', 'Pants', 'ShirtGraphic', 'BodyColors', 'CharacterMesh'].includes(inst.ClassName)) for (const v of this.visuals.values()) if (v.part && v.part.parent) this.clothingDirty.add(v.part.parent);
   }
 
   destroyed(inst) {
@@ -380,7 +390,7 @@ export class Renderer {
     if (inst.isA('DataModelMesh') || inst.isA('Decal') || ['Fire', 'Smoke', 'Sparkles', 'PointLight', 'SpotLight', 'SurfaceLight'].includes(inst.ClassName)) {
       if (p.isA('BasePart')) this.rebuild(p);
     }
-    if (inst.ClassName === 'ForceField' || inst.isA('Clothing') || inst.ClassName === 'ShirtGraphic' || inst.ClassName === 'BodyColors') this.clothingDirty.add(p);
+    if (inst.ClassName === 'ForceField' || inst.isA('Clothing') || inst.ClassName === 'ShirtGraphic' || inst.ClassName === 'BodyColors' || inst.ClassName === 'CharacterMesh') this.clothingDirty.add(p);
   }
 
   changed(inst, name, old, opts) {
@@ -416,7 +426,7 @@ export class Renderer {
     }
     const p = inst.parent;
     if (p && p.isA('BasePart') && (inst.isA('DataModelMesh') || inst.isA('Decal') || ['Fire', 'Smoke', 'Sparkles', 'PointLight', 'SpotLight'].includes(inst.ClassName))) this.rebuild(p);
-    if (inst.isA('Clothing') || inst.ClassName === 'ShirtGraphic' || inst.ClassName === 'BodyColors') if (p) this.clothingDirty.add(p);
+    if (inst.isA('Clothing') || inst.ClassName === 'ShirtGraphic' || inst.ClassName === 'BodyColors' || inst.ClassName === 'CharacterMesh') if (p) this.clothingDirty.add(p);
   }
 
   add(inst) {
@@ -529,7 +539,15 @@ export class Renderer {
     const group = new THREE.Group();
     const mesh = new THREE.Mesh(box, mat);
     group.add(mesh);
-    contentMesh(limb.path).then((g) => {
+    const pkg = packageMesh(part);
+    if (pkg) {
+      loadMesh(String(pkg)).then((g) => {
+        if (!g || !mesh.parent) return;
+        g.userData.shared = true;
+        box.dispose();
+        mesh.geometry = g;
+      });
+    } else contentMesh(limb.path).then((g) => {
       if (!g || !mesh.parent) return;
       if (!this.flatLimbs) this.flatLimbs = new Map();
       let flat = this.flatLimbs.get(limb.path);

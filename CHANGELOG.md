@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- The 2012 engine's loading screen: the default sky behind a grey panel counting Bricks and Connectors, instead of the newer LoadingScript, which this build did not run (`NewLoadingScreen` is now off).
+- Several servers per place: players fill the busiest public server with room, a new one starts when all are full, and each server has its own `game.JobId`. Tickets can ask for a particular server, a private server or a reserved server.
+- `GET /status` lists every server with its players and every Team Create session; `POST /shutdown` (with the key) stops one server or all of a place's servers.
+- The `presence` endpoint tells the site who is playing or editing in Studio.
+- `redeem` can answer `allowGear: false` so players spawn without their equipped gear. Each server reads it when it starts.
+- Badges and friends: `BadgeService:AwardBadge` and `UserHasBadge` (awards are announced in chat), `IsLegal` answers true, `Player:IsFriendsWith`, `GetFriendsOnline`, `GetFriendStatus`, and `RequestFriendship`/`RevokeFriendship` from the player list, which fire `FriendStatusChanged` and `FriendRequestEvent`. They go through the host's new `social` endpoint.
+- `GuiService:SendNotification`, used by the NotificationScript for friend requests, as a 2012-style notification that runs its callback when tapped.
+- `HopperBin:Disable()` and `ToggleSelect()`, and `Hat.AttachmentPos`, `AttachmentForward`, `AttachmentRight` and `AttachmentUp`.
+- A tool picked up at the moment the character spawns is held properly: it was in the hand but could not be used.
+- Package body parts (`CharacterMesh`) replace the limb mesh with the package's mesh.
+- `client/avatarview.js`: a standalone 3D character viewer for a host's avatar editor.
+- The client renders at most 30 frames a second.
+
 ## 26.11.2
 
 Chocolate now uses date-based versions (year, month, release).
