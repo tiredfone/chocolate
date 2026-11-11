@@ -8,7 +8,7 @@ const MAX_BYTES = 32 * 1024 * 1024;
 
 export function assetIdOf(url) {
   if (typeof url === 'number') return url > 0 ? url : null;
-  const m = /[?&]id=(\d+)/i.exec(String(url || ''));
+  const m = /[?&]id=(\d+)/i.exec(String(url || '')) || /^\s*rbxassetid:\/\/(\d+)/i.exec(String(url || ''));
   if (m) return +m[1];
   if (/^\d+$/.test(String(url || '').trim())) return +String(url).trim();
   return null;
@@ -19,7 +19,7 @@ async function httpGet(url, timeoutMs = 15000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3' } });
+    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const buf = new Uint8Array(await r.arrayBuffer());
     if (buf.length > MAX_BYTES) throw new Error('asset too large');

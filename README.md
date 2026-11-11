@@ -1,6 +1,6 @@
 # Chocolate
 
-Version 26.11.3.
+Version 26.11.3-hotfix.
 
 Chocolate is a browser port of the 2012 game client. It runs places in the browser with three.js for rendering, Rapier for physics and a Lua 5.1 VM compiled to WebAssembly, and it runs the client's real CoreScripts unmodified. A Node server simulates each place and replicates it to players over a WebSocket.
 

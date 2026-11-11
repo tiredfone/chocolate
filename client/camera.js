@@ -1,6 +1,8 @@
 import * as C from '../shared/cframe.js';
 import { applyCF } from './render.js';
 
+const PITCH = 80 * Math.PI / 180;
+
 export class CameraController {
   constructor(world, renderer, canvas) {
     this.world = world;
@@ -40,17 +42,23 @@ export class CameraController {
     });
     window.addEventListener('pointermove', (e) => {
       if (this.dragging || ((this.firstPerson || this.shiftLock) && document.pointerLockElement === canvas)) {
-        this.yaw -= e.movementX * 0.006;
-        this.pitch -= e.movementY * 0.006;
-        this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
+        this.yaw -= e.movementX * 0.002 * Math.PI;
+        this.pitch -= e.movementY * 0.0015 * Math.PI;
+        this.pitch = Math.max(-PITCH, Math.min(PITCH, this.pitch));
       }
     });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const f = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-      this.targetZoom = Math.max(0.5, Math.min(400, this.targetZoom * f));
-      if (this.targetZoom < 1.2 && e.deltaY < 0) this.targetZoom = 0.5;
+      const unit = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100;
+      if (Math.sign(e.deltaY) !== Math.sign(this.wheelAcc || 0)) this.wheelAcc = 0;
+      this.wheelAcc = (this.wheelAcc || 0) + e.deltaY / unit;
+      while (Math.abs(this.wheelAcc) >= 1) {
+        const dir = this.wheelAcc > 0 ? -1 : 1;
+        this.wheelAcc -= Math.sign(this.wheelAcc);
+        this.stepZoom(dir);
+      }
+      if (Math.abs(e.deltaY) >= unit * 0.99) this.wheelAcc = 0;
     }, { passive: false });
   }
 
@@ -92,27 +100,45 @@ export class CameraController {
 
   rotateBy(dx, dy) {
     this.yaw += dx * 0.86;
-    this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch + dy * 0.86));
+    this.pitch = Math.max(-PITCH, Math.min(PITCH, this.pitch + dy * 0.86));
   }
 
   zoomBy(f) {
     this.targetZoom = Math.max(0.5, Math.min(400, this.targetZoom * f));
+    this.zoom = this.targetZoom;
+  }
+
+  stepZoom(dir) {
+    let z = this.targetZoom;
+    if (dir > 0) z = z < 1 ? 0.5 : z / 1.25 < 1 ? 0.5 : z / 1.25;
+    else z = z < 1 ? 1.25 : z * 1.25;
+    z = Math.max(0.5, Math.min(400, z));
+    const from = Math.max(1, this.targetZoom), to = Math.max(1, z);
+    this.pitch = Math.max(-PITCH, Math.min(PITCH, this.pitch - 0.15 * Math.log(to / from)));
+    this.targetZoom = z;
+    this.zoom = this.targetZoom;
   }
 
   subjectPos() {
     const cam = this.world.camera;
     const subj = cam.props.get('CameraSubject');
     let part = null;
+    let root = null;
     if (subj && !subj.destroyed) {
-      if (subj.ClassName === 'Humanoid' && subj.parent) part = subj.parent.findChild('Head') || subj.parent.findChild('Torso');
+      if (subj.ClassName === 'Humanoid' && subj.parent) {
+        root = subj.parent.findChild('HumanoidRootPart') || subj.parent.findChild('Torso');
+        part = root || subj.parent.findChild('Head');
+      }
       else if (subj.isA && subj.isA('BasePart')) part = subj;
       else if (subj.ClassName === 'Model') part = subj.props.get('PrimaryPart') || subj.findChildWhichIsA('BasePart');
     }
-    if (!part && this.world.ownModel && !this.world.ownModel.destroyed) part = this.world.ownModel.findChild('Head') || this.world.ownModel.findChild('Torso');
+    if (!part && this.world.ownModel && !this.world.ownModel.destroyed) {
+      root = this.world.ownModel.findChild('HumanoidRootPart') || this.world.ownModel.findChild('Torso');
+      part = root || this.world.ownModel.findChild('Head');
+    }
     if (!part) return null;
     const cf = part.props.get('CFrame');
-    const isHead = part.props.get('Name') === 'Head';
-    return [cf[0], cf[1] + (isHead ? 0.4 : 1.5), cf[2]];
+    return [cf[0], cf[1] + (root ? 1.5 : 0), cf[2]];
   }
 
   forwardFlat() {
@@ -128,7 +154,7 @@ export class CameraController {
     const cam = world.camera;
     const type = cam.props.get('CameraType');
     this.yaw += this.keyYaw * dt * 2.2;
-    this.zoom += (this.targetZoom - this.zoom) * Math.min(1, dt * 12);
+    this.zoom = this.targetZoom;
     const fp = this.zoom < 1;
     if (fp !== this.firstPerson) {
       this.firstPerson = fp;
@@ -139,14 +165,18 @@ export class CameraController {
       this.cf = cam.props.get('CFrame');
     } else {
       const focus = this.subjectPos();
-      if (focus && this.shiftLock && !fp && document.pointerLockElement === this.canvas) {
+      const lockOn = !!(focus && this.shiftLock && !fp && document.pointerLockElement === this.canvas);
+      this.lockBlend = (this.lockBlend || 0) + ((lockOn ? 1 : 0) - (this.lockBlend || 0)) * Math.min(1, dt * 8);
+      if (!lockOn && this.lockBlend < 0.01) this.lockBlend = 0;
+      if (focus && this.lockBlend > 0) {
         const rt = this.rightFlat();
-        const want = [focus[0] + rt[0] * 1.75, focus[1], focus[2] + rt[2] * 1.75];
+        const amt = 1.75 * this.lockBlend;
+        const want = [focus[0] + rt[0] * amt, focus[1], focus[2] + rt[2] * amt];
         const ignore = world.ownModel ? [world.ownModel] : [];
         const hit = world.physics.raycast(focus, [want[0] - focus[0], 0, want[2] - focus[2]], ignore, (p) => p.props.get('Transparency') < 0.95 && p.props.get('CanCollide'));
-        const k = hit.part ? Math.max(0, Math.hypot(hit.point[0] - focus[0], hit.point[2] - focus[2]) - 0.3) / 1.75 : 1;
-        focus[0] += rt[0] * 1.75 * k;
-        focus[2] += rt[2] * 1.75 * k;
+        const k = hit.part ? Math.min(1, Math.max(0, Math.hypot(hit.point[0] - focus[0], hit.point[2] - focus[2]) - 0.3) / amt) : 1;
+        focus[0] += rt[0] * amt * k;
+        focus[2] += rt[2] * amt * k;
       }
       if (focus) {
         const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);

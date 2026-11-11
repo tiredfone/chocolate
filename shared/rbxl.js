@@ -292,9 +292,13 @@ function parseBinary(bytes) {
         case 3: vals = ints(data, q, n); t = 'int'; break;
         case 4: vals = floats(data, q, n); t = 'number'; break;
         case 5: vals = []; for (let i = 0; i < n; i++) vals.push(new DataView(data.buffer, data.byteOffset).getFloat64(q + i * 8, true)); t = 'number'; break;
+        case 6: {
+          const S = floats(data, q, n), O = ints(data, q + n * 4, n);
+          vals = S.map((s, i) => [s, O[i]]); t = 'UD'; break;
+        }
         case 7: {
-          const S = floats(data, q, n), O = ints(data, q + n * 4, n), S2 = floats(data, q + n * 8, n), O2 = ints(data, q + n * 12, n);
-          vals = S.map((s, i) => [s, O[i], S2[i], O2[i]]); t = 'UD2'; break;
+          const SX = floats(data, q, n), SY = floats(data, q + n * 4, n), OX = ints(data, q + n * 8, n), OY = ints(data, q + n * 12, n);
+          vals = SX.map((s, i) => [s, OX[i], SY[i], OY[i]]); t = 'UD2'; break;
         }
         case 11: vals = raw(data, q, n, 4); t = 'BC'; break;
         case 12: {
@@ -331,6 +335,19 @@ function parseBinary(bytes) {
           t = 'Ref'; break;
         }
         case 26: vals = []; for (let i = 0; i < n; i++) vals.push([data[q + i] / 255, data[q + n + i] / 255, data[q + 2 * n + i] / 255]); t = 'C3'; break;
+        case 34: {
+          const kinds = raw(data, q, n, 4);
+          let r = q + n * 4;
+          const cnt = u32(data, r); r += 4;
+          const uris = [];
+          for (let i = 0; i < cnt; i++) { const l = u32(data, r); r += 4; uris.push(td.decode(data.subarray(r, r + l))); r += l; }
+          let u = 0;
+          vals = kinds.map((k) => (k === 1 ? uris[u++] || '' : ''));
+          t = 'Content';
+          const base = pn.endsWith('Content') ? pn.slice(0, -7) : null;
+          if (base && CONTENT_PROPS.has(base)) for (let i = 0; i < n; i++) if (vals[i] && !list[i].props.has(base)) list[i].props.set(base, { t, v: vals[i] });
+          break;
+        }
         default: break;
       }
       if (vals) for (let i = 0; i < n; i++) list[i].props.set(pn, { t, v: vals[i] });

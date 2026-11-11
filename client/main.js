@@ -162,7 +162,7 @@ async function boot() {
         screenSize: () => [root.clientWidth, root.clientHeight],
         rotateCamera: (dx, dy) => camera && camera.rotateBy(dx, dy),
         cameraTilt: (dir) => camera && camera.rotateBy(0, dir * 0.1745),
-        cameraZoom: (dir) => camera && camera.zoomBy(dir > 0 ? 0.8 : 1.25),
+        cameraZoom: (dir) => camera && camera.stepZoom(dir > 0 ? 1 : -1),
         toggleFullscreen: () => {
           if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
           else if (root.requestFullscreen) root.requestFullscreen().catch(() => {});
@@ -273,8 +273,8 @@ function start(world, renderer, camera, gui, net) {
     if (k === 'shift') camera.toggleShiftLock();
     if (k === 'arrowleft') camera.keyYaw = 1;
     if (k === 'arrowright') camera.keyYaw = -1;
-    if (k === 'i') camera.zoomBy(1 / 1.25);
-    if (k === 'o') camera.zoomBy(1.25);
+    if (k === 'i') camera.stepZoom(1);
+    if (k === 'o') camera.stepZoom(-1);
     if (k === 'backspace') {
       e.preventDefault();
       world.dropTool();

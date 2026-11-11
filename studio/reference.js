@@ -126,6 +126,35 @@ function localAlias(text, name, depth) {
   return last ? last.trim() : null;
 }
 
+const EVENT_ARGS = {
+  PlayerAdded: ['Player'], PlayerRemoving: ['Player'], CharacterAdded: ['Model'], CharacterRemoving: ['Model'],
+  Touched: ['Part'], TouchEnded: ['Part'], ChildAdded: ['Instance'], ChildRemoved: ['Instance'],
+  DescendantAdded: ['Instance'], DescendantRemoving: ['Instance'], MouseClick: ['Player'], MouseHoverEnter: ['Player'],
+  MouseHoverLeave: ['Player'], Equipped: ['Mouse'], Selected: ['Mouse'], AncestryChanged: ['Instance', 'Instance'],
+};
+
+function paramClass(text, full, name) {
+  const pick = (list) => list.split(',').map((x) => x.trim()).indexOf(name);
+  let found = null;
+  const inline = /[.:]\s*([A-Za-z_]\w*)\s*:\s*connect\s*\(\s*function\s*\(([^)]*)\)/gi;
+  let m;
+  while ((m = inline.exec(text))) {
+    const i = pick(m[2]);
+    const args = EVENT_ARGS[m[1]];
+    if (i >= 0 && args && args[i]) found = { at: m.index, cls: args[i] };
+  }
+  const named = /[.:]\s*([A-Za-z_]\w*)\s*:\s*connect\s*\(\s*([A-Za-z_]\w*)\s*\)/gi;
+  while ((m = named.exec(full))) {
+    const args = EVENT_ARGS[m[1]];
+    if (!args) continue;
+    const def = new RegExp(`function\\s+${m[2]}\\s*\\(([^)]*)\\)`).exec(text);
+    if (!def) continue;
+    const i = pick(def[1]);
+    if (i >= 0 && args[i] && (!found || def.index > found.at)) found = { at: def.index, cls: args[i] };
+  }
+  return found ? found.cls : null;
+}
+
 export function resolveExpr(expr, ctx, depth = 0) {
   const chain = parseChain(expr);
   if (!chain) return null;
@@ -139,13 +168,18 @@ export function resolveExpr(expr, ctx, depth = 0) {
   else if (LIBS[head] && chain.length === 1) return { lib: head };
   else {
     const alias = localAlias(text || '', head, depth);
-    if (!alias) return null;
-    const ctor = /^Instance\.new\(\s*["'](\w+)["']/.exec(alias);
-    if (ctor) cur = { inst: null, cls: ctor[1] };
-    else {
-      const dt = /^(Vector3|CFrame|Color3|BrickColor|UDim2|Ray)\.\w+/.exec(alias);
-      if (dt) cur = { datatype: dt[1] };
-      else cur = resolveExpr(alias, ctx, depth + 1);
+    if (!alias) {
+      const pc = paramClass(text || '', ctx.full || text || '', head);
+      if (!pc) return null;
+      cur = { inst: null, cls: pc };
+    } else {
+      const ctor = /^Instance\.new\(\s*["'](\w+)["']/.exec(alias);
+      if (ctor) cur = { inst: null, cls: ctor[1] };
+      else {
+        const dt = /^(Vector3|CFrame|Color3|BrickColor|UDim2|Ray)\.\w+/.exec(alias);
+        if (dt) cur = { datatype: dt[1] };
+        else cur = resolveExpr(alias, ctx, depth + 1);
+      }
     }
     if (!cur) return null;
   }
@@ -160,7 +194,7 @@ export function resolveExpr(expr, ctx, depth = 0) {
         cur = s ? { inst: s, cls: s.ClassName } : CLASSES.has(seg.arg) && isService(seg.arg) ? { inst: null, cls: seg.arg } : null;
       } else if ((n === 'findfirstchild' || n === 'waitforchild') && seg.arg) {
         const c = cur.inst && cur.inst.findChild(seg.arg);
-        cur = c ? { inst: c, cls: c.ClassName } : null;
+        cur = c ? { inst: c, cls: c.ClassName } : CLASSES.has(seg.arg) ? { inst: null, cls: seg.arg } : null;
       } else if (n === 'clone') cur = { inst: cur.inst, cls: cur.cls };
       else return null;
       continue;
@@ -168,7 +202,7 @@ export function resolveExpr(expr, ctx, depth = 0) {
     if (seg.call) return null;
     if (seg.name === 'Parent') {
       const p = cur.inst && cur.inst.parent;
-      cur = p ? { inst: p, cls: p.ClassName } : null;
+      cur = p ? { inst: p, cls: p.ClassName } : cur.inst ? null : { inst: null, cls: 'Instance' };
       continue;
     }
     const child = cur.inst && cur.inst.findChild(seg.name);
@@ -273,7 +307,7 @@ export function completions(text, caret, ctx) {
     const baseText = lead.slice(0, lead.length - sepM[0].length);
     const exprM = /([A-Za-z_][\w]*(?:\s*(?:[.:]\s*[A-Za-z_]\w*\s*(?:\((?:[^()]|\([^()]*\))*\))?|\[\s*(?:"[^"]*"|'[^']*')\s*\]))*)\s*$/.exec(baseText);
     if (!exprM) return null;
-    const target = resolveExpr(exprM[1], { ...ctx, text: before });
+    const target = resolveExpr(exprM[1], { ...ctx, text: before, full: text });
     if (!target) return null;
     if (target.lib) {
       if (sep === '.') for (const n of LIBS[target.lib]) add(n, target.lib === 'math' && (n === 'pi' || n === 'huge') ? 'property' : 'function', `${target.lib}.${n}`);

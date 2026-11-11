@@ -404,11 +404,11 @@ html, body {
 }
 
 .ch-tag-bar {
-  width: 52px;
-  height: 5px;
-  margin: 2px auto 0;
+  width: 64px;
+  height: 4px;
+  margin: 3px auto 0;
   background: #c00;
-  border: 1px solid #000;
+  border: 0;
   border-radius: 0;
   overflow: hidden;
 }

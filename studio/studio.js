@@ -7,9 +7,34 @@ import { UI, SELECTION_MENU, el } from './ui.js';
 import { Explorer, Properties, Output, Toolbox, ScriptEditor, brickPicker, creatableClasses } from './panes.js';
 import { StudioView, partsOf, boundsOf } from './view.js';
 import { ObjectBrowser } from './browser.js';
+import { Gui } from '../client/gui.js';
 
 const TOOLS = ['drag', 'axis', 'resize', 'lock', 'anchor', 'paint', 'dropper', 'material', 'move', 'rotate', 'size', 'surface0', 'surface1', 'surface2', 'surface3', 'surface4', 'surface5', 'surface6', 'surface7'];
 const SERVICES = ['Workspace', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'SoundService', 'Debris'];
+
+class StudioGui extends Gui {
+  constructor(root, dm, renderer) {
+    super(root, { dm, player: null, guiInset: [0, 0, 0, 0], guiScale: () => 1, touch: false }, renderer, { send: () => {} });
+    this.overlay.classList.add('st-gui');
+    this.dm = Object.create(dm, {
+      setProp: {
+        value: (inst, name, v, o) => {
+          if (name === 'AbsoluteSize' || name === 'AbsolutePosition') {
+            inst.props.set(name, v);
+            return true;
+          }
+          return dm.setProp(inst, name, v, o);
+        },
+      },
+    });
+  }
+
+  screenGuis() {
+    const sg = this.dm.services.get('StarterGui');
+    if (!sg || sg.props.get('ShowDevelopmentGui') === false) return [];
+    return sg.children.filter((c) => c.isA('ScreenGui'));
+  }
+}
 
 function cloneVal(v) {
   return Array.isArray(v) ? v.slice() : v;
@@ -42,6 +67,7 @@ export class Studio {
     this.viewEl = el('div', 'st-viewport', this.ui.docs);
     this.viewEl.appendChild(renderer.canvas);
     this.view = new StudioView(this, this.viewEl, renderer, physics);
+    this.gui = new StudioGui(this.viewEl, this.dm, renderer);
     this.ui.tab('place', cfg.placeName || 'Place', () => this.showDoc('place'));
     this.ui.setTitle(`${cfg.placeName || 'Place'} - Studio`);
     this.ui.layout();
@@ -72,6 +98,7 @@ export class Studio {
           self.selection.delete(inst);
           self.selectionChanged();
         }
+        self.syncScriptDocs();
       },
       changed(inst, name) {
         if (name === 'Name' || name === 'Parent') self.explorer.dirty = true;
@@ -83,6 +110,17 @@ export class Studio {
     });
   }
 
+  syncScriptDocs() {
+    for (const d of this.docs.values()) {
+      if (!d.script) continue;
+      const gone = !d.script.isDescendantOf(this.dm.root);
+      if (gone === !!d.gone) continue;
+      d.gone = gone;
+      d.ed.ta.readOnly = gone;
+      if (gone) this.print(`${d.script.props.get('Name')} is no longer in the place, so its editor is read-only. Undo to bring it back.`, 'err');
+    }
+  }
+
   resized() {
     this.r.resize();
   }
@@ -91,6 +129,7 @@ export class Studio {
     this.view.frame(dt);
     this.ph.world.step();
     this.r.frame(dt);
+    if (this.activeDoc === 'place' || !this.activeDoc) this.gui.layout();
     this.explorer.render();
     this.props.render();
     if (this.selRefreshPending) {
@@ -315,7 +354,7 @@ export class Studio {
           if (document.fullscreenElement) document.exitFullscreen();
           else document.documentElement.requestFullscreen?.().catch(() => {});
           return;
-        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio 26.11.3\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
+        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio 26.11.3-hotfix\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
         default: return;
       }
     } catch (err) {
@@ -649,12 +688,18 @@ export class Studio {
     const id = 'script:' + script.id;
     let doc = this.docs.get(id);
     if (!doc) {
-      const ed = new ScriptEditor(this.ui.docs, script, (src) => {
+      const ed = new ScriptEditor(this.ui.docs, script, (src, save) => {
         if (src !== script.props.get('Source')) {
           const old = script.props.get('Source');
+          const set = (v) => {
+            this.setPropRaw(script, 'Source', v);
+            const d = this.docs.get(id);
+            if (d) d.ed.reload();
+          };
           this.setPropRaw(script, 'Source', src);
-          this.record('Edit Script', () => this.setPropRaw(script, 'Source', old), () => this.setPropRaw(script, 'Source', src));
+          this.record('Edit Script', () => set(old), () => set(src));
         }
+        if (save) this.save();
       });
       doc = { ed, script };
       this.docs.set(id, doc);

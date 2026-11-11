@@ -1,6 +1,6 @@
 # Chocolate
 
-Browser port of the 2012 client, version 26.11.3 (year, month, release; bump `package.json`, `package-lock.json`, the default `userAgent` in `config.php` and the server fallbacks together). Read `README.md` for the layout, configuration, endpoint contracts and join flow. This folder is served live, so a saved edit to `client/` or `shared/` reaches players on their next page load.
+Browser port of the 2012 client, version 26.11.3-hotfix (year, month, release; bump `package.json`, `package-lock.json`, the default `userAgent` in `config.php` and the server fallbacks together). Read `README.md` for the layout, configuration, endpoint contracts and join flow. This folder is served live, so a saved edit to `client/` or `shared/` reaches players on their next page load.
 
 ## Code style
 

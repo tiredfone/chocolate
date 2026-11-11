@@ -10,7 +10,7 @@ export async function social(action, data) {
     const r = await fetch(url, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3', 'Content-Type': 'application/json', 'X-Chocolate-Key': key },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix', 'Content-Type': 'application/json', 'X-Chocolate-Key': key },
       body: JSON.stringify({ action, ...data }),
     });
     if (!r.ok) return null;

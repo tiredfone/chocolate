@@ -15,7 +15,7 @@ export function publicPath(p) {
 
 export function endpointUrl(name, id) {
   const t = settings.endpoints[name];
-  return t ? String(t).replace(/\{id\}/g, String(id | 0)) : null;
+  return t ? String(t).replace(/\{id\}/g, String(Number.isSafeInteger(Number(id)) && Number(id) > 0 ? Number(id) : 0)) : null;
 }
 
 const images = new Map();
@@ -27,7 +27,7 @@ export function assetId(url) {
   if (url == null) return null;
   const s = String(url).trim();
   if (!s) return null;
-  const m = /[?&]id=(\d+)/i.exec(s);
+  const m = /[?&]id=(\d+)/i.exec(s) || /^rbxassetid:\/\/(\d+)/i.exec(s);
   if (m) return +m[1];
   if (/^\d+$/.test(s)) return +s;
   return null;
@@ -164,10 +164,11 @@ export function parseMesh(bytes) {
     for (let i = 0; i + 2 < vecs.length; i += 3) {
       pos.push(vecs[i][0] * sc, vecs[i][1] * sc, vecs[i][2] * sc);
       nrm.push(vecs[i + 1][0] || 0, vecs[i + 1][1] || 0, vecs[i + 1][2] || 0);
-      uv.push(vecs[i + 2][0] || 0, 1 - (vecs[i + 2][1] || 0));
+      uv.push(vecs[i + 2][0] || 0, vecs[i + 2][1] || 0);
     }
     return { pos: new Float32Array(pos), nrm: new Float32Array(nrm), uv: new Float32Array(uv) };
   }
+  if (major === 6 || major === 7) return parseChunkedMesh(bytes);
   if (major !== 2 && major !== 3 && major !== 4 && major !== 5) throw new Error('mesh version ' + major + ' is not supported');
   const nl = bytes.indexOf(10);
   const at = nl + 1;
@@ -219,6 +220,51 @@ export function parseMesh(bytes) {
       P[j * 3] = dv.getFloat32(o, true); P[j * 3 + 1] = dv.getFloat32(o + 4, true); P[j * 3 + 2] = dv.getFloat32(o + 8, true);
       N[j * 3] = dv.getFloat32(o + 12, true); N[j * 3 + 1] = dv.getFloat32(o + 16, true); N[j * 3 + 2] = dv.getFloat32(o + 20, true);
       U[j * 2] = dv.getFloat32(o + 24, true); U[j * 2 + 1] = 1 - dv.getFloat32(o + 28, true);
+    }
+  }
+  return { pos: P, nrm: N, uv: U };
+}
+
+function parseChunkedMesh(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const td = new TextDecoder();
+  let o = bytes.indexOf(10) + 1;
+  let core = null;
+  const lods = [];
+  while (o + 16 <= bytes.length) {
+    const name = td.decode(bytes.subarray(o, o + 8)).replace(/\0+$/, '');
+    const ver = dv.getUint32(o + 8, true);
+    const size = dv.getUint32(o + 12, true);
+    o += 16;
+    if (o + size > bytes.length) throw new Error('truncated mesh');
+    if (name === 'COREMESH') core = { ver, at: o, size };
+    else if (name === 'LODS' && size >= 7) {
+      const n = dv.getUint32(o + 3, true);
+      if (n < 64 && 7 + n * 4 <= size) for (let i = 0; i < n; i++) lods.push(dv.getUint32(o + 7 + i * 4, true));
+    }
+    o += size;
+  }
+  if (!core) throw new Error('mesh has no geometry');
+  if (core.ver !== 1) throw new Error('compressed meshes must be converted by the site first');
+  const nv = dv.getUint32(core.at, true);
+  const vo = core.at + 4;
+  const fo = vo + nv * 40 + 4;
+  if (fo > core.at + core.size) throw new Error('truncated mesh');
+  const nf = dv.getUint32(fo - 4, true);
+  if (fo + nf * 12 > core.at + core.size || nv > 2_000_000) throw new Error('truncated mesh');
+  let from = 0, to = nf;
+  if (lods.length >= 2 && lods[0] < lods[1] && lods[1] <= nf) { from = lods[0]; to = lods[1]; }
+  const n = to - from;
+  const P = new Float32Array(n * 9), N = new Float32Array(n * 9), U = new Float32Array(n * 6);
+  for (let i = 0; i < n; i++) {
+    for (let k = 0; k < 3; k++) {
+      const vi = dv.getUint32(fo + (from + i) * 12 + k * 4, true);
+      if (vi >= nv) throw new Error('bad mesh index');
+      const q = vo + vi * 40;
+      const j = i * 3 + k;
+      P[j * 3] = dv.getFloat32(q, true); P[j * 3 + 1] = dv.getFloat32(q + 4, true); P[j * 3 + 2] = dv.getFloat32(q + 8, true);
+      N[j * 3] = dv.getFloat32(q + 12, true); N[j * 3 + 1] = dv.getFloat32(q + 16, true); N[j * 3 + 2] = dv.getFloat32(q + 20, true);
+      U[j * 2] = dv.getFloat32(q + 24, true); U[j * 2 + 1] = 1 - dv.getFloat32(q + 28, true);
     }
   }
   return { pos: P, nrm: N, uv: U };

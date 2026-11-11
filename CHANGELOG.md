@@ -1,5 +1,30 @@
 # Changelog
 
+## 26.11.3-hotfix
+
+### Avatars and meshes
+
+- Hats and gear with modern Roblox asset IDs load: IDs above 2^31 were cut to 32 bits, and `rbxassetid://` links were not recognised.
+- Classic `version 1.00` meshes are no longer textured upside down.
+- Version 6 meshes load, using only their full-detail level.
+
+### Client
+
+- Camera: the mouse wheel and I/O keys zoom in fixed steps, zooming in tilts the view slightly, the camera follows the root part instead of the head, and looking up or down stops at 80 degrees.
+- Shift lock eases the camera over the shoulder instead of snapping.
+- Nametags show on every character with a Humanoid, NPCs included, within 60 studs, and hide behind walls. The health bar is thinner and always shown.
+
+### Binary places
+
+- Binary places and models read `UDim` and the newer `Content` properties, and `UDim2` values (GUI sizes and positions) are no longer garbled.
+
+### Studio
+
+- ScreenGuis in StarterGui are drawn over the viewport, unless `ShowDevelopmentGui` is off.
+- Undoing a script edit from the viewport now shows in the open script. A script removed from the place makes its editor read-only, so typing can't go into a script that won't be saved.
+- Ctrl+S in the script editor saves the place.
+- Autocomplete knows the types of event handler parameters (`player` in `PlayerAdded`, `hit` in `Touched` and so on), including handlers connected by name, and follows `.Parent` and `FindFirstChild("ClassName")`.
+
 ## 26.11.3
 
 ### Physics and vehicles

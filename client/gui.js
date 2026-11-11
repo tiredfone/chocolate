@@ -454,15 +454,33 @@ export class Gui {
     const seen = new Set();
     if (!this.tagEls) this.tagEls = new Map();
     const camPos = this.renderer.camera.position;
-    for (const rec of this.world.chars.values()) {
-      if (this.world.own && rec === this.world.own.rec) continue;
-      const head = rec.model.findChild('Head');
-      if (!head) continue;
+    const ws = this.dm.services.get('Workspace');
+    if (ws && (!this.humScan || now - this.humScan > 500)) {
+      this.humScan = now;
+      this.humList = ws.descendants().filter((d) => d.ClassName === 'Humanoid');
+    }
+    const ownModel = this.world.own ? this.world.own.model : null;
+    for (const hum of this.humList || []) {
+      const model = hum.parent;
+      if (hum.destroyed || !model || model === ownModel || !ws || !model.isDescendantOf(ws)) continue;
+      const head = model.findChild('Head');
+      if (!head || !head.isA('BasePart')) continue;
+      if (seen.has(model)) continue;
+      const rec = model;
       const cf = head.props.get('CFrame');
       const d = Math.hypot(cf[0] - camPos.x, cf[1] - camPos.y, cf[2] - camPos.z);
-      if (d > 120) continue;
+      if (d > 60) continue;
       const p = this.project([cf[0], cf[1] + 2.2, cf[2]]);
       if (!p) continue;
+      if (!this.tagSight) this.tagSight = new Map();
+      let sight = this.tagSight.get(model);
+      if (!sight || now - sight.t > 150) {
+        const o = [camPos.x, camPos.y, camPos.z];
+        const hit = this.world.physics ? this.world.physics.raycast(o, [cf[0] - o[0], cf[1] - o[1], cf[2] - o[2]], [model, ownModel], (q) => q.props.get('Transparency') < 0.95) : null;
+        sight = { t: now, clear: !(hit && hit.part) };
+        this.tagSight.set(model, sight);
+      }
+      if (!sight.clear) continue;
       seen.add(rec);
       let t = this.tagEls.get(rec);
       if (!t) {
@@ -473,8 +491,8 @@ export class Gui {
         t = { box, n, bar, fill, key: '' };
         this.tagEls.set(rec, t);
       }
-      const name = rec.model.props.get('Name');
-      const pl = this.world.dm.services.get('Players').children.find((c) => c.ClassName === 'Player' && c.props.get('Character') === rec.model);
+      const name = model.props.get('Name');
+      const pl = this.world.dm.services.get('Players').children.find((c) => c.ClassName === 'Player' && c.props.get('Character') === model);
       let color = '#fff';
       if (pl && !pl.props.get('Neutral')) {
         const b = brickOf(pl.props.get('TeamColor'));
@@ -502,17 +520,21 @@ export class Gui {
           t.n.replaceChildren(c);
         });
       }
-      t.box.style.scale = String(Math.max(0.6, Math.min(1, 40 / Math.max(1, d))));
-      const h = rec.hum.props.get('Health'), mh = rec.hum.props.get('MaxHealth') || 100;
-      t.bar.hidden = h >= mh;
-      t.fill.style.width = Math.max(0, Math.min(100, (h / mh) * 100)) + '%';
-      t.box.style.transform = `translate(${p[0]}px, ${p[1]}px) translate(-50%, -100%)`;
+      const sc = Math.max(0.6, Math.min(1, 40 / Math.max(1, d)));
+      const h = hum.props.get('Health'), mh = hum.props.get('MaxHealth');
+      t.bar.hidden = !(mh > 0);
+      t.fill.style.width = (mh > 0 ? Math.max(0, Math.min(100, (h / mh) * 100)) : 0) + '%';
+      t.box.style.transformOrigin = '0 0';
+      t.box.style.transform = `translate(${p[0]}px, ${p[1]}px) scale(${sc}) translate(-50%, -100%)`;
     }
     for (const [rec, t] of this.tagEls) {
       if (!seen.has(rec)) {
         t.box.remove();
         this.tagEls.delete(rec);
       }
+    }
+    if (this.tagSight) for (const m of this.tagSight.keys()) {
+      if (!seen.has(m) && (m.destroyed || !ws || !m.isDescendantOf(ws))) this.tagSight.delete(m);
     }
     if (this.bubbles) {
       const stackCount = new Map();

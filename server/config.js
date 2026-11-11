@@ -30,7 +30,7 @@ export const config = cfg;
 export function endpoint(name, id) {
   const t = cfg.endpoints[name];
   if (!t) return null;
-  return String(t).replace(/\{id\}/g, String(id | 0));
+  return String(t).replace(/\{id\}/g, String(Number.isSafeInteger(Number(id)) && Number(id) > 0 ? Number(id) : 0));
 }
 
 export function siteUrl(name, id) {

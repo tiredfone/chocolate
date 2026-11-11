@@ -202,7 +202,7 @@ async function sendPresence() {
     await fetch(PRESENCE, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3', 'Content-Type': 'application/json', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix', 'Content-Type': 'application/json', 'X-Chocolate-Key': KEY },
       body: JSON.stringify({ users }),
     });
   } catch {
@@ -218,7 +218,7 @@ async function redeem(ticket) {
     const r = await fetch(REDEEM, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
       body: new URLSearchParams({ ticket }).toString(),
     });
     if (!r.ok) return null;

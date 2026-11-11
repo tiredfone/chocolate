@@ -1,6 +1,6 @@
 # Chocolate Studio
 
-Chocolate Studio (version 26.11.3) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
+Chocolate Studio (version 26.11.3-hotfix) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
 
 Studio does not run scripts. Test > Play Solo saves the place and opens its play page, so testing happens in the real game.
 

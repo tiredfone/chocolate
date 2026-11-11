@@ -374,6 +374,11 @@ html, body {
   height: 100%;
 }
 
+.st-gui,
+.st-gui * {
+  pointer-events: none !important;
+}
+
 .st-editor {
   position: absolute;
   inset: 0;
