@@ -635,7 +635,7 @@ export class StudioView {
       const p0 = hitAt(e);
       if (!p0) return null;
       const v0 = p0.clone().sub(center).normalize();
-      const step = grid >= 1 ? Math.PI / 4 : grid > 0 ? Math.PI / 12 : 0;
+      const step = this.app.era === 2018 ? (this.app.rotateGrid > 0 ? (this.app.rotateGrid * Math.PI) / 180 : 0) : grid >= 1 ? Math.PI / 4 : grid > 0 ? Math.PI / 12 : 0;
       let applied = 0;
       return {
         kind: 'handle',

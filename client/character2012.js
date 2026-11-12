@@ -50,18 +50,18 @@ export class CharacterAtlases {
     const key = JSON.stringify([clothes, colors]);
     let e = this.cache.get(model);
     if (e && e.key === key) return e.rt.texture;
-    if (e) {
-      e.dead = true;
-      e.rt.dispose();
+    if (!e) {
+      const rt = new THREE.WebGLRenderTarget(1024, 512, { depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+      e = { key, rt, gen: 0 };
+      this.cache.set(model, e);
     }
-    const rt = new THREE.WebGLRenderTarget(1024, 512, { depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
-    e = { key, rt };
-    this.cache.set(model, e);
-    this.compose(e, clothes, colors);
-    return rt.texture;
+    e.key = key;
+    e.gen++;
+    this.compose(e, clothes, colors, e.gen);
+    return e.rt.texture;
   }
 
-  async compose(e, clothes, colors) {
+  async compose(e, clothes, colors, gen) {
     const scene = new THREE.Scene();
     const add = (geo, mat, order) => {
       const m = new THREE.Mesh(geo, mat);
@@ -70,16 +70,20 @@ export class CharacterAtlases {
       scene.add(m);
     };
     const bases = await Promise.all(Object.entries(BODY_MESH).map(async ([name, d]) => [name, await contentMesh(d.base)]));
+    if (e.gen !== gen) return;
     for (const [name, geo] of bases) {
       if (geo) add(geo, new THREE.MeshBasicMaterial({ color: srgb(brick(colors[name])), depthTest: false, depthWrite: false, side: THREE.DoubleSide }), 1);
     }
-    this.draw(e, scene);
+    if (gen === 1) this.draw(e, scene);
     const layers = await Promise.all(LAYERS.map(async ([k, path], i) => {
       if (!clothes[k]) return null;
       const [geo, tex] = await Promise.all([contentMesh(path), loadTexture(clothes[k])]);
       return geo && tex ? [geo, tex, i] : null;
     }));
-    if (e.dead) return;
+    if (e.gen !== gen) {
+      for (const o of scene.children) o.material.dispose();
+      return;
+    }
     for (const l of layers) {
       if (!l) continue;
       const [geo, tex, i] = l;
@@ -90,7 +94,6 @@ export class CharacterAtlases {
   }
 
   draw(e, scene) {
-    if (e.dead) return;
     const r = this.r;
     const prev = r.getRenderTarget();
     const cc = r.getClearColor(new THREE.Color()), ca = r.getClearAlpha();

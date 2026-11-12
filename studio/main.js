@@ -1,5 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { configure, endpointUrl, loadContentIndex } from '../client/assets.js';
+import { configure, endpointUrl, loadContentIndex, useContent2018 } from '../client/assets.js';
 import { DataModel } from '../shared/instance.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { Physics } from '../shared/physics.js';
@@ -61,7 +61,10 @@ async function boot() {
   }
   say('Starting');
   const canvas = document.createElement('canvas');
-  const renderer = new Renderer(canvas, { dm });
+  const era = cfg.clientVersion === 2018 ? 2018 : 2012;
+  dm.era = era;
+  if (era === 2018) await useContent2018();
+  const renderer = new Renderer(canvas, { dm, era });
   renderer.attach();
   const physics = new Physics(dm, RAPIER, { simulate: false, excluded: () => false });
   physics.attachWorkspace(ws);

@@ -36,7 +36,35 @@ local proxyOf = setmetatable({}, { __mode = "v" })
 local idOf = setmetatable({}, { __mode = "k" })
 local signalCache = setmetatable({}, { __mode = "v" })
 local methodCache = {}
-local LuaMethods = {}
+local LuaMethods = { __ext = { enc = {}, dec = {} } }
+LuaMethods.__locked = {}
+LuaMethods.__utf8 = function(s)
+  if not string.find(s, "[\128-\255]") then return true end
+  local i, n, byte = 1, #s, string.byte
+  while i <= n do
+    local c = byte(s, i)
+    if c < 128 then i = i + 1
+    elseif c >= 194 and c <= 223 then
+      local c2 = byte(s, i + 1)
+      if not c2 or c2 < 128 or c2 > 191 then return false end
+      i = i + 2
+    elseif c >= 224 and c <= 239 then
+      local c2, c3 = byte(s, i + 1, i + 2)
+      if not c3 or c2 < 128 or c2 > 191 or c3 < 128 or c3 > 191 or (c == 224 and c2 < 160) or (c == 237 and c2 > 159) then return false end
+      i = i + 3
+    elseif c >= 240 and c <= 244 then
+      local c2, c3, c4 = byte(s, i + 1, i + 3)
+      if not c4 or c2 < 128 or c2 > 191 or c3 < 128 or c3 > 191 or c4 < 128 or c4 > 191 or (c == 240 and c2 < 144) or (c == 244 and c2 > 143) then return false end
+      i = i + 4
+    else return false end
+  end
+  return true
+end
+LuaMethods.__coreScript = {}
+LuaMethods.__gameEnv = setmetatable({}, { __mode = "k" })
+LuaMethods.__coreEnv = setmetatable({}, { __mode = "k" })
+LuaMethods.__envOf = setmetatable({}, { __mode = "k" })
+LuaMethods.__rtEnvs = { [getfenv(1)] = true }
 local InstanceMT
 local template
 
@@ -65,7 +93,9 @@ local function encInto(out, v)
   if v == nil then out[#out + 1] = "nil"
   elseif t == "boolean" then out[#out + 1] = "b"; out[#out + 1] = v
   elseif t == "number" then out[#out + 1] = "n"; out[#out + 1] = v
-  elseif t == "string" then out[#out + 1] = "s"; out[#out + 1] = v
+  elseif t == "string" then
+    if LuaMethods.__utf8(v) then out[#out + 1] = "s"; out[#out + 1] = v
+    else out[#out + 1] = "sx"; out[#out + 1] = (gsub(v, ".", function(ch) return fmt("%02x", string.byte(ch)) end)) end
   elseif t == "userdata" then
     local id = idOf[v]
     if id then out[#out + 1] = "i"; out[#out + 1] = id else out[#out + 1] = "nil" end
@@ -85,6 +115,8 @@ local function encInto(out, v)
       local o, d = v.Origin, v.Direction
       out[#out + 1] = o.X; out[#out + 1] = o.Y; out[#out + 1] = o.Z; out[#out + 1] = d.X; out[#out + 1] = d.Y; out[#out + 1] = d.Z
     elseif mt == EnumItemMT then out[#out + 1] = "e"; out[#out + 1] = v.EnumType; out[#out + 1] = v.Value
+    elseif mt and LuaMethods.__ext.enc[mt] then LuaMethods.__ext.enc[mt](out, v)
+    elseif mt == nil and LuaMethods.__ext.dict and next(v) ~= nil and v[1] == nil then LuaMethods.__ext.dict(out, v, encInto)
     else
       local n = #v
       out[#out + 1] = "l"; out[#out + 1] = n
@@ -105,6 +137,7 @@ local function dec1(a, i)
   local tag = a[i]
   if tag == "nil" or tag == nil then return nil, i + 1
   elseif tag == "b" or tag == "n" or tag == "s" then return a[i + 1], i + 2
+  elseif tag == "sx" then return (gsub(a[i + 1], "%x%x", function(x) return string.char(tonumber(x, 16)) end)), i + 2
   elseif tag == "i" then return wrap(a[i + 1]), i + 2
   elseif tag == "v3" then return Vector3.new(a[i + 1], a[i + 2], a[i + 3]), i + 4
   elseif tag == "cf" then
@@ -130,10 +163,13 @@ local function dec1(a, i)
     i = i + 2
     for k = 1, n do
       local key = a[i]
+      if type(key) == "string" and sub(key, 1, 1) == "#" and tonumber(sub(key, 2)) then key = tonumber(sub(key, 2)) end
       t[key], i = dec1(a, i + 1)
     end
     return t, i
   end
+  local ext = LuaMethods.__ext.dec[tag]
+  if ext then return ext(a, i) end
   return nil, i + 1
 end
 
@@ -658,8 +694,11 @@ local function sched_wait(t)
 end
 
 local function ypcall(f, ...)
-  if type(f) ~= "function" and not (getmetatable(f) and getmetatable(f).__call) then
-    return false, "attempt to call a " .. type(f) .. " value"
+  if type(f) ~= "function" then
+    local target = f
+    local tt = type(target)
+    if tt ~= "table" and tt ~= "userdata" then return false, "attempt to call a " .. tt .. " value" end
+    f = function(...) return target(...) end
   end
   local outer = co_running()
   local inner = newThread(f)
@@ -681,8 +720,23 @@ local ConnMT = {}
 ConnMT.__index = ConnMT
 
 local function subKey(id, name) return id .. ":" .. name end
+Signal.__box = setmetatable({}, { __mode = "k" })
+Signal.__tpl = newproxy(true)
+do
+  local m = getmetatable(Signal.__tpl)
+  m.__index = function(u, k) return Signal.__box[u][k] end
+  m.__newindex = function(u, k, v) Signal.__box[u][k] = v end
+  m.__tostring = function(u) return tostring(Signal.__box[u]) end
+  m.__metatable = "The metatable is locked"
+end
+Signal.__wrap = function(t)
+  local u = newproxy(Signal.__tpl)
+  Signal.__box[u] = t
+  return u
+end
 
 function ConnMT.disconnect(c)
+  c = Signal.__box[c] or c
   if not c.connected then return end
   c.connected = false
   local list = subs[c.key]
@@ -703,12 +757,13 @@ local function makeSignal(id, name, localOnly)
   local key = subKey(id, name)
   local s = signalCache[key]
   if s then return s end
-  s = setmetatable({ id = id, name = name, key = key, remote = not localOnly }, Signal)
+  s = Signal.__wrap(setmetatable({ id = id, name = name, key = key, remote = not localOnly }, Signal))
   signalCache[key] = s
   return s
 end
 
 function Signal.connect(s, fn)
+  s = Signal.__box[s] or s
   if type(fn) ~= "function" then error("Attempt to connect failed: Passed value is not a function", 2) end
   local list = subs[s.key]
   if not list then
@@ -718,13 +773,14 @@ function Signal.connect(s, fn)
   end
   local c = setmetatable({ fn = fn, key = s.key, id = s.id, name = s.name, remote = s.remote, connected = true, script = scriptOf[co_running() or false] }, ConnMT)
   list[#list + 1] = c
-  return c
+  return Signal.__wrap(c)
 end
 Signal.Connect = Signal.connect
 Signal.connectFirst = Signal.connect
 Signal.connectLast = Signal.connect
 
 function Signal.wait(s)
+  s = Signal.__box[s] or s
   local co = co_running()
   local w = eventWaiters[s.key]
   if not w then
@@ -766,7 +822,7 @@ end
 
 local function newLocalSignal(name)
   local key = "L" .. tostring({}) .. ":" .. (name or "Event")
-  return setmetatable({ id = 0, name = name or "Event", key = key, remote = false }, Signal)
+  return Signal.__wrap(setmetatable({ id = 0, name = name or "Event", key = key, remote = false }, Signal))
 end
 
 local function call(id, method, ...)
@@ -787,8 +843,44 @@ local function methodFor(k)
   return f
 end
 
+LuaMethods.__denied = function(id)
+  local lk = LuaMethods.__locked[id]
+  if lk == nil then
+    lk = call(id, "__robloxLocked") == true
+    LuaMethods.__locked[id] = lk
+  end
+  if not lk then return false end
+  return LuaMethods.__gameCaller(4)
+end
+
+LuaMethods.__gameThread = function()
+  local s = scriptOf[co_running() or false]
+  local sid = s and idOf[s]
+  if not sid then return false end
+  local core = LuaMethods.__coreScript[sid]
+  if core == nil then
+    core = call(sid, "__coreCode") == true
+    LuaMethods.__coreScript[sid] = core
+  end
+  return not core
+end
+
+LuaMethods.__gameCaller = function(level)
+  for l = level, level + 6 do
+    local ok, e = pcall(getfenv, l)
+    if not ok then return LuaMethods.__gameThread() end
+    if not LuaMethods.__rtEnvs[e] then
+      if LuaMethods.__gameEnv[e] then return true end
+      if LuaMethods.__coreEnv[e] then return false end
+      return LuaMethods.__gameThread()
+    end
+  end
+  return LuaMethods.__gameThread()
+end
+
 local instanceIndex = function(u, k)
   local id = idOf[u]
+  if id and id ~= 0 and LuaMethods.__denied(id) then error("The current identity (2) cannot " .. tostring(k) .. " (lacking permission 1)", 2) end
   if type(k) == "number" then k = tostring(k) end
   if type(k) ~= "string" then error("bad key", 2) end
   local r = JS_GET(id, k)
@@ -810,6 +902,8 @@ end
 local invokeHandlers = {}
 local instanceNewindex = function(u, k, v)
   local id = idOf[u]
+  if k == "RobloxLocked" and LuaMethods.__gameCaller(3) then error("The current identity (2) cannot RobloxLocked (lacking permission 4)", 2) end
+  if id and id ~= 0 and LuaMethods.__denied(id) then error("The current identity (2) cannot " .. tostring(k) .. " (lacking permission 1)", 2) end
   if type(v) == "function" then
     if k == "OnInvoke" or k == "OnServerInvoke" or k == "OnClientInvoke" then
       invokeHandlers[id] = v
@@ -852,6 +946,12 @@ LuaMethods.WaitForChild = function(self, id, name, timeout)
   end
 end
 LuaMethods.waitForChild = LuaMethods.WaitForChild
+LuaMethods.Destroy = function(self, id)
+  local s = scriptOf[co_running() or false]
+  if s and idOf[s] == id then return call(id, "__DestroySelf") end
+  return call(id, "Destroy")
+end
+LuaMethods.destroy = LuaMethods.Destroy
 
 local centerDialogs = setmetatable({}, { __mode = "k" })
 LuaMethods.AddCenterDialog = function(self, id, dialog, dtype, show, hide)
@@ -1031,6 +1131,27 @@ local function luaSpawn(fn)
   resume(co)
 end
 
+for k, cbAt in pairs({ TweenPosition = 6, tweenPosition = 6, TweenSize = 6, tweenSize = 6, TweenSizeAndPosition = 7, tweenSizeAndPosition = 7 }) do
+  LuaMethods[k] = function(self, id, ...)
+    local a = { ... }
+    local cb = a[cbAt]
+    a[cbAt] = nil
+    local serial = call(id, k, unpack(a, 1, cbAt - 1))
+    if not serial then return false end
+    if type(cb) == "function" then
+      luaSpawn(function()
+        local st = call(id, "__TweenState", serial)
+        while st == "running" do
+          sched_wait(0.03)
+          st = call(id, "__TweenState", serial)
+        end
+        cb(st == "completed" and Enum.TweenStatus.Completed or Enum.TweenStatus.Canceled)
+      end)
+    end
+    return true
+  end
+end
+
 local game = wrap(0)
 local workspace = call(0, "GetService", "Workspace")
 
@@ -1109,6 +1230,23 @@ local loadLibrary = function(name)
   return libraries[name]
 end
 
+LuaMethods.__getfenv = function(l)
+  if l == nil then l = 1 end
+  local e
+  if type(l) == "number" then
+    if l < 0 then error("bad argument #1 to 'getfenv' (level must be non-negative)", 2) end
+    e = l == 0 and getfenv(0) or getfenv(l + 1)
+  else
+    e = getfenv(l)
+  end
+  if l == 0 or LuaMethods.__rtEnvs[e] then
+    local s = scriptOf[co_running() or false]
+    local se = s and LuaMethods.__envOf[s]
+    if se then return se end
+  end
+  return e
+end
+
 local base = {
   assert = assert, error = error, ipairs = ipairs, next = next, pairs = pairs, pcall = ypcall, ypcall = ypcall,
   xpcall = function(f, h, ...)
@@ -1118,7 +1256,7 @@ local base = {
   end,
   select = select, tonumber = tonumber, tostring = tostring, type = type, unpack = unpack, rawequal = rawequal,
   rawget = rawget, rawset = rawset, setmetatable = setmetatable,
-  getmetatable = getmetatable, setfenv = setfenv, getfenv = getfenv, newproxy = newproxy, gcinfo = gcinfo,
+  getmetatable = getmetatable, setfenv = setfenv, getfenv = LuaMethods.__getfenv, newproxy = newproxy, gcinfo = gcinfo,
   collectgarbage = collectgarbage, loadstring = luaLoadString, _VERSION = _VERSION,
   coroutine = {
     create = function(f)
@@ -1138,7 +1276,12 @@ local base = {
     end,
   },
   string = string, table = table, math = math, os = os,
-  print = luaPrint, warn = function(...) JS_LOG("warn", concat({ ... }, " "), 0) end,
+  print = luaPrint, warn = function(...)
+    local t = {}
+    for i = 1, select("#", ...) do t[i] = tostring((select(i, ...))) end
+    local s = scriptOf[co_running() or false]
+    JS_LOG("warn", concat(t, " "), s and idOf[s] or 0)
+  end,
   wait = sched_wait, Wait = sched_wait, delay = luaDelay, Delay = luaDelay, spawn = luaSpawn, Spawn = luaSpawn,
   tick = function() return JS_NOW("tick") end,
   time = function() return now end, elapsedTime = function() return now end, ElapsedTime = function() return now end,
@@ -1149,7 +1292,10 @@ local base = {
   LoadLibrary = function(name) return loadLibrary(name) end,
   version = function() return "0.48.0.0" end,
   printidentity = function(s) luaPrint((s or "Current identity is") .. " 2") end,
-  settings = function() return call(0, "__settings") end,
+  settings = function()
+    if LuaMethods.__gameThread() then error("The current identity (2) cannot settings (lacking permission 1)", 2) end
+    return call(0, "__settings")
+  end,
   UserSettings = function() return call(0, "__UserSettings") end,
   stats = function() return nil end,
   require = function(m) return runModule(m) end,
@@ -1162,7 +1308,13 @@ local function compileFor(proxy, src, name)
   if sub(src, 1, 1) == "\27" then return nil, "binary chunks are not allowed" end
   local f, err = loadstring(src, "=" .. name)
   if not f then return nil, err end
-  setfenv(f, scriptEnvFor(proxy, sandbox))
+  local env = scriptEnvFor(proxy, sandbox)
+  local pid = idOf[proxy]
+  if pid then
+    if call(pid, "__coreCode") then LuaMethods.__coreEnv[env] = true else LuaMethods.__gameEnv[env] = true end
+  end
+  if LuaMethods.__envOf[proxy] == nil then LuaMethods.__envOf[proxy] = env end
+  setfenv(f, env)
   return f
 end
 
@@ -1346,7 +1498,39 @@ LuaMethods.SendNotification = function(self, id, title, text, image, duration, c
   luaDelay(tonumber(duration) or 5, function() CAS.closeNote(f) end)
 end
 
+CAS.part1 = function()
+  return {
+    base = base, sandbox = sandbox, LuaMethods = LuaMethods, ext = LuaMethods.__ext, call = call, callAsync = callAsync,
+    wrap = wrap, idOf = idOf, proxyOf = proxyOf, isInstance = isInstance, makeSignal = makeSignal, newLocalSignal = newLocalSignal,
+    fireLocal = fireLocal, subKey = subKey, subs = subs, Signal = Signal, newThread = newThread, resume = resume,
+    sched_wait = sched_wait, scriptOf = scriptOf, now = function() return now end, InstanceLib = InstanceLib,
+  }
+end
+CAS.part2 = function()
+  return {
+    invokeHandlers = invokeHandlers, runModule = function(m) return runModule(m) end, moduleCache = moduleCache,
+    setRunModule = function(fn) runModule = fn end, compileFor = compileFor, enc = enc, dec1 = dec1, decAll = decAll,
+    J = J, JS_CALL = JS_CALL, JS_GET = JS_GET, JS_LOG = JS_LOG, ypcall = ypcall, luaSpawn = luaSpawn, luaDelay = luaDelay,
+    game = game, CAS = CAS, SIDE = SIDE, BRICKS = BRICKS, fnum = fnum, isEnumItem = isEnumItem,
+    reportError = reportError, co_running = co_running, co_yield = co_yield, co_status = co_status, sleeping = function() return sleeping end,
+  }
+end
+CAS.part3 = function()
+  return {
+    Vector3 = Vector3, Vector2 = Vector2, CFrame = CFrame, Color3 = Color3, BrickColor = BrickColor, UDim2 = UDim2, UDim = UDim,
+    Ray = Ray, Region3 = Region3, Enum = Enum, V3MT = V3MT, V2MT = V2MT, CFMT = CFMT, C3MT = C3MT, BCMT = BCMT,
+    UD2MT = UD2MT, UDMT = UDMT, RayMT = RayMT, R3MT = R3MT, EnumItemMT = EnumItemMT, InstanceMT = InstanceMT,
+  }
+end
+
 return {
+  extend = function(src, name)
+    local f = assert(loadstring(src, "=" .. (name or "extension")))
+    local t = CAS.part1()
+    for k, v in pairs(CAS.part2()) do t[k] = v end
+    for k, v in pairs(CAS.part3()) do t[k] = v end
+    __EXT = f(t)
+  end,
   step = step,
   setBudget = function(n) BUDGET = n end,
   fire = function(id, name, ...) fireLocal(subKey(id, name), ...) end,

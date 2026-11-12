@@ -40,10 +40,10 @@ function jobId() {
   return `${Date.now().toString(36)}${(nextJob++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function startInstance(placeId, kind, privateId, max, allowGear) {
+function startInstance(placeId, kind, privateId, max, allowGear, era = 2012) {
   const id = jobId();
-  const worker = new Worker(path.join(HERE, 'worker.js'), { workerData: { placeId, jobId: id, kind, privateId, allowGear }, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
-  const p = { id, placeId, kind, privateId, max, worker, members: new Map(), ready: false, dead: false, idleTimer: null, failed: null, started: Date.now() };
+  const worker = new Worker(path.join(HERE, 'worker.js'), { workerData: { placeId, jobId: id, kind, privateId, allowGear, era }, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
+  const p = { id, placeId, kind, privateId, max, era, worker, members: new Map(), ready: false, dead: false, idleTimer: null, failed: null, started: Date.now() };
   places.set(id, p);
   const tag = `[place ${placeId} ${kind === 'public' ? id : kind + ' ' + privateId}]`;
   p.tag = tag;
@@ -91,7 +91,7 @@ function startInstance(placeId, kind, privateId, max, allowGear) {
     }
     pushPresence();
   });
-  log(`${tag} starting (max ${max})`);
+  log(`${tag} starting (max ${max}, ${era} client)`);
   return p;
 }
 
@@ -106,17 +106,18 @@ function chooseInstance(info) {
   const placeId = info.placeId | 0;
   const max = Math.max(1, Math.min(100, (info.maxPlayers | 0) || DEFAULT_MAX));
   const allowGear = info.allowGear !== false;
+  const era = (info.clientVersion | 0) === 2018 ? 2018 : 2012;
   const key = String(info.serverKey || '');
   const m = /^(priv|res):(\d+)$/.exec(key);
   if (m) {
     const kind = m[1] === 'priv' ? 'private' : 'reserved';
     const privateId = +m[2];
-    let p = [...places.values()].find((x) => !x.dead && x.placeId === placeId && x.kind === kind && x.privateId === privateId);
-    if (!p) p = startInstance(placeId, kind, privateId, max, allowGear);
+    let p = [...places.values()].find((x) => !x.dead && x.placeId === placeId && x.kind === kind && x.privateId === privateId && x.era === era);
+    if (!p) p = startInstance(placeId, kind, privateId, max, allowGear, era);
     p.max = max;
     return p.members.size >= p.max ? { full: true } : { p };
   }
-  const live = [...places.values()].filter((x) => !x.dead && !x.failed && x.placeId === placeId && x.kind === 'public');
+  const live = [...places.values()].filter((x) => !x.dead && !x.failed && x.placeId === placeId && x.kind === 'public' && x.era === era);
   const job = /^job:([a-z0-9]+)$/.exec(key);
   if (job) {
     const want = live.find((x) => x.id === job[1]);
@@ -124,7 +125,7 @@ function chooseInstance(info) {
   }
   const open = live.filter((x) => x.members.size < x.max).sort((a, b) => b.members.size - a.members.size || a.started - b.started);
   if (open.length) return { p: open[0] };
-  return { p: startInstance(placeId, 'public', 0, max, allowGear) };
+  return { p: startInstance(placeId, 'public', 0, max, allowGear, era) };
 }
 
 function shutdown(p, reason) {
@@ -410,7 +411,7 @@ wss.on('connection', async (ws, req, url) => {
   clearTimeout(p.idleTimer);
   s.place = p;
   p.members.set(cid, { id: info.userId | 0, name: String(info.username) });
-  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks) } });
+  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6' } });
   s.joined = true;
   for (const str of early.splice(0)) p.worker.postMessage({ t: 'msg', cid, data: str });
   log(`${p.tag} ${info.username} (${info.userId}) connected`);

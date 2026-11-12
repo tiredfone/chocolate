@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { brick } from '../shared/brickcolor.js';
 import { sunDirection } from '../shared/luahost.js';
-import { loadTexture, loadMesh, loadImage, proceduralTexture, trussTexture, spriteTexture, contentTexture } from './assets.js';
-import { Material2012, MATERIALS, LIGHTS, rawColor, texPosAttribute, applyLighting as light2012 } from './shade2012.js';
+import { loadTexture, loadMesh, loadImage, proceduralTexture, trussTexture, spriteTexture, contentTexture, loadUnionMesh, unionGeometry } from './assets.js';
+import { Material2012, MATERIALS, MATERIALS2018, LIGHTS, rawColor, texPosAttribute, applyLighting as light2012, setShadeEra } from './shade2012.js';
 import { ParticleSystem2012, SYSTEMS, preloadParticles } from './particles2012.js';
-import { CharacterAtlases, BODY_MESH } from './character2012.js';
+import { CharacterAtlases, BODY_MESH, clothingOf } from './character2012.js';
 import { contentMesh } from './assets.js';
 
 const MATERIAL_KIND = {
@@ -14,7 +14,9 @@ const MATERIAL_KIND = {
 };
 const SURFACE_TEX = { 1: 'glue', 2: 'weld', 3: 'studs', 4: 'inlet', 5: 'universal' };
 const SURFACE_ROW = { studs: 0, inlet: 1, weld: 2, glue: 3, universal: 4 };
-const DEFAULT_SKY = ['rt', 'lf', 'up', 'dn', 'bk', 'ft'].map((f) => `rbxasset://sky/null_plainsky512_${f}.jpg`);
+const SKY_2012 = ['rt', 'lf', 'up', 'dn', 'bk', 'ft'].map((f) => `rbxasset://sky/null_plainsky512_${f}.jpg`);
+const SKY_2018 = ['rt', 'lf', 'up', 'dn', 'bk', 'ft'].map((f) => `rbxasset://textures/sky/sky512_${f}.tex`);
+let DEFAULT_SKY = SKY_2012;
 
 let studAtlas = null;
 function studTexture() {
@@ -31,6 +33,7 @@ function materialTexture(path) {
   }
   return t;
 }
+const R15_LIMBS = new Set(['Head', 'UpperTorso', 'LowerTorso', 'LeftUpperArm', 'LeftLowerArm', 'LeftHand', 'RightUpperArm', 'RightLowerArm', 'RightHand', 'LeftUpperLeg', 'LeftLowerLeg', 'LeftFoot', 'RightUpperLeg', 'RightLowerLeg', 'RightFoot']);
 const FACE_PROPS = ['RightSurface', 'LeftSurface', 'TopSurface', 'BottomSurface', 'BackSurface', 'FrontSurface'];
 const LIMB_REGION = { Torso: 'torso', 'Right Arm': 'right', 'Left Arm': 'left', 'Right Leg': 'right', 'Left Leg': 'left' };
 
@@ -174,6 +177,8 @@ function packageMesh(part) {
 export class Renderer {
   constructor(canvas, world) {
     this.world = world;
+    setShadeEra(world.era);
+    DEFAULT_SKY = world.era === 2018 ? SKY_2018 : SKY_2012;
     this.dm = world.dm;
     this.canvas = canvas;
     const r = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -288,13 +293,14 @@ export class Renderer {
     this.skyKey = key;
     Promise.all(urls.map((u, i) => loadImage(u).then((img) => img || (u === DEFAULT_SKY[i] ? null : loadImage(DEFAULT_SKY[i]))))).then((imgs) => {
       if (this.skyKey !== key || imgs.some((i) => !i)) return;
-      const cube = new THREE.CubeTexture(imgs.map((im) => {
+      const cube = new THREE.CubeTexture(imgs.map((im, i) => {
         const c = document.createElement('canvas');
-        c.width = im.width;
-        c.height = im.height;
+        const turn = i === 2 || i === 3;
+        c.width = turn ? im.height : im.width;
+        c.height = turn ? im.width : im.height;
         const g = c.getContext('2d');
-        g.translate(0, c.height);
-        g.scale(1, -1);
+        if (i === 2) g.setTransform(0, -1, 1, 0, 0, im.width);
+        else if (i === 3) g.setTransform(0, 1, -1, 0, im.height, 0);
         g.drawImage(im, 0, 0);
         return c;
       }));
@@ -326,10 +332,26 @@ export class Renderer {
     this.moonSprite.visible = dir[1] < 0.1;
   }
 
+  partColor(part) {
+    if (this.world.era === 2018 && part.info.all.has('Color')) {
+      const c = part.props.get('Color');
+      if (Array.isArray(c)) return { r: c[0], g: c[1], b: c[2] };
+    }
+    return brick(part.props.get('BrickColor'));
+  }
+
+  partTransparency(part) {
+    if (this.localTransparency.has(part)) return this.localTransparency.get(part);
+    const t = part.props.get('Transparency');
+    const ltm = this.world.era === 2018 && part.props.has('LocalTransparencyModifier') ? +part.props.get('LocalTransparencyModifier') || 0 : 0;
+    return ltm > 0 ? 1 - (1 - t) * (1 - ltm) : t;
+  }
+
   material(part, face) {
-    const b = part.props.get('BrickColor');
+    const pc = this.partColor(part);
+    const b = `${pc.r.toFixed(3)},${pc.g.toFixed(3)},${pc.b.toFixed(3)}`;
     const mat = part.props.get('Material');
-    const transp = this.localTransparency.has(part) ? this.localTransparency.get(part) : part.props.get('Transparency');
+    const transp = this.partTransparency(part);
     const refl = part.props.get('Reflectance');
     let kind = MATERIAL_KIND[mat] || 'plastic';
     const surf = face >= 0 ? part.props.get(FACE_PROPS[face]) | 0 : 0;
@@ -337,8 +359,9 @@ export class Renderer {
     const key = `${b}|${kind}|${surf}|${transp.toFixed(2)}|${refl.toFixed(2)}`;
     let m = this.materials.get(key);
     if (m) return m;
-    const c = brick(b);
-    const def = MATERIALS[kind] || MATERIALS.plastic;
+    const c = pc;
+    const table = this.world.era === 2018 ? MATERIALS2018 : MATERIALS;
+    const def = table[kind] || table.plastic;
     const opts = { color: rawColor(c.r, c.g, c.b), ks: def.ks, exp: def.exp, refl, neon: def.neon };
     if (transp > 0) {
       opts.transparent = true;
@@ -415,7 +438,7 @@ export class Renderer {
           this.smooth.delete(v);
           applyCF(v.group, inst.props.get('CFrame'));
         }
-      } else if (['Size', 'BrickColor', 'Transparency', 'Reflectance', 'Material', 'Shape', ...FACE_PROPS].includes(name)) {
+      } else if (['Size', 'BrickColor', 'Color', 'MeshId', 'TextureID', 'LocalTransparencyModifier', 'Transparency', 'Reflectance', 'Material', 'Shape', ...FACE_PROPS].includes(name)) {
         if (v.batched) v.dynamic = true;
         this.rebuild(inst);
       } else if (name === 'Anchored' && !inst.props.get('Anchored') && v.batched) {
@@ -490,11 +513,15 @@ export class Renderer {
   build(v) {
     const part = v.part;
     const size = part.props.get('Size');
-    const transp = this.localTransparency.has(part) ? this.localTransparency.get(part) : part.props.get('Transparency');
+    const transp = this.partTransparency(part);
     const meshInst = part.children.find((c) => c.isA('DataModelMesh'));
     let body = null;
     if (meshInst) {
       body = this.buildMesh(v, part, meshInst, size);
+    } else if (part.isA('PartOperation')) {
+      body = this.buildUnion(part, size, transp);
+    } else if (part.ClassName === 'MeshPart') {
+      body = this.buildMeshPart(part, size, transp);
     } else if (part.isA('BasePart')) {
       const shape = part.info.all.has('Shape') ? part.props.get('Shape') : 1;
       let geo;
@@ -524,7 +551,7 @@ export class Renderer {
       body.userData.part = part;
       v.body = body;
       if (transp >= 1) body.visible = false;
-      if (!meshInst && transp < 1 && this.batchable(v)) this.batch(v, body);
+      if (!meshInst && !part.isA('PartOperation') && part.ClassName !== 'MeshPart' && body.geometry && transp < 1 && this.batchable(v)) this.batch(v, body);
       else v.group.add(body);
     }
     if (!meshInst || this.isHeadMesh(meshInst)) this.buildDecals(v, part, size, meshInst);
@@ -533,7 +560,7 @@ export class Renderer {
 
   buildLimb(part, limb, size, box, transp) {
     const atlas = this.atlases.get(part.parent);
-    const c = brick(part.props.get('BrickColor'));
+    const c = this.partColor(part);
     const mat = new Material2012({ color: atlas ? rawColor(1, 1, 1) : rawColor(c.r, c.g, c.b), ks: 0.3, exp: 30, transparent: transp > 0, opacity: 1 - transp });
     if (atlas) mat.map = atlas;
     const group = new THREE.Group();
@@ -562,11 +589,14 @@ export class Renderer {
       mesh.geometry = flat;
       mesh.scale.set(size[0] / limb.size[0], size[1] / limb.size[1], size[2] / limb.size[2]);
     });
-    const faces = [['BottomSurface', -size[1] / 2, Math.PI / 2, true]];
-    if (!atlas) faces.push(['TopSurface', size[1] / 2, -Math.PI / 2, false]);
-    for (const [prop, y, rx, solid] of faces) {
-      const kind = SURFACE_TEX[part.props.get(prop) | 0];
-      if (!kind || SURFACE_ROW[kind] === undefined) continue;
+    const name = part.props.get('Name');
+    const clothes = clothingOf(part.parent);
+    const faces = [];
+    if (!(clothes && clothes.shirt) && (name === 'Torso' || name === 'Left Arm' || name === 'Right Arm')) {
+      faces.push(['studs', size[1] / 2, -Math.PI / 2, false]);
+      if (name !== 'Torso') faces.push(['inlet', -size[1] / 2, Math.PI / 2, true]);
+    }
+    for (const [kind, y, rx, solid] of faces) {
       const k = solid ? 1 : 0.94;
       const plane = new THREE.PlaneGeometry(size[0] * k, size[2] * k);
       const uv = plane.attributes.uv;
@@ -678,12 +708,126 @@ export class Renderer {
     return m.ClassName === 'SpecialMesh' && m.props.get('MeshType') === 0;
   }
 
+  r15Clothing(model, c) {
+    const shirt = model.children.find((x) => x.ClassName === 'Shirt');
+    const pants = model.children.find((x) => x.ClassName === 'Pants');
+    const urls = [pants && pants.props.get('PantsTemplate'), shirt && shirt.props.get('ShirtTemplate')].filter(Boolean);
+    if (!urls.length) return null;
+    const key = urls.join('|') + `|${c.r.toFixed(3)},${c.g.toFixed(3)},${c.b.toFixed(3)}`;
+    if (!this.r15Tex) this.r15Tex = new Map();
+    let p = this.r15Tex.get(key);
+    if (!p) {
+      p = Promise.all(urls.map((u) => loadImage(u))).then((imgs) => {
+        const cv = document.createElement('canvas');
+        cv.width = 585;
+        cv.height = 559;
+        const g = cv.getContext('2d');
+        g.fillStyle = `rgb(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)})`;
+        g.fillRect(0, 0, cv.width, cv.height);
+        for (const im of imgs) if (im) g.drawImage(im, 0, 0, cv.width, cv.height);
+        const tex = new THREE.CanvasTexture(cv);
+        tex.flipY = false;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        return tex;
+      });
+      this.r15Tex.set(key, p);
+    }
+    return p;
+  }
+
+  buildMeshPart(part, size, transp) {
+    const holder = new THREE.Group();
+    const c = this.partColor(part);
+    const mat = new Material2012({ color: rawColor(c.r, c.g, c.b), ks: 0.3, exp: 30, refl: part.props.get('Reflectance'), transparent: transp > 0, opacity: 1 - transp });
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+    mesh.castShadow = transp < 0.5;
+    mesh.receiveShadow = true;
+    mesh.userData.part = part;
+    holder.add(mesh);
+    const tex = part.props.get('TextureID');
+    if (tex) {
+      loadTexture(tex).then((t) => {
+        if (!t) return;
+        mat.color.setRGB(1, 1, 1);
+        mat.setAlphaTest(0.1);
+        mat.map = t;
+      });
+    } else {
+      const model = part.parent;
+      if (model && model.findChildOfClass('Humanoid') && R15_LIMBS.has(part.props.get('Name')) && part.props.get('Name') !== 'Head') {
+        const p = this.r15Clothing(model, c);
+        if (p) p.then((t) => {
+          if (!t) return;
+          mat.color.setRGB(1, 1, 1);
+          mat.map = t;
+        });
+      }
+    }
+    const url = part.props.get('MeshId');
+    if (url) loadMesh(url).then((g) => {
+      if (!g) return;
+      g.userData.shared = true;
+      if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox;
+      const ext = [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z];
+      mesh.scale.set(size[0] / (ext[0] || 1), size[1] / (ext[1] || 1), size[2] / (ext[2] || 1));
+      mesh.position.set(-(bb.max.x + bb.min.x) / 2 * mesh.scale.x, -(bb.max.y + bb.min.y) / 2 * mesh.scale.y, -(bb.max.z + bb.min.z) / 2 * mesh.scale.z);
+      mesh.geometry = g;
+    });
+    else {
+      const box = boxGeometry(size[0], size[1], size[2]);
+      texPosAttribute(box);
+      mesh.geometry = box;
+    }
+    return holder;
+  }
+
+  buildUnion(part, size, transp) {
+    const holder = new THREE.Group();
+    const mat = this.material(part, -1);
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+    mesh.castShadow = transp < 0.5;
+    mesh.receiveShadow = true;
+    mesh.userData.part = part;
+    holder.add(mesh);
+    const extra = (n) => (part.info.all.has(n) && part.props.get(n) != null && part.props.get(n) !== '' ? part.props.get(n) : part.extra && part.extra.get(n) ? part.extra.get(n).v : null);
+    const init = extra('InitialSize');
+    const fit = (g) => {
+      if (!g) {
+        const box = boxGeometry(size[0], size[1], size[2]);
+        texPosAttribute(box);
+        mesh.geometry = box;
+        return;
+      }
+      g.userData.shared = true;
+      const bb = g.boundingBox;
+      const base = Array.isArray(init) ? init : [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z];
+      mesh.scale.set(size[0] / (base[0] || 1), size[1] / (base[1] || 1), size[2] / (base[2] || 1));
+      mesh.geometry = g;
+    };
+    const inline = extra('MeshData');
+    if (typeof inline === 'string' && inline.length > 8) {
+      try {
+        const bin = atob(inline.replace(/<[^>]*>/g, '').replace(/\s+/g, ''));
+        const raw = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
+        fit(unionGeometry(raw));
+        return holder;
+      } catch {}
+    }
+    const url = extra('AssetId');
+    if (typeof url === 'string' && url) loadUnionMesh(url).then(fit);
+    else fit(null);
+    return holder;
+  }
+
   buildMesh(v, part, m, size) {
     const scale = m.props.get('Scale');
     const off = m.props.get('Offset');
     const vc = m.props.get('VertexColor');
-    const c = brick(part.props.get('BrickColor'));
-    const transp = this.localTransparency.has(part) ? this.localTransparency.get(part) : part.props.get('Transparency');
+    const c = this.partColor(part);
+    const transp = this.partTransparency(part);
     const textured = !!m.props.get('TextureId');
     const mat = new Material2012({ color: rawColor(c.r, c.g, c.b), ks: 0.5, exp: 40, refl: textured ? 0 : part.props.get('Reflectance'), transparent: transp > 0, opacity: 1 - transp });
     const holder = new THREE.Group();

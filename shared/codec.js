@@ -23,8 +23,9 @@ function isDefault(p, v) {
 }
 
 export function hiddenProp(inst, name, forOwner) {
+  if (name === 'Archivable') return true;
   if (name === 'Source' && inst.ClassName === 'Script') return true;
-  if (name === 'Source' && inst.ClassName === 'ModuleScript') return true;
+  if (name === 'Source' && inst.ClassName === 'ModuleScript') return !(inst.dm && inst.dm.era === 2018);
   return false;
 }
 

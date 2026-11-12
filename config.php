@@ -28,6 +28,9 @@ $config = [
         'presence' => '/api/chocolate/presence',
         'social' => '/api/chocolate/social',
         'login' => '/login',
+        'thumbnail' => '/image/headshot?userId={id}',
+        'avatarThumbnail' => '/thumbnail/user/{id}',
+        'placeThumbnail' => '/Image/Item.ashx?ID={id}',
     ],
 ];
 if (is_file(__DIR__ . '/config.local.php')) {

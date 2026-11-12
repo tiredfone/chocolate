@@ -125,6 +125,11 @@ export class UI {
   }
 
   build() {
+    this.buildBars();
+    this.buildBody();
+  }
+
+  buildBars() {
     const r = this.root;
     const bar = el('div', 'st-menubar', r);
     const ham = el('div', 'st-menu-title st-hamburger', bar, '☰');
@@ -166,6 +171,10 @@ export class UI {
         this.buttons.set(id, b);
       }
     }
+  }
+
+  buildBody() {
+    const r = this.root;
     const body = el('div', 'st-body', r);
     this.left = el('div', 'st-dock st-dock-left', body);
     this.splitLeft = el('div', 'st-splitter-v', body);

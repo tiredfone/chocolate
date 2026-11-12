@@ -29,6 +29,10 @@ export function gripOf(tool) {
 }
 
 const LANDED_DELAY = 0.5;
+export function rootOf(model) {
+  return model ? model.findChild('Torso') || model.findChild('HumanoidRootPart') : null;
+}
+
 export const STATES = { idle: 0, walk: 1, jump: 2, fall: 3, sit: 4, climb: 5, dead: 6, stand: 7 };
 export const STATE_NAMES = Object.fromEntries(Object.entries(STATES).map(([k, v]) => [v, k]));
 
@@ -37,8 +41,8 @@ export function liveCharacterOf(part) {
     if (m.ClassName === 'Model' || m.ClassName === 'Workspace') {
       if (m.ClassName === 'Workspace') return null;
       const h = m.findChildOfClass('Humanoid');
-      if (h && m.findChild('Torso') && m.findChild('Head') && h.props.get('Health') > 0 && !(m.data && m.data.dead)) {
-        const torso = m.findChild('Torso');
+      if (h && rootOf(m) && m.findChild('Head') && h.props.get('Health') > 0 && !(m.data && m.data.dead)) {
+        const torso = rootOf(m);
         if (torso.props.get('Anchored')) return null;
         return m;
       }
@@ -61,7 +65,7 @@ export class Rig {
 
   build() {
     const m = this.model;
-    const torso = m.findChild('Torso');
+    const torso = rootOf(m);
     this.torso = torso;
     this.edges = new Map();
     const joints = m.descendants().filter((d) => d.isA('JointInstance'));
@@ -75,9 +79,11 @@ export class Rig {
       this.edges.get(b).push([j, a, false]);
     }
     this.order = [];
-    if (!torso) return;
-    const seen = new Set([torso]);
-    const queue = [torso];
+    const hrp = m.findChild('HumanoidRootPart');
+    if (hrp && hrp.isA('BasePart') && this.edges.has(hrp) && (!m.findChild('Torso') || this.edges.get(hrp).some(([, o]) => o === m.findChild('Torso')))) this.torso = hrp;
+    if (!this.torso) return;
+    const seen = new Set([this.torso]);
+    const queue = [this.torso];
     while (queue.length) {
       const p = queue.shift();
       for (const [j, o, forward] of this.edges.get(p) || []) {
@@ -198,14 +204,15 @@ export class Controller {
     this.hum = humanoid;
     this.R = physics.R;
     const world = physics.world;
-    const torso = model.findChild('Torso');
+    const torso = rootOf(model);
     const cf = torso.props.get('CFrame');
+    this.off = model.findChild('Torso') ? 0.5 : -0.1;
     this.vel = [0, 0, 0];
     this.state = STATES.fall;
     this.grounded = false;
     this.jumpHeld = false;
     this.yawCF = flatYaw(cf);
-    this.body = world.createRigidBody(this.R.RigidBodyDesc.kinematicPositionBased().setTranslation(cf[0], cf[1] - 0.5, cf[2]));
+    this.body = world.createRigidBody(this.R.RigidBodyDesc.kinematicPositionBased().setTranslation(cf[0], cf[1] - this.off, cf[2]));
     this.collider = world.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setActiveCollisionTypes(this.R.ActiveCollisionTypes.ALL), this.body);
     this.jumpCooldown = 0;
     this.landedFor = 0;
@@ -219,7 +226,7 @@ export class Controller {
     this.kcc.setApplyImpulsesToDynamicBodies(true);
     this.kcc.setSlideEnabled(true);
     this.kcc.setNormalNudgeFactor(0.01);
-    this.pos = [cf[0], cf[1] - 0.5, cf[2]];
+    this.pos = [cf[0], cf[1] - this.off, cf[2]];
   }
 
   destroy() {
@@ -230,7 +237,7 @@ export class Controller {
   }
 
   teleport(cf) {
-    this.pos = [cf[0], cf[1] - 0.5, cf[2]];
+    this.pos = [cf[0], cf[1] - this.off, cf[2]];
     this.body.setTranslation({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, true);
     this.yawCF = flatYaw(cf);
     this.vel = [0, 0, 0];
@@ -238,6 +245,8 @@ export class Controller {
 
   filter() {
     const model = this.model;
+    const root = model && (model.findChild('HumanoidRootPart') || model.findChild('Torso'));
+    const own = root ? root.props.get('CollisionGroupId') | 0 : 0;
     return (c) => {
       if (c.handle === this.collider.handle) return false;
       const rec = this.ph.byHandle.get(c.handle);
@@ -246,6 +255,7 @@ export class Controller {
       if (rec.part && (rec.part === model || rec.part.isDescendantOf(model))) return false;
       if (rec.sensorOnly) return false;
       if (rec.part && !rec.part.props.get('CanCollide')) return false;
+      if (rec.part && this.ph.groupsCollide && !this.ph.groupsCollide(own, rec.part.props.get('CollisionGroupId') | 0)) return false;
       return true;
     };
   }
@@ -289,6 +299,21 @@ export class Controller {
     return true;
   }
 
+  groundClamp() {
+    const p = this.pos;
+    const from = p[1] - 2.15;
+    let top = -Infinity;
+    for (const [dx, dz] of [[0, 0], [0.95, 0.45], [-0.95, 0.45], [0.95, -0.45], [-0.95, -0.45]]) {
+      const r = this.ph.raycast([p[0] + dx, from, p[2] + dz], [0, -0.6, 0], [this.model], (q) => q.props.get('CanCollide'));
+      if (!r.part || r.normal[1] < 0.99) return false;
+      top = Math.max(top, r.point[1]);
+    }
+    const y = top + 2.49;
+    if (Math.abs(y - p[1]) > 0.15) return false;
+    p[1] = y;
+    return true;
+  }
+
   update(dt, input) {
     const hum = this.hum;
     this.unstick();
@@ -314,24 +339,33 @@ export class Controller {
     } else {
       this.vel[1] -= GRAVITY * dt;
       this.jumpCooldown = Math.max(0, this.jumpCooldown - dt);
-      if (this.grounded && wantJump && this.landedFor > LANDED_DELAY && this.jumpCooldown <= 0 && this.vel[1] <= 0) {
+      const e18 = hum.dm && hum.dm.era === 2018;
+      const footing = this.grounded || (e18 && !this.jumped && (this.sinceGround || 0) < 0.12);
+      if (footing && wantJump && (e18 || this.landedFor > LANDED_DELAY) && this.jumpCooldown <= 0 && this.vel[1] <= 0) {
         this.vel[1] = hum.props.get('JumpPower') || 50;
         this.grounded = false;
+        this.jumped = true;
         this.landedFor = 0;
-        this.jumpCooldown = 0.35;
+        this.jumpCooldown = e18 ? 0.08 : 0.35;
         this.jumpHeldFor = 0;
       }
     }
-    const desired = { x: this.vel[0] * dt, y: this.vel[1] * dt, z: this.vel[2] * dt };
+    const settle = this.grounded && this.vel[1] <= 0 && !climbing;
+    const desired = { x: this.vel[0] * dt, y: settle ? 0 : this.vel[1] * dt, z: this.vel[2] * dt };
     this.kcc.computeColliderMovement(this.collider, desired, this.R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.filter());
     const mvd = this.kcc.computedMovement();
-    const grounded = this.kcc.computedGrounded();
+    let grounded = this.kcc.computedGrounded();
     this.pos = [this.pos[0] + mvd.x, this.pos[1] + mvd.y, this.pos[2] + mvd.z];
+    if (settle && this.groundClamp()) grounded = true;
     this.body.setNextKinematicTranslation({ x: this.pos[0], y: this.pos[1], z: this.pos[2] });
     if (grounded && this.vel[1] <= 0) this.vel[1] = 0;
     if (!grounded && mvd.y > desired.y + 1e-4 && this.vel[1] < 0) this.vel[1] = Math.max(this.vel[1], mvd.y / dt);
     if (this.vel[1] > 0 && mvd.y < desired.y - 1e-4) this.vel[1] = 0;
     this.grounded = grounded;
+    if (grounded && this.vel[1] <= 0) {
+      this.sinceGround = 0;
+      this.jumped = false;
+    } else this.sinceGround = (this.sinceGround || 0) + dt;
     this.landedFor = grounded && this.vel[1] <= 0 ? this.landedFor + dt : 0;
     if (!climbing) {
       if (grounded) this.state = ml > 1e-3 && speed > 0 ? STATES.walk : STATES.idle;
@@ -345,7 +379,7 @@ export class Controller {
       const target = C.lookAt(0, 0, 0, dir[0], 0, dir[2]);
       this.yawCF = C.lerp(C.rotOnly(this.yawCF), target, Math.min(1, dt * 12));
     }
-    const cf = C.withPos(this.yawCF, this.pos[0], this.pos[1] + 0.5, this.pos[2]);
+    const cf = C.withPos(this.yawCF, this.pos[0], this.pos[1] + this.off, this.pos[2]);
     return { cf, vel: [mvd.x / dt, mvd.y / dt, mvd.z / dt], state: this.state };
   }
 }
@@ -355,7 +389,7 @@ export class CharacterProxy {
     this.ph = physics;
     this.model = model;
     this.R = physics.R;
-    const torso = model.findChild('Torso');
+    const torso = rootOf(model);
     const t0 = torso ? torso.props.get('CFrame') : C.cf();
     const q0 = C.toQuat(t0);
     this.body = physics.world.createRigidBody(this.R.RigidBodyDesc.kinematicPositionBased().setTranslation(t0[0], t0[1], t0[2]).setRotation({ x: q0[0], y: q0[1], z: q0[2], w: q0[3] }));
@@ -378,7 +412,7 @@ export class CharacterProxy {
       w.removeCollider(this.solid, false);
       this.solid = null;
     }
-    const torso = this.model.findChild('Torso');
+    const torso = rootOf(this.model);
     if (!torso) return;
     if (this.blocking) {
       this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0).setEnabled(!this.seated), this.body);
@@ -432,6 +466,14 @@ export class CharacterProxy {
   }
 }
 
+export const R15_COLORS = {
+  Head: 'HeadColor', UpperTorso: 'TorsoColor', LowerTorso: 'TorsoColor',
+  LeftUpperArm: 'LeftArmColor', LeftLowerArm: 'LeftArmColor', LeftHand: 'LeftArmColor',
+  RightUpperArm: 'RightArmColor', RightLowerArm: 'RightArmColor', RightHand: 'RightArmColor',
+  LeftUpperLeg: 'LeftLegColor', LeftLowerLeg: 'LeftLegColor', LeftFoot: 'LeftLegColor',
+  RightUpperLeg: 'RightLegColor', RightLowerLeg: 'RightLegColor', RightFoot: 'RightLegColor',
+};
+
 export function partColorProps(model) {
   const bc = model.findChildOfClass('BodyColors');
   if (!bc) return;
@@ -439,9 +481,41 @@ export function partColorProps(model) {
     const p = model.findChild(name);
     if (p && p.isA('BasePart')) p.dm.setProp(p, 'BrickColor', bc.props.get(info.color));
   }
+  if (model.findChild('Torso')) return;
+  for (const [name, prop] of Object.entries(R15_COLORS)) {
+    const p = model.findChild(name);
+    if (!p || !p.isA('BasePart')) continue;
+    const c3 = bc.props.get(prop + '3');
+    if (Array.isArray(c3) && p.info.all.has('Color')) p.dm.setProp(p, 'Color', c3.slice());
+    else p.dm.setProp(p, 'BrickColor', bc.props.get(prop));
+  }
 }
 
-export function buildCharacter(dm, name, at) {
+export function buildR15(dm, template, name, at) {
+  const [model] = dm.load([template], null);
+  model.props.set('Name', name);
+  const root = model.findChild('HumanoidRootPart');
+  const hum = model.findChildOfClass('Humanoid');
+  const hip = hum ? +hum.props.get('HipHeight') || 1.35 : 1.35;
+  const rc = root.props.get('CFrame');
+  const target = [at[0], at[1] - 3 + hip + root.props.get('Size')[1] / 2, at[2]];
+  const d = [target[0] - rc[0], target[1] - rc[1], target[2] - rc[2]];
+  for (const p of model.descendants()) {
+    if (!p.isA('BasePart')) continue;
+    const cf = p.props.get('CFrame').slice();
+    cf[0] += d[0];
+    cf[1] += d[1];
+    cf[2] += d[2];
+    p.props.set('CFrame', cf);
+    p.props.set('Locked', true);
+  }
+  for (const v of model.descendants()) if (v.ClassName === 'Vector3Value' && v.props.get('Name') === 'OriginalSize') dm.destroy(v);
+  model.props.set('PrimaryPart', root);
+  if (hum && hum.info.all.has('RigType')) hum.props.set('RigType', 1);
+  return { model, humanoid: hum };
+}
+
+export function buildCharacter(dm, name, at, opts = {}) {
   const model = dm.create('Model', null);
   model.props.set('Name', name);
   const base = C.cf(at[0], at[1], at[2]);
@@ -484,6 +558,28 @@ export function buildCharacter(dm, name, at) {
   const hum = dm.create('Humanoid', model);
   hum.props.set('Name', 'Humanoid');
   model.props.set('PrimaryPart', head);
+  if (opts.rootPart) {
+    const root = dm.create('Part', null);
+    root.props.set('Name', 'HumanoidRootPart');
+    root.props.set('Size', [2, 2, 1]);
+    root.props.set('FormFactor', 0);
+    root.props.set('Transparency', 1);
+    root.props.set('CanCollide', false);
+    root.props.set('Locked', true);
+    root.props.set('CFrame', parts.Torso.props.get('CFrame').slice());
+    for (const s of ['Top', 'Bottom', 'Left', 'Right', 'Front', 'Back']) root.props.set(s + 'Surface', 0);
+    dm.setParent(root, model);
+    const rj = dm.create('Motor6D', root);
+    const r = [0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0];
+    rj.props.set('Name', 'RootJoint');
+    rj.props.set('Part0', root);
+    rj.props.set('Part1', parts.Torso);
+    rj.props.set('C0', r.slice());
+    rj.props.set('C1', r.slice());
+    rj.props.set('MaxVelocity', 0.1);
+    parts.HumanoidRootPart = root;
+    model.props.set('PrimaryPart', root);
+  }
   return { model, parts, humanoid: hum };
 }
 
@@ -491,6 +587,27 @@ export function attachAccessory(dm, model, acc) {
   const head = model.findChild('Head');
   const handle = acc.findChild('Handle');
   if (!head || !handle || !handle.isA('BasePart')) return;
+  for (const ha of handle.children) {
+    if (ha.ClassName !== 'Attachment') continue;
+    const name = ha.props.get('Name');
+    let body = null;
+    for (const p of model.children) if (p.isA('BasePart') && p !== handle) {
+      body = p.children.find((c) => c.ClassName === 'Attachment' && c.props.get('Name') === name);
+      if (body) break;
+    }
+    if (!body) continue;
+    const part = body.parent;
+    const w = dm.create('Weld', handle);
+    w.props.set('Name', 'AccessoryWeld');
+    w.props.set('Part0', part);
+    w.props.set('Part1', handle);
+    w.props.set('C0', body.props.get('CFrame').slice());
+    w.props.set('C1', ha.props.get('CFrame').slice());
+    handle.props.set('CFrame', C.mul(C.mul(part.props.get('CFrame'), body.props.get('CFrame')), C.inv(ha.props.get('CFrame'))));
+    handle.props.set('CanCollide', false);
+    handle.props.set('Anchored', false);
+    return;
+  }
   const ap = acc.props.get('AttachmentPoint') || C.cf();
   const w = dm.create('Weld', handle);
   w.props.set('Name', 'HeadWeld');

@@ -4,3 +4,6 @@ content/
 client/ui/*.png
 client/content-index.json
 studio/ui/*.png
+content2018/
+client/content2018-index.json
+studio/ui2018/

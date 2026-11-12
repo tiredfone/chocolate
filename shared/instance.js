@@ -1,5 +1,6 @@
 import { classInfo, canonicalProp, isA, isService, CLASSES } from './classes.js';
-import { nearestBrick } from './brickcolor.js';
+import { nearestBrick, brick } from './brickcolor.js';
+import { linkProps } from './api2018.js';
 
 const GENERIC = CLASSES.get('Instance');
 
@@ -190,6 +191,11 @@ export class DataModel {
     if (inst.listeners || this.luaSink) {
       if (inst.isA('ValueBase') && name === 'Value') this.emit(inst, 'Changed', value);
       else this.emit(inst, 'Changed', name);
+      if (this.luaSink && this.luaSubs.size && this.luaSubs.has(inst.id + ':P:' + name)) this.luaSink(inst, 'P:' + name, []);
+    }
+    if (!(opts && opts.linked)) {
+      const links = linkProps(this, inst, name, value);
+      if (links) for (const [n, v] of links) this.setProp(inst, n, v, Object.assign({}, opts, { linked: true }));
     }
     return true;
   }
@@ -301,8 +307,12 @@ export class DataModel {
         }
         let name = canonicalProp(inst.ClassName, rawName);
         if (opts.track && name && inst.info.all.has(name)) inst.fileProps.set(name, { raw: rawName, tag: pv.tag });
-        if ((rawName === 'Color3uint8' || rawName === 'Color') && !hasBrick && inst.info.all.has('BrickColor') && pv.t === 'C3') {
-          inst.props.set('BrickColor', nearestBrick(pv.v[0], pv.v[1], pv.v[2]));
+        if ((rawName === 'Color3uint8' || rawName === 'Color') && inst.info.all.has('BrickColor') && pv.t === 'C3') {
+          if (!hasBrick) inst.props.set('BrickColor', nearestBrick(pv.v[0], pv.v[1], pv.v[2]));
+          if (inst.info.all.has('Color') && inst.info.all.get('Color').type === 'C3') {
+            inst.props.set('Color', pv.v.slice(0, 3));
+            if (opts.track) inst.fileProps.set('Color', { raw: rawName, tag: pv.tag });
+          }
           continue;
         }
         if (!name || !inst.info.all.has(name)) {
@@ -321,6 +331,17 @@ export class DataModel {
         else if (pinfo.type === 'V3' && pv.t !== 'V3') continue;
         else if (pinfo.type === 'CF' && pv.t !== 'CF') continue;
         inst.props.set(name, this.coerce(inst, name, cloneValue(v)));
+      }
+      if (hasBrick && !node.props.has('Color3uint8') && !node.props.has('Color') && inst.info.all.has('Color') && inst.info.all.get('Color').type === 'C3' && inst.info.all.get('BrickColor').type === 'BC') {
+        const b = brick(inst.props.get('BrickColor'));
+        inst.props.set('Color', [b.r, b.g, b.b]);
+      }
+      if (inst.ClassName === 'BodyColors') {
+        for (const part of ['Head', 'Torso', 'LeftArm', 'RightArm', 'LeftLeg', 'RightLeg']) {
+          if (node.props.has(part + 'Color3')) continue;
+          const b = brick(inst.props.get(part + 'Color'));
+          if (inst.info.all.has(part + 'Color3')) inst.props.set(part + 'Color3', [b.r, b.g, b.b]);
+        }
       }
       if (inst.ClassName === 'Script' && opts.stripServerSource) inst.props.set('Source', '');
       for (const c of node.children) build(c, inst);

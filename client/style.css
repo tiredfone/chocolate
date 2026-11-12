@@ -359,12 +359,15 @@ html, body {
   top: 0;
   left: 0;
   right: 0;
-  min-height: 22px;
-  padding: 2px 8px;
+  min-height: 16px;
+  padding: 0 8px;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #000;
   color: #fff;
-  font: 700 14px/18px Arial, Helvetica, sans-serif;
+  font: 400 14px/16px Arial, Helvetica, sans-serif;
   text-align: center;
   white-space: pre-wrap;
   z-index: 50;
@@ -687,4 +690,100 @@ html, body {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+.ch-g-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.45) transparent;
+  overscroll-behavior: contain;
+}
+
+.ch-g-sizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+@font-face {
+  font-family: "ch-l18-ss";
+  src: url("../content2018/fonts/SourceSansPro-Regular.ttf");
+  font-display: block;
+}
+
+@font-face {
+  font-family: "ch-l18-ssl";
+  src: url("../content2018/fonts/SourceSansPro-Light.ttf");
+  font-display: block;
+}
+
+.ch-boot-2018 {
+  background: #2d2d2d !important;
+  animation: none !important;
+}
+
+.ch-l18 {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  --w: min(75vw, 150vh);
+}
+
+.ch-l18-icon {
+  flex: none;
+  width: min(var(--w), 400px, 177.78vh);
+  height: calc(min(var(--w), 400px, 177.78vh) * 0.5625);
+  background: center / cover no-repeat;
+}
+
+.ch-l18-name {
+  flex: none;
+  width: var(--w);
+  height: 80px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  overflow: hidden;
+  font: 400 min(66px, calc(var(--w) * 2 / var(--n))) / 1 "ch-l18-ss", "Source Sans 3", Arial, sans-serif;
+  white-space: nowrap;
+}
+
+.ch-l18-by {
+  flex: none;
+  width: var(--w);
+  height: 30px;
+  line-height: 30px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 300 18px/30px "ch-l18-ssl", "Source Sans 3", Arial, sans-serif;
+}
+
+.ch-l18-spin {
+  position: absolute;
+  right: 5vw;
+  bottom: 5vh;
+  width: min(15vw, 15vh, 100px);
+  height: min(15vw, 15vh, 100px);
+  animation: ch-l18-turn 2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes ch-l18-turn {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.ch-boot-2018 .ch-boot-panel {
+  display: none;
+}
+
+.ch-overlay.ch-boot-2018 p.ch-boot-status {
+  color: #fff;
+  font: 400 18px "Source Sans 3", "Segoe UI", Arial, sans-serif;
 }

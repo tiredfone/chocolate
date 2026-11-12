@@ -4365,9 +4365,9 @@ var FuncManager = class {
 				return 1;
 			}
 			const userdata = callThread.luaApi.lua_touserdata(L, 1);
-			const ref = callThread.luaApi.module.getValue(userdata, "*");
-			const value = thread.luaApi.getRef(ref).toString();
-			callThread.pushValue(`${typename}: 0x${pointer.toString(16)} -> ${value}`);
+			const ref = userdata ? callThread.luaApi.module.getValue(userdata, "*") : 0;
+			const found = userdata ? thread.luaApi.getRef(ref) : undefined;
+			callThread.pushValue(found == null ? `${typename}: 0x${pointer.toString(16)}` : `${typename}: 0x${pointer.toString(16)} -> ${found.toString()}`);
 			return 1;
 		}, "ii");
 		this.to_string = pointer;

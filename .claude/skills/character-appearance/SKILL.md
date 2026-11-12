@@ -39,3 +39,7 @@ When printing parsed nodes, note that `props` is a `Map`: `JSON.stringify` shows
 ## 4. Verify
 
 Re-run `tools/character.mjs`, restart the game server, and rejoin. Requests in this workflow must stay read-only.
+
+## Thumbnails in the GUI
+
+Player pictures in CoreScript GUIs (the 2018 menu's player rows, the player list) are not rendered by Chocolate. `Players:GetUserThumbnailAsync` returns the host's `thumbnail` (headshot) or `avatarThumbnail` URL, and `thumbnailSrc` in `client/gui.js` loads those and redirects Roblox thumbnail URLs to them. A blank picture means the host image endpoint failed: request it directly, for example `curl -H 'Host: <site>' 'http://127.0.0.1/image/headshot?userId=<id>'`.

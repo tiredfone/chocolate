@@ -1,10 +1,12 @@
 import { DataModel } from '../shared/instance.js';
 import { applyRecords, decodeValue, encodeValue } from '../shared/codec.js';
-import { ScriptHost } from '../shared/luahost.js';
+import { ScriptHost, wireArgs, unwireArgs } from '../shared/luahost.js';
+import { Core2018 } from '../shared/core2018.js';
+import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
-import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES } from '../shared/humanoid.js';
-import { loadAudio, assetId, builtin, loadCoreSources, assetBytes } from './assets.js';
+import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES, rootOf } from '../shared/humanoid.js';
+import { loadAudio, assetId, builtin, loadCoreSources, assetBytes, publicPath, endpointUrl, useContent2018 } from './assets.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 
@@ -38,10 +40,36 @@ export class ClientWorld {
     this.guiInset = [0, 0, 0, 0];
     this.touchMove = null;
     this.touchJump = false;
+    this.era = 2012;
+    this.luaMove = null;
+    this.invokes = new Map();
+    this.invokeSeq = 1;
+  }
+
+  uisInput(io, processed, kind) {
+    const uis = this.dm.services.get('UserInputService');
+    if (this.era === 2018) {
+      this.dm.emit(uis, '__Input', io, !!processed, kind);
+      return;
+    }
+    this.dm.emit(uis, kind === 'b' ? 'InputBegan' : kind === 'e' ? 'InputEnded' : 'InputChanged', io, !!processed);
+  }
+
+  async load2018() {
+    const v = this.hooks.version ? '?v=' + this.hooks.version : '';
+    const [bundle, runtime] = await Promise.all([
+      fetch(publicPath('/corescripts2018/bundle.json') + v).then((r) => (r.ok ? r.json() : {})),
+      fetch(publicPath('/shared/runtime2018.lua') + v).then((r) => (r.ok ? r.text() : '')),
+      useContent2018(),
+    ]);
+    return { bundle, runtime };
   }
 
   async init(msg, RAPIER, luaFactory, runtimeSrc) {
     const dm = this.dm;
+    this.era = msg.era === 2018 ? 2018 : 2012;
+    dm.era = this.era;
+    const pack = this.era === 2018 ? await this.load2018() : null;
     applyRecords(dm, msg.snap);
     for (const s of ['Workspace', 'Players', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'SoundService', 'Debris', 'ReplicatedStorage', 'ReplicatedFirst', 'RunService', 'UserInputService', 'ContentProvider', 'GuiService', 'Chat']) dm.service(s);
     this.player = dm.byId.get(msg.you);
@@ -69,14 +97,20 @@ export class ClientWorld {
       changed: (inst, name, old, opts) => this.onChange(inst, name, old, opts),
     });
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
-    this.coreSources = await loadCoreSources([STARTER_SCRIPT]).catch(() => new Map());
+    this.coreSources = pack ? new Map() : await loadCoreSources([STARTER_SCRIPT]).catch(() => new Map());
     const coreGui = dm.service('CoreGui');
     this.robloxGui = dm.create('ScreenGui', null);
     this.robloxGui.props.set('Name', 'RobloxGui');
     this.robloxGui.props.set('AbsoluteSize', this.guiArea().size);
     for (const o of dm.observers) if (o.created) o.created(this.robloxGui);
     dm.setParent(this.robloxGui, coreGui);
-    this.buildControlFrame();
+    if (pack) {
+      for (const s of ['StarterPlayer', 'TweenService', 'TextService', 'LocalizationService', 'VRService', 'RobloxReplicatedStorage']) dm.service(s);
+      this.core = new Core2018(dm, pack.bundle);
+      this.core.buildModules(this.robloxGui);
+      const cf = this.gui('Frame', 'ControlFrame', this.robloxGui, { BackgroundTransparency: 1, Size: [1, 0, 1, 0] });
+      this.gui('Frame', 'BottomLeftControl', cf, { BackgroundTransparency: 1, Position: [0, 0, 1, -50], Size: [0, 130, 0, 50] });
+    } else this.buildControlFrame();
     for (const s of ['ScriptContext', 'GuiService', 'LogService', 'MarketplaceService', 'TeleportService', 'InsertService', 'ChangeHistoryService', 'PersonalServerService', 'PointsService', 'HttpService', 'ContextActionService', 'NetworkClient', 'CollectionService', 'LocalBackpack']) dm.service(s);
     const uis = dm.services.get('UserInputService');
     uis.props.set('TouchEnabled', this.touch);
@@ -84,8 +118,14 @@ export class ClientWorld {
     uis.props.set('KeyboardEnabled', !this.touch);
     this.host = new ScriptHost(dm, this.env());
     this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
-    await this.host.init(luaFactory, runtimeSrc);
-    if (this.coreSources.get(STARTER_SCRIPT)) this.addCoreScript(STARTER_SCRIPT, dm.services.get('ScriptContext'), 'StarterScript');
+    if (pack) this.host.flags = FLAGS_2018;
+    await this.host.init(luaFactory, runtimeSrc, pack && pack.runtime ? [{ source: pack.runtime, name: 'runtime2018' }] : []);
+    if (pack) {
+      dm.root.props.set('PlaceId', msg.place | 0);
+      this.core.coreScript('LoadingScript', this.robloxGui);
+      this.core.starterScript(dm.services.get('ScriptContext'), false);
+    }
+    else if (this.coreSources.get(STARTER_SCRIPT)) this.addCoreScript(STARTER_SCRIPT, dm.services.get('ScriptContext'), 'StarterScript');
     for (const d of dm.root.descendants()) if (d.isA('Sound') && d.props.get('IsPlaying')) this.playSound(d, 'play');
   }
 
@@ -270,7 +310,7 @@ export class ClientWorld {
       },
       kick: (pl, msg) => { if (pl === this.player && this.hooks.kicked) this.hooks.kicked(msg || 'You have been kicked'); },
       focusTextBox: (t, on) => this.hooks.focusTextBox && this.hooks.focusTextBox(t, on),
-      isKeyDown: (k) => this.keys.has(String(k).toLowerCase()),
+      isKeyDown: (k) => (typeof k === 'number' && this.hooks.isKeyCodeDown ? this.hooks.isKeyCodeDown(k) : this.keys.has(String(k).toLowerCase())),
       setMessage: (m) => this.hooks.setMessage && this.hooks.setMessage(m),
       breakJoints: (p) => { if (this.ownModel && p.id > 0 && p.isDescendantOf(this.ownModel)) this.net.send({ t: 'break', id: p.id }); return null; },
       makeJoints: () => null,
@@ -292,6 +332,66 @@ export class ClientWorld {
         return new TextDecoder().decode(await assetBytes(id));
       },
       bubbleChat: (part, msg) => this.hooks.bubble && this.hooks.bubble(part, msg),
+      addCoreScriptLocal: (name, parent) => {
+        if (this.core && !this.core.coreScript(name, parent && !parent.destroyed ? parent : this.dm.services.get('ScriptContext')) && this.hooks.log) this.hooks.log('warn', `CoreScript ${name} is not available`, null);
+      },
+      platform: () => (this.touch ? (/android/i.test(navigator.userAgent) ? 3 : 2) : /mac/i.test(navigator.platform || '') ? 1 : 0),
+      thumbnailUrl: (id, kind) => (kind === 'avatar' && endpointUrl('avatarThumbnail', id)) || endpointUrl('thumbnail', id) || '',
+      placeThumbnailUrl: (id) => endpointUrl('placeThumbnail', id) || '',
+      productInfo: (id) => {
+        const h = this.hooks.placeInfo ? this.hooks.placeInfo() : {};
+        const mine = id === (this.dm.root.props.get('PlaceId') | 0);
+        return { AssetId: id, Name: mine ? String(h.name || '') : '', Description: '', AssetTypeId: mine ? 9 : 0, IsForSale: false, PriceInRobux: 0, Creator: { Name: mine ? String(h.creator || '') : '', CreatorType: 'User', Id: 0 } };
+      },
+      guiInsetTopLeft: () => [0, 36],
+      playerMove: (pl, dir, relative) => {
+        if (pl !== this.player || !Array.isArray(dir)) return;
+        let [x, , z] = dir;
+        const len = Math.hypot(x, z);
+        if (len < 1e-3) {
+          this.luaMove = null;
+          return;
+        }
+        if (len > 1) {
+          x /= len;
+          z /= len;
+        }
+        if (relative) {
+          const cf = this.camera.props.get('CFrame');
+          let fx = -cf[5], fz = -cf[11];
+          const fl = Math.hypot(fx, fz) || 1;
+          fx /= fl;
+          fz /= fl;
+          const rx = -fz, rz = fx;
+          this.luaMove = [rx * x - fx * z, 0, rz * x - fz * z];
+        } else this.luaMove = [x, 0, z];
+      },
+      humanoidMove: (h, dir, relative) => {
+        if (this.own && h === this.own.hum) this.host.env.playerMove(this.player, dir, relative);
+      },
+      remote: (r, op, raw) => {
+        if (op === 'fs' && r.id > 0) this.net.send({ t: 're', id: r.id, a: wireArgs(raw) });
+      },
+      invoke: (r, pl, raw) => {
+        if (r.id <= 0) return Promise.resolve([false, 'RemoteFunction is not replicated']);
+        const k = this.invokeSeq++;
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            this.invokes.delete(k);
+            resolve([false, 'InvokeServer timed out']);
+          }, 30000);
+          this.invokes.set(k, { resolve, timer });
+          this.net.send({ t: 'rf', id: r.id, k, a: wireArgs(raw) });
+        });
+      },
+      invokeResult: (r, token, raw) => this.net.send({ t: 'rfr', k: token | 0, a: wireArgs(raw) }),
+      mouseBehavior: (v) => this.hooks.mouseBehavior && this.hooks.mouseBehavior(v),
+      mouseIconEnabled: (on) => this.hooks.mouseIconEnabled && this.hooks.mouseIconEnabled(on),
+      mouseDelta: () => (this.hooks.mouseDelta ? this.hooks.mouseDelta() : [0, 0]),
+      mouseButtonDown: (t) => !!(this.hooks.mouseButtonDown && this.hooks.mouseButtonDown(t)),
+      screenRay: (x, y) => this.hooks.screenRay && this.hooks.screenRay(x, y),
+      worldToScreen: (p) => this.hooks.worldToScreen && this.hooks.worldToScreen(p),
+      measureText: (text, size, font, frame) => this.hooks.measureText && this.hooks.measureText(text, size, font, frame),
     };
   }
 
@@ -332,12 +432,23 @@ export class ClientWorld {
       if (rec) this.charDied(rec);
     }
     if (inst.isA('Sound') && (name === 'Volume' || name === 'Pitch')) this.updateSound(inst);
+    if (name === 'CFrame' && this.era === 2018 && opts && opts.lua && this.own && this.own.ctrl && inst === rootOf(this.ownModel)) {
+      const cf = inst.props.get('CFrame');
+      const lx = -cf[5], lz = -cf[11];
+      const ctrl = this.own.ctrl;
+      if (Math.hypot(lx, lz) > 1e-3) ctrl.yawCF = C.lookAt(0, 0, 0, lx, 0, lz);
+      const rec = this.own.rec;
+      if (Math.hypot(cf[0] - rec.cf[0], cf[1] - rec.cf[1], cf[2] - rec.cf[2]) > 0.75) {
+        ctrl.teleport(cf);
+        rec.cf = cf.slice();
+      } else rec.cf = C.withPos(ctrl.yawCF, rec.cf[0], rec.cf[1], rec.cf[2]);
+    }
   }
 
   trackChar(model) {
     if (this.chars.has(model)) return this.chars.get(model);
     const hum = model.findChildOfClass('Humanoid');
-    const torso = model.findChild('Torso');
+    const torso = rootOf(model);
     if (!hum || !torso || !model.findChild('Head') || hum.props.get('Health') <= 0 || torso.props.get('Anchored')) return null;
     const rec = { model, hum, rig: new Rig(model), proxy: null, target: torso.props.get('CFrame'), cf: torso.props.get('CFrame'), vel: [0, 0, 0], state: STATES.idle, dirty: false, t: 0 };
     rec.proxy = new CharacterProxy(this.physics, model, { sensors: false, blocking: true });
@@ -655,7 +766,7 @@ export class ClientWorld {
 
   seated() {
     if (!this.own) return null;
-    const torso = this.own.model.findChild('Torso');
+    const torso = rootOf(this.own.model);
     if (!torso) return null;
     const ws = this.dm.services.get('Workspace');
     if (!this.own.hum.props.get('Sit')) return null;
@@ -702,6 +813,13 @@ export class ClientWorld {
         own.ctrl.teleport(rec.cf);
       } else {
         let move = input.move;
+        if (this.era === 2018) {
+          move = this.luaMove;
+          if (own.hum.props.get('Jump')) {
+            input.jump = true;
+            dm.setProp(own.hum, 'Jump', false);
+          }
+        }
         if (own.moveTo && (!move || Math.hypot(move[0], move[2]) < 1e-3)) {
           const d = [own.moveTo[0] - rec.cf[0], 0, own.moveTo[2] - rec.cf[2]];
           if (Math.hypot(d[0], d[2]) < 1.5) {
@@ -712,6 +830,13 @@ export class ClientWorld {
         const r = own.ctrl.update(dt, { move: move || [0, 0, 0], jump: input.jump, face: input.face });
         rec.cf = r.cf;
         rec.vel = r.vel;
+        if (this.era === 2018) {
+          const map = [8, 8, 3, 5, 13, 12, 15, 8];
+          own.hum.data = Object.assign(own.hum.data || {}, { state: map[r.state] ?? 8 });
+          const md = Math.hypot(move ? move[0] : 0, move ? move[2] : 0) > 1e-3 ? move : [0, 0, 0];
+          const prevMD = own.hum.props.get('MoveDirection');
+          if (!prevMD || Math.abs(prevMD[0] - md[0]) + Math.abs(prevMD[2] - md[2]) > 1e-3) dm.setProp(own.hum, 'MoveDirection', [md[0], 0, md[2]]);
+        }
         if (r.state !== rec.state) {
           const prev = rec.state;
           rec.state = r.state;
@@ -760,6 +885,23 @@ export class ClientWorld {
     }
     this.physics.world.step();
     this.sendMouse(false);
+  }
+
+  onRemote(m) {
+    const dm = this.dm;
+    if (m.t === 'rfr') {
+      const p = this.invokes.get(m.k | 0);
+      if (!p) return;
+      this.invokes.delete(m.k | 0);
+      clearTimeout(p.timer);
+      p.resolve(unwireArgs(dm, m.a));
+      return;
+    }
+    const r = dm.byId.get(m.id | 0);
+    if (!r) return;
+    const args = unwireArgs(dm, m.a);
+    if (m.t === 're' && r.ClassName === 'RemoteEvent') dm.emit(r, 'OnClientEvent', ...args);
+    else if (m.t === 'rfc' && r.ClassName === 'RemoteFunction') dm.emit(r, '__Invoke', m.k | 0, ...args);
   }
 
   remoteAnim(m) {

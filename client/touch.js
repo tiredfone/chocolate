@@ -34,7 +34,7 @@ export class TouchInput {
   local(e) {
     const r = this.root.getBoundingClientRect();
     const k = this.world.guiScale ? this.world.guiScale() : 1;
-    return [(e.clientX - r.left) * k, (e.clientY - r.top) * k];
+    return [(e.clientX - r.left) * k, (e.clientY - r.top) * k - (this.world.era === 2018 ? 36 : 0)];
   }
 
   hits(x, y) {
@@ -63,6 +63,12 @@ export class TouchInput {
       return 0;
     });
     return out.map((h) => h.inst);
+  }
+
+  input(io, processed, kind) {
+    if (this.world.uisInput) return this.world.uisInput(io, processed, kind);
+    const uis = this.dm.services.get('UserInputService');
+    this.emit(uis, kind === 'b' ? 'InputBegan' : kind === 'e' ? 'InputEnded' : 'InputChanged', io, processed);
   }
 
   emit(inst, name, ...args) {
@@ -94,7 +100,7 @@ export class TouchInput {
     if (this.gui.isTyping() && !(e.target && e.target.closest && e.target.closest('input,textarea'))) document.activeElement.blur();
     const uis = dm.services.get('UserInputService');
     this.emit(uis, 'TouchStarted', io, processed);
-    this.emit(uis, 'InputBegan', io, processed);
+    this.input(io, processed, 'b');
     for (const g of hits) this.emit(g, 'InputBegan', io);
     this.emit(uis, 'ProcessedEvent', io, processed);
     if (!(e.target && e.target.closest && e.target.closest('input,textarea'))) e.preventDefault();
@@ -114,7 +120,7 @@ export class TouchInput {
     rec.moved = Math.max(rec.moved, Math.hypot(x - rec.sx, y - rec.sy));
     const uis = this.dm.services.get('UserInputService');
     this.emit(uis, 'TouchMoved', io, rec.processed);
-    this.emit(uis, 'InputChanged', io, rec.processed);
+    this.input(io, rec.processed, 'c');
     for (const g of this.targets(rec, x, y)) this.emit(g, 'InputChanged', io);
     e.preventDefault();
   }
@@ -130,7 +136,7 @@ export class TouchInput {
     io.props.set('UserInputState', 2);
     const uis = this.dm.services.get('UserInputService');
     this.emit(uis, 'TouchEnded', io, rec.processed);
-    this.emit(uis, 'InputEnded', io, rec.processed);
+    this.input(io, rec.processed, 'e');
     for (const g of this.targets(rec, x, y)) this.emit(g, 'InputEnded', io);
     const tap = !cancelled && !rec.processed && rec.moved < TAP_MOVE && performance.now() - rec.t0 < TAP_TIME;
     if (tap) this.tap(x, y);

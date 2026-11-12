@@ -2,6 +2,8 @@ import { Instance } from './instance.js';
 import { ENUMS, canonicalProp, isCreatable, isService, enumName } from './classes.js';
 import { BRICK, brickByName, nearestBrick, brickPalette, brick } from './brickcolor.js';
 import * as C from './cframe.js';
+import { EVENTS2018, METHODS2018 } from './classes2018.js';
+import { installMethods2018, installComputed2018, installSetters2018, LUA_CLASS } from './api2018.js';
 
 const EVENTS = {
   Instance: ['Changed', 'ChildAdded', 'ChildRemoved', 'DescendantAdded', 'DescendantRemoving', 'AncestryChanged'],
@@ -44,13 +46,18 @@ const EVENTS = {
 };
 EVENTS.Players.push('PlayerChatted', 'FriendRequestEvent');
 EVENTS.Player.push('FriendStatusChanged', 'OnTeleport');
+for (const [cls, list] of Object.entries(EVENTS2018)) {
+  const have = EVENTS[cls] || (EVENTS[cls] = []);
+  for (const e of list) if (!have.includes(e)) have.push(e);
+}
 
-const ASYNC = new Set(['LoadAsset', 'loadAsset', 'GetProductInfo', 'AwardBadge', 'UserHasBadge', 'IsInGroup', 'GetRankInGroup', 'GetRoleInGroup', 'IsFriendsWith', 'isFriendsWith', 'isInGroup', 'PlayerOwnsAsset', 'GetCollectibles', 'SaveNumber', 'LoadNumber', 'SaveString', 'LoadString', 'SaveBoolean', 'LoadBoolean', 'SaveInstance', 'LoadInstance', 'WaitForDataReady', 'waitForDataReady', 'GetFriendsOnline', 'LoadCharacter', 'loadCharacter', 'GetUserIdFromNameAsync', 'GetNameFromUserIdAsync', 'HttpGet', 'PostAsync', 'GetAsync']);
+const ASYNC = new Set(['LoadAsset', 'loadAsset', 'GetProductInfo', 'AwardBadge', 'UserHasBadge', 'IsInGroup', 'GetRankInGroup', 'GetRoleInGroup', 'IsFriendsWith', 'isFriendsWith', 'isInGroup', 'PlayerOwnsAsset', 'GetCollectibles', 'SaveNumber', 'LoadNumber', 'SaveString', 'LoadString', 'SaveBoolean', 'LoadBoolean', 'SaveInstance', 'LoadInstance', 'WaitForDataReady', 'waitForDataReady', 'GetFriendsOnline', 'LoadCharacter', 'loadCharacter', 'GetUserIdFromNameAsync', 'GetNameFromUserIdAsync', 'HttpGet', 'PostAsync', 'GetAsync', '__invokeServer', '__invokeClient', 'RequestAsync', 'GetAssetThumbnailAsync', 'GetGroupsAsync', 'GetGroupInfoAsync']);
 
 const ENGINE_FLAGS = new Set([]);
 const CAS_METHODS = ['BindAction', 'BindActionToInputTypes', 'UnbindAction', 'UnbindAllActions', 'GetAllBoundActionInfo', 'GetBoundActionInfo', 'SetTitle', 'SetImage', 'SetDescription', 'SetPosition', 'CallFunction', 'FireActionButtonFoundSignal', 'GetButton'];
 const CAS_SIDE = new Set(CAS_METHODS);
-const LUA_SIDE = new Set(['WaitForChild', 'waitForChild', 'Fire', 'Invoke', 'AddCenterDialog', 'RemoveCenterDialog', 'SendNotification', ...CAS_METHODS]);
+const TWEEN_SIDE = new Set(['TweenPosition', 'tweenPosition', 'TweenSize', 'tweenSize', 'TweenSizeAndPosition', 'tweenSizeAndPosition']);
+const LUA_SIDE = new Set(['Destroy', 'destroy', 'WaitForChild', 'waitForChild', 'Fire', 'Invoke', 'AddCenterDialog', 'RemoveCenterDialog', 'SendNotification', ...CAS_METHODS, ...TWEEN_SIDE]);
 
 const eventIndex = new Map();
 for (const [cls, list] of Object.entries(EVENTS)) for (const e of list) {
@@ -68,6 +75,14 @@ function eventFor(inst, key) {
   if (!set) return null;
   for (const c of set) if (inst.isA(c) || (c === 'DataModel' && inst.ClassName === 'DataModel')) return key.charAt(0).toUpperCase() + key.slice(1);
   return null;
+}
+
+function declared2018(inst, method) {
+  for (const cls of inst.info.chain) {
+    const list = METHODS2018[cls];
+    if (list && list.includes(method)) return true;
+  }
+  return false;
 }
 
 export class Typed {
@@ -88,12 +103,75 @@ export const T = {
   list: (v) => new Typed('l', v),
   dict: (v) => new Typed('d', v),
   ray: (o, d) => new Typed('ray', [...o, ...d]),
+  ud: (v) => new Typed('ud', v),
+  nr: (v) => new Typed('nr', v),
+  rect: (v) => new Typed('rect', v),
+  ns: (v) => new Typed('ns', v),
+  cs: (v) => new Typed('cs', v),
+  ti: (v) => new Typed('ti', v),
 };
+
+const ESCAPED = /[\uDC80-\uDCFF]/;
+
+function bytesHex(s) {
+  let h = '';
+  for (let k = 0; k < s.length; k++) {
+    let c = s.charCodeAt(k);
+    if (c >= 0xdc80 && c <= 0xdcff) {
+      h += (c - 0xdc00).toString(16).padStart(2, '0');
+      continue;
+    }
+    if (c >= 0xd800 && c <= 0xdbff && k + 1 < s.length) {
+      const d = s.charCodeAt(k + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00);
+        k++;
+      }
+    }
+    const b = c < 0x80 ? [c] : c < 0x800 ? [0xc0 | (c >> 6), 0x80 | (c & 63)] : c < 0x10000 ? [0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)] : [0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)];
+    for (const x of b) h += x.toString(16).padStart(2, '0');
+  }
+  return h;
+}
+
+function hexString(h) {
+  const b = [];
+  for (let k = 0; k + 1 < String(h).length; k += 2) b.push(parseInt(h.substr(k, 2), 16) || 0);
+  let s = '';
+  for (let k = 0; k < b.length;) {
+    const c = b[k];
+    let n = 0, cp = 0, min = 0;
+    if (c < 0x80) { s += String.fromCharCode(c); k++; continue; }
+    if (c >= 0xc2 && c <= 0xdf) { n = 1; cp = c & 31; min = 0x80; }
+    else if (c >= 0xe0 && c <= 0xef) { n = 2; cp = c & 15; min = 0x800; }
+    else if (c >= 0xf0 && c <= 0xf4) { n = 3; cp = c & 7; min = 0x10000; }
+    let ok = n > 0 && k + n < b.length;
+    for (let j = 1; ok && j <= n; j++) {
+      const d = b[k + j];
+      if (d === undefined || (d & 0xc0) !== 0x80) ok = false;
+      else cp = (cp << 6) | (d & 63);
+    }
+    if (ok && (cp < min || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))) ok = false;
+    if (ok) {
+      s += String.fromCodePoint(cp);
+      k += n + 1;
+    } else {
+      s += String.fromCharCode(0xdc00 + c);
+      k++;
+    }
+  }
+  return s;
+}
+
+function pushString(out, v) {
+  if (ESCAPED.test(v)) out.push('sx', bytesHex(v));
+  else out.push('s', v);
+}
 
 function encodeAny(out, v) {
   if (v === undefined || v === null) out.push('nil');
   else if (v instanceof Instance) out.push('i', v.id); else if (typeof v === 'number') out.push('n', v);
-  else if (typeof v === 'string') out.push('s', v);
+  else if (typeof v === 'string') pushString(out, v);
   else if (typeof v === 'boolean') out.push('b', v);
   else if (v instanceof Typed) {
     if (v.tag === 'l') {
@@ -106,7 +184,9 @@ function encodeAny(out, v) {
         out.push(k);
         encodeAny(out, v.v[k]);
       }
-    } else if (v.tag === 'e') out.push('e', v.v[0], v.v[1]);
+    } else if (v.tag === 'ns') out.push('ns', v.v.length / 3, ...v.v);
+    else if (v.tag === 'cs') out.push('cs', v.v.length / 4, ...v.v);
+    else if (v.tag === 'e') out.push('e', v.v[0], v.v[1]);
     else if (v.tag === 'bc') out.push('bc', v.v);
     else out.push(v.tag, ...v.v);
   } else if (Array.isArray(v)) {
@@ -117,7 +197,7 @@ function encodeAny(out, v) {
 
 function encodeProp(out, p, v) {
   switch (p.type) {
-    case 'string': case 'Content': out.push('s', v ?? ''); break;
+    case 'string': case 'Content': pushString(out, String(v ?? '')); break;
     case 'bool': out.push('b', !!v); break;
     case 'number': case 'int': out.push('n', v); break;
     case 'enum':
@@ -130,12 +210,17 @@ function encodeProp(out, p, v) {
     case 'C3': out.push('c3', v[0], v[1], v[2]); break;
     case 'UD2': out.push('ud2', v[0], v[1], v[2], v[3]); break;
     case 'CF': out.push('cf', ...v); break;
+    case 'UD': out.push('ud', v[0], v[1]); break;
+    case 'NR': out.push('nr', v[0], v[1]); break;
+    case 'Rect': out.push('rect', v[0], v[1], v[2], v[3]); break;
+    case 'NS': out.push('ns', v.length / 3, ...v); break;
+    case 'CS': out.push('cs', v.length / 4, ...v); break;
     case 'Ref': encodeAny(out, v); break;
     default: encodeAny(out, v);
   }
 }
 
-const ARITY = { nil: 0, b: 1, n: 1, s: 1, i: 1, v3: 3, cf: 12, c3: 3, bc: 1, ud2: 4, ud: 2, v2: 2, ray: 6, e: 2 };
+const ARITY = { nil: 0, b: 1, n: 1, s: 1, sx: 1, i: 1, v3: 3, cf: 12, c3: 3, bc: 1, ud2: 4, ud: 2, v2: 2, ray: 6, e: 2, nr: 2, rect: 4, ti: 6 };
 
 function decodeArgs(dm, a, start = 0) {
   const out = [];
@@ -149,10 +234,28 @@ function decodeArgs(dm, a, start = 0) {
       for (let k = 0; k < n; k++) list.push(one());
       return { tag: 'l', v: list };
     }
+    if (tag === 'd') {
+      const n = a[i++];
+      const obj = {};
+      for (let k = 0; k < n; k++) {
+        const key = String(a[i++]);
+        obj[key] = one();
+      }
+      return { tag: 'd', v: obj };
+    }
+    if (tag === 'ns' || tag === 'cs') {
+      const n = a[i++] * (tag === 'ns' ? 3 : 4);
+      const v = a.slice(i, i + n);
+      i += n;
+      return { tag, v };
+    }
     const n = ARITY[tag] ?? 0;
     let v;
-    if (tag === 'i') v = dm.byId.get(a[i]) || null;
-    else if (n === 1) v = a[i];
+    if (tag === 'i') v = dm.byId.get(a[i]) || (dm.ghosts && dm.ghosts.get(a[i])) || null;
+    else if (tag === 'sx') {
+      i += 1;
+      return { tag: 's', v: hexString(a[i - 1]) };
+    } else if (n === 1) v = a[i];
     else if (n > 1) v = a.slice(i, i + n);
     i += n;
     return { tag, v };
@@ -161,8 +264,8 @@ function decodeArgs(dm, a, start = 0) {
   return out;
 }
 
-const TYPE_NAME = { v3: 'Vector3', cf: 'CFrame', c3: 'Color3', bc: 'BrickColor', ud2: 'UDim2', v2: 'Vector2', s: 'string', n: 'number', b: 'bool', i: 'Object', nil: 'nil', e: 'EnumItem', l: 'table', ray: 'Ray' };
-const WANT = { V3: 'Vector3', CF: 'CFrame', C3: 'Color3', BC: 'BrickColor', UD2: 'UDim2', V2: 'Vector2', string: 'string', Content: 'Content', number: 'number', int: 'int', bool: 'bool', Ref: 'Object', enum: 'token' };
+const TYPE_NAME = { v3: 'Vector3', cf: 'CFrame', c3: 'Color3', bc: 'BrickColor', ud2: 'UDim2', v2: 'Vector2', s: 'string', n: 'number', b: 'bool', i: 'Object', nil: 'nil', e: 'EnumItem', l: 'table', d: 'table', ray: 'Ray', ud: 'UDim', nr: 'NumberRange', rect: 'Rect', ns: 'NumberSequence', cs: 'ColorSequence', ti: 'TweenInfo' };
+const WANT = { V3: 'Vector3', CF: 'CFrame', C3: 'Color3', BC: 'BrickColor', UD2: 'UDim2', V2: 'Vector2', string: 'string', Content: 'Content', number: 'number', int: 'int', bool: 'bool', Ref: 'Object', enum: 'token', UD: 'UDim', NR: 'NumberRange', Rect: 'Rect', NS: 'NumberSequence', CS: 'ColorSequence' };
 
 function coerceTo(p, a) {
   const tag = a ? a.tag : 'nil';
@@ -176,6 +279,20 @@ function coerceTo(p, a) {
     case 'C3': if (tag !== 'c3') bad(); return v;
     case 'V2': if (tag !== 'v2') bad(); return v;
     case 'UD2': if (tag !== 'ud2') bad(); return v;
+    case 'UD': if (tag !== 'ud') bad(); return v;
+    case 'NR':
+      if (tag === 'n') return [v, v];
+      if (tag !== 'nr') bad();
+      return v;
+    case 'Rect': if (tag !== 'rect') bad(); return v;
+    case 'NS':
+      if (tag === 'n') return [0, v, 0, 1, v, 0];
+      if (tag !== 'ns') bad();
+      return v;
+    case 'CS':
+      if (tag === 'c3') return [0, v[0], v[1], v[2], 1, v[0], v[1], v[2]];
+      if (tag !== 'cs') bad();
+      return v;
     case 'BC':
       if (tag === 'bc') return v;
       if (tag === 'n') return BRICK.has(v | 0) ? v | 0 : 194;
@@ -232,6 +349,7 @@ const deg = 180 / Math.PI;
 function plain(x) {
   if (!x) return undefined;
   if (x.tag === 'l') return x.v.map(plain);
+  if (x.tag === 'd') return Object.fromEntries(Object.entries(x.v).map(([k, v]) => [k, plain(v)]));
   if (x.tag === 'e') return x.v[1];
   if (x.tag === 'nil') return null;
   return x.v;
@@ -250,6 +368,7 @@ export class ScriptHost {
     this.linked = new Map();
     this.linkedPending = new Set();
     this.ghosts = new Map();
+    dm.ghosts = this.ghosts;
     this.libraries = new Map();
     this.guiKeys = new Set();
     this.t0 = Date.now();
@@ -280,7 +399,7 @@ export class ScriptHost {
       },
       destroyed: (inst) => {
         if (this.killed) this.killed.add(inst.id);
-        if (this.running.has(inst.id)) this.stopScript(inst);
+        if (this.running.has(inst.id) && !(this.selfDestroyed && this.selfDestroyed.has(inst.id))) this.stopScript(inst);
         this.ghosts.set(inst.id, inst);
         if (this.ghosts.size > 20000) {
           const first = this.ghosts.keys().next().value;
@@ -290,7 +409,7 @@ export class ScriptHost {
     });
   }
 
-  async init(LuaFactory, runtimeSource) {
+  async init(LuaFactory, runtimeSource, extensions = []) {
     this.lua = await LuaFactory();
     const g = this.lua.global;
     const data = 'return ' + luaData();
@@ -320,6 +439,13 @@ export class ScriptHost {
     const rt = g.get('__RT');
     this.step = rt.step;
     this.rtFire = rt.fire;
+    this.extSteps = [];
+    for (const x of extensions) {
+      rt.extend(x.source, x.name);
+      const r = g.get('__EXT');
+      if (r && r.step) this.extSteps.push(r.step);
+      this.lua.doStringSync('__EXT = nil');
+    }
     this.lua.doStringSync('__RT = nil');
     this.ready = true;
     for (const d of this.dm.root.descendants()) this.scanOne(d);
@@ -404,10 +530,14 @@ export class ScriptHost {
       const ws = dm.services.get('Workspace');
       const sss = dm.services.get('ServerScriptService');
       const players = dm.services.get('Players');
+      if (dm.era === 2018) {
+        const chat = dm.services.get('Chat');
+        if (chat && inst.isDescendantOf(chat)) return true;
+      }
       return (ws && inst.isDescendantOf(ws)) || (sss && inst.isDescendantOf(sss)) || (players && inst.isDescendantOf(players));
     }
     if (inst.ClassName === 'CoreScript') {
-      if (this.side !== 'client') return false;
+      if (this.side !== 'client' && dm.era !== 2018) return false;
       for (let p = inst.parent; p; p = p.parent) if (p === dm.root) return true;
       return false;
     }
@@ -429,7 +559,15 @@ export class ScriptHost {
     if (inst.ClassName !== 'Script' && inst.ClassName !== 'LocalScript' && inst.ClassName !== 'CoreScript') return;
     const run = this.canRun(inst);
     if (run && !this.running.has(inst.id)) this.startScript(inst);
-    else if (!run && this.running.has(inst.id)) this.stopScript(inst);
+    else if (!run && this.running.has(inst.id)) {
+      if (!inst.destroyed && !inst.props.get('Disabled') && !this.inDataModel(inst)) return;
+      this.stopScript(inst);
+    }
+  }
+
+  inDataModel(inst) {
+    for (let p = inst.parent; p; p = p.parent) if (p === this.dm.root) return true;
+    return false;
   }
 
   scanScripts(inst) {
@@ -471,6 +609,11 @@ export class ScriptHost {
   tick(t) {
     if (!this.step) return;
     try {
+      if (this.extSteps.length) {
+        const dt = this.lastTick == null ? 0 : Math.max(0, t - this.lastTick);
+        this.lastTick = t;
+        for (const s of this.extSteps) s(t, dt);
+      }
       this.step(t);
     } catch (e) {
       this.logs('error', 'scheduler: ' + (e && e.message ? e.message : e), null);
@@ -501,7 +644,11 @@ export class ScriptHost {
       return ['nil'];
     }
     if (key === 'ClassName' || key === 'className') return ['s', inst.ClassName];
-    if (key === 'Name') return ['s', inst.props.get('Name')];
+    if (key === 'Name') {
+      const nm = [];
+      pushString(nm, String(inst.props.get('Name') ?? ''));
+      return nm;
+    }
     const comp = this.computed.get(key);
     if (comp) {
       for (const [cls, fn] of comp) {
@@ -536,16 +683,19 @@ export class ScriptHost {
 
   methodName(inst, key) {
     const tryKey = (k) => {
+      const lc = LUA_CLASS[k];
+      if (lc && lc.some((c) => inst.isA(c))) return k;
       if (LUA_SIDE.has(k)) {
         if (k === 'Fire' && !inst.isA('BindableEvent')) return null;
         if (k === 'Invoke' && !inst.isA('BindableFunction')) return null;
         if ((k === 'AddCenterDialog' || k === 'RemoveCenterDialog' || k === 'SendNotification') && inst.ClassName !== 'GuiService') return null;
         if (CAS_SIDE.has(k) && inst.ClassName !== 'ContextActionService') return null;
+        if (TWEEN_SIDE.has(k) && !inst.isA('GuiObject')) return null;
         return k;
       }
       const list = this.methods.get(k);
-      if (!list) return null;
-      for (const [cls] of list) if (inst.isA(cls) || (cls === 'DataModel' && inst === this.dm.root)) return k;
+      if (list) for (const [cls] of list) if (inst.isA(cls) || (cls === 'DataModel' && inst === this.dm.root)) return k;
+      if (this.flags && declared2018(inst, k)) return k;
       return null;
     };
     return tryKey(key) || (key[0] >= 'a' && key[0] <= 'z' ? tryKey(key[0].toUpperCase() + key.slice(1)) : null);
@@ -619,6 +769,15 @@ export class ScriptHost {
           return out;
         }
       }
+      if (this.flags && declared2018(inst, method)) {
+        if (!this.unimplemented) this.unimplemented = new Set();
+        const key = inst.ClassName + ':' + method;
+        if (!this.unimplemented.has(key)) {
+          this.unimplemented.add(key);
+          this.logs('warn', `${key} is not implemented in this client`, null);
+        }
+        return ['ok'];
+      }
       return ['err', `${method} is not a valid member of ${inst.ClassName}`];
     } catch (e) {
       return ['err', e.message];
@@ -636,6 +795,29 @@ export class ScriptHost {
     }
     return inst.id;
   }
+}
+
+export function toTyped(x) {
+  if (!x || x.tag === 'nil') return null;
+  switch (x.tag) {
+    case 'i': return x.v || null;
+    case 'n': case 's': case 'b': return x.v;
+    case 'l': return T.list(x.v.map(toTyped));
+    case 'd': return T.dict(Object.fromEntries(Object.entries(x.v).map(([k, v]) => [k, toTyped(v)])));
+    default: return new Typed(x.tag, x.v);
+  }
+}
+
+export function wireArgs(raw) {
+  const out = [];
+  for (const a of raw) encodeAny(out, toTyped(a));
+  return out;
+}
+
+export function unwireArgs(dm, arr) {
+  if (!Array.isArray(arr) || arr.length > 20000) return [];
+  for (const v of arr) if (v !== null && typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') return [];
+  return decodeArgs(dm, arr).map(toTyped);
 }
 
 export function multi(...v) {
@@ -721,6 +903,24 @@ function buildMethods(host) {
     dm.destroy(i);
     return null;
   });
+  def('__robloxLocked', 'Instance', (i) => {
+    const cg = dm.services.get('CoreGui');
+    return !!cg && (i === cg || i.isDescendantOf(cg));
+  });
+  def('__coreCode', 'Instance', (i) => {
+    if (i.ClassName === 'CoreScript') return true;
+    const cg = dm.services.get('CoreGui');
+    if (cg && i.isDescendantOf(cg)) return true;
+    const rrs = dm.services.get('RobloxReplicatedStorage');
+    return !!rrs && i.isDescendantOf(rrs);
+  });
+  def('__DestroySelf', 'Instance', (i) => {
+    if (env.canDestroy && !env.canDestroy(i)) return null;
+    if (!host.selfDestroyed) host.selfDestroyed = new Set();
+    host.selfDestroyed.add(i.id);
+    dm.destroy(i);
+    return null;
+  });
   def('Remove remove', 'Instance', (i) => {
     if (env.canDestroy && !env.canDestroy(i)) return null;
     dm.remove(i);
@@ -736,10 +936,14 @@ function buildMethods(host) {
   def('IsAncestorOf isAncestorOf', 'Instance', (i, [o]) => (o ? o.isDescendantOf(i) : false));
   def('GetDebugId', 'Instance', (i) => String(i.id));
 
-  def('GetService getService service FindService', 'DataModel', (i, [name]) => {
+  def('GetService getService service', 'DataModel', (i, [name]) => {
     const s = dm.service(String(name));
     if (!s) throw new Error(`'${name}' is not a valid Service name`);
     return s;
+  });
+  def('FindService findService', 'DataModel', (i, [name]) => {
+    const n = name instanceof Instance ? name.ClassName : String(name ?? '');
+    return dm.services.get(n) || null;
   });
   def('IsLoaded', 'DataModel', () => (env.isLoaded ? env.isLoaded() : true));
   def('GetMessage', 'DataModel', () => (env.message ? String(env.message() || '') : ''));
@@ -873,6 +1077,11 @@ function buildMethods(host) {
   def('Kick', 'Player', (pl, [msg]) => { if (env.kick) env.kick(pl, msg ? String(msg) : ''); return null; });
   def('HasAppearanceLoaded', 'Player', () => true);
   def('IsInGroup isInGroup', 'Player', (pl, [g]) => (env.inGroup ? env.inGroup(pl, +g).then((v) => [!!v]) : Promise.resolve([false])));
+  def('GetGroupsAsync', 'GroupService', (gs, [uid]) => (env.userGroups ? env.userGroups(+uid || 0) : Promise.resolve([])).then((list) => [T.list((list || []).map((g) => T.dict(g)))]));
+  def('GetGroupInfoAsync', 'GroupService', (gs, [gid]) => (env.groupInfo ? env.groupInfo(+gid || 0) : Promise.resolve(null)).then((g) => {
+    if (!g) throw new Error('HTTP 400 (Bad Request)');
+    return [T.dict(g)];
+  }));
   def('GetRankInGroup', 'Player', (pl, [g]) => (env.groupRank ? env.groupRank(pl, +g).then((v) => [v | 0]) : Promise.resolve([0])));
   def('GetRoleInGroup', 'Player', (pl, [g]) => (env.groupRole ? env.groupRole(pl, +g).then((v) => [String(v)]) : Promise.resolve(['Guest'])));
   def('IsFriendsWith isFriendsWith', 'Player', (pl, [u]) => (env.areFriends ? env.areFriends(pl, +u).then((v) => [!!v]) : Promise.resolve([false])));
@@ -886,7 +1095,7 @@ function buildMethods(host) {
   }
   def('SaveInstance', 'Player', () => Promise.resolve([]));
   def('LoadInstance', 'Player', () => Promise.resolve([null]));
-  def('Move', 'Player', (pl, [dir]) => { if (env.playerMove) env.playerMove(pl, dir); return null; });
+  def('Move', 'Player', (pl, [dir, rel]) => { if (env.playerMove) env.playerMove(pl, dir, !!rel); return null; });
   def('GetUnder13', 'Player', () => false);
   def('DistanceFromCharacter', 'Player', (pl, [p]) => {
     const ch = pl.props.get('Character');
@@ -910,7 +1119,7 @@ function buildMethods(host) {
     if (env.humanoidMoveTo) env.humanoidMoveTo(h, pos, part);
     return null;
   });
-  def('Move', 'Humanoid', (h, [dir]) => { if (env.humanoidMove) env.humanoidMove(h, dir); return null; });
+  def('Move', 'Humanoid', (h, [dir, rel]) => { if (env.humanoidMove) env.humanoidMove(h, dir, !!rel); return null; });
   def('EquipTool', 'Humanoid', (h, [tool]) => { if (env.equipTool) env.equipTool(h, tool); return null; });
   def('UnequipTools', 'Humanoid', (h) => { if (env.unequipTools) env.unequipTools(h); return null; });
   def('Disable', 'HopperBin', (b) => { if (env.deselectBin) env.deselectBin(b); return null; });
@@ -953,7 +1162,8 @@ function buildMethods(host) {
   def('IsDisabled', 'BadgeService', () => false);
   def('IsLegal', 'BadgeService', () => true);
 
-  def('GetProductInfo', 'MarketplaceService', (s, [id]) => Promise.resolve([T.list([])]));
+  const deepDict = (o) => (o && typeof o === 'object' && !Array.isArray(o) && !(o instanceof Typed) && !(o instanceof Instance) ? T.dict(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, deepDict(v)]))) : o);
+  def('GetProductInfo', 'MarketplaceService', (s, [id]) => Promise.resolve([env.productInfo ? deepDict(env.productInfo(+id || 0)) : T.list([])]));
   def('PromptPurchase PromptProductPurchase PromptGamePassPurchase', 'MarketplaceService', () => null);
   def('PlayerOwnsAsset', 'MarketplaceService', () => Promise.resolve([false]));
   def('PlayerHasPass', 'GamePassService', () => false);
@@ -971,7 +1181,11 @@ function buildMethods(host) {
   def('IsRunMode IsRunning', 'RunService', () => true);
   def('Run Pause Reset Stop', 'RunService', () => null);
   def('BindToRenderStep UnbindFromRenderStep', 'RunService', () => null);
-  def('GenerateGUID', 'HttpService', () => crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2));
+  def('GenerateGUID', 'HttpService', (h, [wrap]) => {
+    const c = globalThis.crypto;
+    const id = c && c.randomUUID ? c.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => ((Math.random() * 16) | (ch === 'y' ? 8 : 0)).toString(16).slice(-1));
+    return wrap === false ? id.toUpperCase() : '{' + id.toUpperCase() + '}';
+  });
   def('JSONEncode', 'HttpService', () => '{}');
   def('JSONDecode', 'HttpService', () => T.list([]));
   def('GetAsync PostAsync', 'HttpService', () => Promise.reject(new Error('Http requests are not enabled')));
@@ -991,6 +1205,7 @@ function buildMethods(host) {
   def('Check Require Fail Error Warn Checkpoint Done', 'TestService', () => null);
 
   def('TweenPosition tweenPosition', 'GuiObject', (g, a) => tweenGui(host, g, { pos: a[0], easingDir: a[1], easingStyle: a[2], time: a[3], override: a[4] }));
+  def('__TweenState', 'GuiObject', (g, [serial]) => tweenStates.get(+serial) || 'canceled');
   def('TweenSize tweenSize', 'GuiObject', (g, a) => tweenGui(host, g, { size: a[0], easingDir: a[1], easingStyle: a[2], time: a[3], override: a[4] }));
   def('TweenSizeAndPosition tweenSizeAndPosition', 'GuiObject', (g, a) => tweenGui(host, g, { size: a[0], pos: a[1], easingDir: a[2], easingStyle: a[3], time: a[4], override: a[5] }));
   def('CaptureFocus', 'TextBox', (t) => { if (env.focusTextBox) env.focusTextBox(t, true); return null; });
@@ -1010,8 +1225,8 @@ function buildMethods(host) {
   });
   def('__UserSettings', 'DataModel', () => host.userSettings());
   def('__settings', 'DataModel', () => host.globalSettings());
-  def('GetFFlag GetFastFlag DefineFastFlag', 'DataModel', () => false);
-  def('GetFFlag GetFastFlag', 'GlobalSettings', (g, [name]) => ENGINE_FLAGS.has(String(name)));
+  def('GetFFlag GetFastFlag DefineFastFlag', 'DataModel', (g, [name]) => !!(host.flags && host.flags.has(String(name))));
+  def('GetFFlag GetFastFlag', 'GlobalSettings', (g, [name]) => ENGINE_FLAGS.has(String(name)) || !!(host.flags && host.flags.has(String(name))));
   def('GetFVariable GetFastVariable', 'DataModel', () => '');
   def('GetMaxQualityLevel', 'RenderSettings', () => 21);
   def('SetTutorialState', 'UserGameSettings', () => null);
@@ -1047,10 +1262,13 @@ function buildMethods(host) {
   def('SignalPromptProductPurchaseFinished SignalPromptPurchaseFinished SignalClientPurchaseSuccess SignalServerLuaDialogClosed', 'MarketplaceService', () => null);
   def('TeleportCancel', 'TeleportService', () => null);
   def('HttpGetAsync HttpPostAsync', 'DataModel', () => Promise.reject(new Error('Http requests are not enabled')));
+  installMethods2018(def, host, { T, multi, Instance });
   return M;
 }
 
 const tweens = new Map();
+const tweenStates = new Map();
+let tweenSerial = 0;
 
 function easing(style, dir, t) {
   const f = {
@@ -1081,29 +1299,43 @@ function tweenGui(host, g, o) {
   let slot = tweens.get(g);
   if (!slot) tweens.set(g, (slot = {}));
   if (!o.override && kinds.some((k) => slot[k])) return false;
-  for (const k of kinds) if (slot[k]) clearInterval(slot[k]);
+  for (const k of kinds) if (slot[k]) {
+    clearInterval(slot[k]);
+    const prev = slot.serial && slot.serial.get(slot[k]);
+    if (prev) tweenStates.set(prev, 'canceled');
+  }
+  const serial = ++tweenSerial;
+  tweenStates.set(serial, 'running');
+  if (tweenStates.size > 4096) for (const key of tweenStates.keys()) {
+    if (tweenStates.size <= 2048) break;
+    tweenStates.delete(key);
+  }
   const time = Number.isFinite(o.time) ? o.time : 1;
   const from = { pos: g.props.get('Position').slice(), size: g.props.get('Size').slice() };
   const dir = typeof o.easingDir === 'string' ? ENUMS.EasingDirection[o.easingDir] ?? 1 : o.easingDir ?? 1;
   const style = typeof o.easingStyle === 'string' ? ENUMS.EasingStyle[o.easingStyle] ?? 3 : o.easingStyle ?? 3;
   const t0 = Date.now();
-  const done = () => {
+  const done = (state) => {
     clearInterval(iv);
+    tweenStates.set(serial, state);
     for (const k of kinds) if (slot[k] === iv) delete slot[k];
+    if (slot.serial) slot.serial.delete(iv);
     if (!slot.pos && !slot.size) tweens.delete(g);
   };
   const tick = () => {
-    if (g.destroyed) return done();
+    if (g.destroyed) return done('canceled');
     const k = time <= 0 ? 1 : Math.min(1, (Date.now() - t0) / 1000 / time);
     const e = easing(style, dir, k);
     if (o.pos) host.dm.setProp(g, 'Position', from.pos.map((v, i) => v + (o.pos[i] - v) * e), { lua: true });
     if (o.size) host.dm.setProp(g, 'Size', from.size.map((v, i) => v + (o.size[i] - v) * e), { lua: true });
-    if (k >= 1) done();
+    if (k >= 1) done('completed');
   };
   const iv = setInterval(tick, 1000 / 30);
   for (const k of kinds) slot[k] = iv;
+  if (!slot.serial) slot.serial = new Map();
+  slot.serial.set(iv, serial);
   tick();
-  return true;
+  return serial;
 }
 
 export function sunDirection(l) {
@@ -1130,6 +1362,13 @@ function buildComputed(host) {
     return T.v3([cf[0], cf[1], cf[2]]);
   });
   def('GripPos', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[0], g[1], g[2]]); });
+  const textBounds = (t) => {
+    const v = host.env && host.env.textBounds ? host.env.textBounds(t) : null;
+    return T.v2(v || t.props.get('TextBounds') || [0, 0]);
+  };
+  def('TextBounds', 'TextLabel', textBounds);
+  def('TextBounds', 'TextButton', textBounds);
+  def('TextBounds', 'TextBox', textBounds);
   def('GripRight', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[3], g[6], g[9]]); });
   def('GripUp', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([g[4], g[7], g[10]]); });
   def('GripForward', 'Tool', (t) => { const g = t.props.get('Grip'); return T.v3([-g[5], -g[8], -g[11]]); });
@@ -1174,6 +1413,7 @@ function buildComputed(host) {
   def('Backpack', 'Player', (p) => p.findChildOfClass('Backpack'));
   def('PlayerGui', 'Player', (p) => p.findChildOfClass('PlayerGui'));
   def('TextFits', 'GuiObject', () => true);
+  installComputed2018(def, host, { T, Instance });
   return M;
 }
 
@@ -1264,6 +1504,7 @@ function buildSetters(host) {
   });
   def('TargetFilter', 'Mouse', (m, a) => dm.setProp(m, 'TargetFilter', a && a.tag === 'i' ? a.v : null, { lua: true }));
   def('Icon', 'Mouse', (m, a) => dm.setProp(m, 'Icon', a ? String(a.v ?? '') : '', { lua: true }));
+  installSetters2018(def, host, { T, Instance });
   return M;
 }
 
@@ -1306,6 +1547,14 @@ function luaData() {
 
 export { minutesOf, todOf, modelCFrame, partsOf, boundsOf, encodeAny, decodeArgs, enumName };
 
+function luaClassMethods(out) {
+  for (const [name, classes] of Object.entries(LUA_CLASS)) for (const c of classes) {
+    const list = out[c] || (out[c] = []);
+    if (!list.includes(name)) list.push(name);
+  }
+  return out;
+}
+
 export function memberIndex() {
   const host = { dm: { services: new Map(), root: null }, env: {} };
   const byClass = (map) => {
@@ -1317,9 +1566,9 @@ export function memberIndex() {
     return out;
   };
   return {
-    methods: byClass(buildMethods(host)),
+    methods: new Map([...byClass(buildMethods(host))].map(([c, set]) => [c, new Set([...set].filter((n) => !n.startsWith('__')))])),
     computed: byClass(buildComputed(host)),
     events: new Map(Object.entries(EVENTS).map(([k, v]) => [k, new Set(v)])),
-    luaMethods: { ContextActionService: CAS_METHODS, Instance: ['WaitForChild', 'waitForChild'], BindableEvent: ['Fire'], BindableFunction: ['Invoke'] },
+    luaMethods: luaClassMethods({ ContextActionService: [...CAS_METHODS], Instance: ['WaitForChild', 'waitForChild'], BindableEvent: ['Fire'], BindableFunction: ['Invoke'] }),
   };
 }

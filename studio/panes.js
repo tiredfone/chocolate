@@ -2,7 +2,7 @@ import { completions } from './reference.js';
 import { endpointUrl } from '../client/assets.js';
 import { el, classIconStyle } from './ui.js';
 import { brick, brickPalette, brickList } from '../shared/brickcolor.js';
-import { ENUMS, isCreatable, CLASSES } from '../shared/classes.js';
+import { ENUMS, isCreatable, CLASSES, propEra, classEra } from '../shared/classes.js';
 
 const CLASS_ICON = {
   Part: 1, WedgePart: 1, CornerWedgePart: 1, TrussPart: 1, Terrain: 1, Model: 2, Status: 2, StringValue: 4, IntValue: 4, NumberValue: 4, BoolValue: 4,
@@ -209,7 +209,8 @@ export class Properties {
     this.table.replaceChildren();
     if (!sel.length) return;
     const first = sel[0];
-    const names = [...first.info.all.keys()].filter((n) => !HIDDEN.has(n) && sel.every((s) => s.info.all.has(n)) && first.info.all.get(n).type !== 'any');
+    const era = this.app.era === 2018 ? 2018 : 2012;
+    const names = [...first.info.all.keys()].filter((n) => !HIDDEN.has(n) && sel.every((s) => s.info.all.has(n)) && first.info.all.get(n).type !== 'any' && (era === 2018 || propEra(first.ClassName, n) === 2012));
     const rows = names.map((n) => ({ name: n, info: first.info.all.get(n) }));
     rows.push({ name: 'ClassName', info: { type: 'readonly' } });
     if (first.parent !== undefined) rows.push({ name: 'Parent', info: { type: 'parent' } });
@@ -373,8 +374,8 @@ const BASIC = ['Part', 'WedgePart', 'CornerWedgePart', 'TrussPart', 'Seat', 'Spa
   'TextLabel', 'TextButton', 'TextBox', 'ImageLabel', 'ImageButton', 'BillboardGui', 'StringValue', 'IntValue', 'NumberValue', 'BoolValue', 'ObjectValue', 'Vector3Value',
   'BrickColorValue', 'BodyGyro', 'BodyPosition', 'BodyVelocity', 'BodyForce', 'Weld', 'Team', 'Sky', 'Dialog', 'DialogChoice', 'Configuration'];
 
-export function creatableClasses() {
-  const all = [...CLASSES.keys()].filter((c) => isCreatable(c));
+export function creatableClasses(era = 2018) {
+  const all = [...CLASSES.keys()].filter((c) => isCreatable(c) && (era === 2018 || classEra(c) === 2012));
   const set = new Set(all);
   return [...BASIC.filter((c) => set.has(c)), ...all.filter((c) => !BASIC.includes(c)).sort()];
 }
@@ -458,7 +459,7 @@ export class Toolbox {
   }
 
   basic(q) {
-    for (const c of creatableClasses()) {
+    for (const c of creatableClasses(this.app && this.app.era)) {
       if (q && !c.toLowerCase().includes(q)) continue;
       const row = el('div', 'st-obj', this.list);
       const ic = el('div', 'st-cicon', row);

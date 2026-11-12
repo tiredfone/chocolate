@@ -1,3 +1,5 @@
+import { DEFS2018, ENUMS2018, ENUM_PROPS2018 } from './classes2018.js';
+
 export const ENUMS = {
   PartType: { Ball: 0, Block: 1, Cylinder: 2 },
   SurfaceType: { Smooth: 0, Glue: 1, Weld: 2, Studs: 3, Inlet: 4, Universal: 5, Hinge: 6, Motor: 7, SteppingMotor: 8, Unjoinable: 9, SmoothNoOutlines: 10 },
@@ -57,6 +59,7 @@ export const ENUMS = {
   UploadSetting: { Never: 0, 'Ask me first': 1, Ask: 1, Always: 2 },
   CameraMode: { Classic: 0, LockFirstPerson: 1 },
   EasingDirection: { In: 0, Out: 1, InOut: 2 },
+  TweenStatus: { Canceled: 0, Completed: 1 },
   EasingStyle: { Linear: 0, Sine: 1, Back: 2, Quad: 3, Quart: 4, Quint: 5, Bounce: 6, Elastic: 7 },
 };
 
@@ -87,7 +90,7 @@ const DEFS = {
   Instance: { props: 'Name:string Archivable:bool=true RobloxLocked:bool=false', abstract: true },
   DataModel: { base: 'Instance', props: 'PlaceId:int=0 JobId:string CreatorId:int=0 GameId:int=0' },
   ServiceProvider: { base: 'Instance', abstract: true },
-  Workspace: { base: 'Model', service: true, props: 'CurrentCamera:Ref DistributedGameTime:number=0 Gravity:number=196.2 FallenPartsDestroyHeight:number=-500 FilteringEnabled:bool=false' },
+  Workspace: { base: 'Model', service: true, props: 'CurrentCamera:Ref DistributedGameTime:number=0 Gravity:number=196.2 FallenPartsDestroyHeight:number=-500 FilteringEnabled:bool=false CollisionGroups:string=' },
   Players: { base: 'Instance', service: true, props: 'CharacterAutoLoads:bool=true MaxPlayers:int=12 LocalPlayer:Ref NumPlayers:int=0 BubbleChat:bool=true ClassicChat:bool=true' },
   Lighting: {
     base: 'Instance', service: true,
@@ -104,7 +107,7 @@ const DEFS = {
   ReplicatedStorage: { base: 'Instance', service: true },
   ReplicatedFirst: { base: 'Instance', service: true },
   ServerStorage: { base: 'Instance', service: true },
-  ServerScriptService: { base: 'Instance', service: true },
+  ServerScriptService: { base: 'Instance', service: true, props: 'LoadStringEnabled:bool=false' },
   InsertService: { base: 'Instance', service: true },
   RunService: { base: 'Instance', service: true },
   BadgeService: { base: 'Instance', service: true },
@@ -126,7 +129,7 @@ const DEFS = {
   GlobalSettings: { base: 'Instance', abstract: true },
   RenderSettings: { base: 'Instance', abstract: true, props: 'QualityLevel:enum=0 EnableFRM:bool=true AutoFRMLevel:int=0' },
   UserInputService: { base: 'Instance', service: true, props: 'TouchEnabled:bool=false KeyboardEnabled:bool=true MouseEnabled:bool=true AccelerometerEnabled:bool=false GyroscopeEnabled:bool=false GamepadEnabled:bool=false ModalEnabled:bool=false' },
-  InputObject: { base: 'Instance', nocreate: true, props: 'UserInputType:enum=18 UserInputState:enum=4 Position:V3 Delta:V3' },
+  InputObject: { base: 'Instance', nocreate: true, props: 'UserInputType:enum=21 UserInputState:enum=4 Position:V3 Delta:V3' },
   ContextActionService: { base: 'Instance', service: true },
   TweenService: { base: 'Instance', service: true },
   JointsService: { base: 'Instance', service: true },
@@ -300,6 +303,39 @@ const DEFS = {
   PlayerMouse: { base: 'Mouse' },
 };
 
+for (const [name, items] of Object.entries(ENUMS2018)) {
+  const e = ENUMS[name] || (ENUMS[name] = {});
+  for (const [k, v] of Object.entries(items)) if (!(k in e)) e[k] = v;
+}
+ENUMS.UserInputType.None = 21;
+
+const ERA2018_PROPS = new Set();
+const SKIP2018 = new Set(['Instance.Parent', 'Instance.ClassName', 'Instance.className', 'Instance.DataCost', 'BasePart.Position', 'BasePart.Rotation', 'BasePart.Orientation', 'BasePart.ReceiveAge', 'BasePart.SpecificGravity', 'Tool.GripPos', 'Tool.GripForward', 'Tool.GripRight', 'Tool.GripUp', 'Accoutrement.AttachmentPos', 'Accoutrement.AttachmentForward', 'Accoutrement.AttachmentRight', 'Accoutrement.AttachmentUp', 'Attachment.Position', 'Attachment.Orientation', 'Attachment.Rotation', 'Attachment.Axis', 'Attachment.SecondaryAxis', 'Attachment.WorldPosition', 'Attachment.WorldOrientation', 'Attachment.WorldRotation', 'Attachment.WorldAxis', 'Attachment.WorldSecondaryAxis', 'Attachment.WorldCFrame', 'Model.PrimaryPart', 'Players.NumPlayers', 'Camera.CoordinateFrame', 'Camera.ViewportSize', 'Lighting.ClockTime', 'Mouse.Hit', 'Mouse.UnitRay', 'Mouse.Origin', 'Humanoid.Torso', 'Humanoid.LeftLeg', 'Humanoid.RightLeg', 'Humanoid.SeatPart', 'Humanoid.FloorMaterial', 'Humanoid.RootPart', 'Player.Character', 'GuiObject.Transparency', 'TextLabel.TextFits', 'TextButton.TextFits', 'TextBox.TextFits', 'TextLabel.TextBounds', 'TextButton.TextBounds', 'TextBox.TextBounds', 'TextLabel.LocalizedText', 'TextButton.LocalizedText', 'TextBox.LocalizedText', 'GuiBase2d.AbsolutePosition', 'GuiBase2d.AbsoluteSize', 'GuiBase2d.AbsoluteRotation', 'GuiBase2d.Localize', 'ScrollingFrame.AbsoluteWindowSize', 'ScrollingFrame.CanvasPosition', 'UIGridStyleLayout.AbsoluteContentSize', 'Sound.IsPlaying', 'Sound.IsPaused', 'Sound.IsLoaded', 'Sound.TimeLength', 'Sound.PlaybackLoudness', 'Sound.Playing', 'AnimationTrack.IsPlaying', 'AnimationTrack.Length', 'AnimationTrack.TimePosition', 'AnimationTrack.Speed', 'AnimationTrack.WeightCurrent', 'AnimationTrack.WeightTarget', 'AnimationTrack.Animation', 'Players.LocalPlayer', 'DataModel.Workspace', 'DataModel.lighting', 'DataModel.workspace', 'Workspace.Terrain', 'Player.Team', 'DataModel.PlaceId', 'DataModel.JobId', 'DataModel.CreatorId', 'DataModel.GameId']);
+for (const [name, def] of Object.entries(DEFS2018)) {
+  const seen = new Set();
+  const props = def.props.split(' ').filter(Boolean).filter((tok) => {
+    const pn = tok.split(':')[0];
+    if (SKIP2018.has(name + '.' + pn) || seen.has(pn.toLowerCase())) return false;
+    seen.add(pn.toLowerCase());
+    return true;
+  });
+  const have = new Set();
+  const chainOf = (c) => DEFS[c] || DEFS2018[c];
+  for (let c = DEFS[name] ? DEFS[name].base : def.base; c && chainOf(c); c = chainOf(c).base) for (const tok of (chainOf(c).props || '').split(/\s+/)) if (tok) have.add(tok.split(':')[0].toLowerCase());
+  const mine = DEFS[name];
+  if (mine) for (const tok of (mine.props || '').split(/\s+/)) if (tok) have.add(tok.split(':')[0].toLowerCase());
+  const extra = props.filter((tok) => !have.has(tok.split(':')[0].toLowerCase()));
+  for (const tok of extra) ERA2018_PROPS.add(name + '.' + tok.split(':')[0]);
+  if (!mine) {
+    DEFS[name] = { base: def.base, props: extra.join(' '), abstract: def.abstract, service: def.service, era: 2018 };
+    continue;
+  }
+  if (extra.length) mine.props = [mine.props || '', ...extra].join(' ').trim();
+}
+
+DEFS.MeshPart.props = [DEFS.MeshPart.props || '', 'InitialSize:V3=1,1,1'].join(' ').trim();
+DEFS.PartOperation.props = [DEFS.PartOperation.props || '', 'AssetId:Content InitialSize:V3=1,1,1'].join(' ').trim();
+
 const TYPE_ALIASES = { size: 'Size', shape: 'Shape', formFactorRaw: 'FormFactor', formFactor: 'FormFactor', archivable: 'Archivable', style: 'Style' };
 
 function parseDefault(type, raw) {
@@ -314,6 +350,10 @@ function parseDefault(type, raw) {
       case 'CF': return [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
       case 'UD2': return [0, 0, 0, 0];
       case 'BC': return 194;
+      case 'UD': case 'NR': return [0, 0];
+      case 'Rect': return [0, 0, 0, 0];
+      case 'NS': return [0, 0, 0, 1, 0, 0];
+      case 'CS': return [0, 1, 1, 1, 0, 1, 1, 1, 1, 0];
       default: return null;
     }
   }
@@ -321,7 +361,7 @@ function parseDefault(type, raw) {
     case 'string': case 'Content': return raw;
     case 'bool': return raw === 'true';
     case 'int': case 'number': case 'enum': case 'BC': return +raw;
-    case 'V3': case 'V2': case 'C3': case 'UD2': return raw.split(',').map(Number);
+    case 'V3': case 'V2': case 'C3': case 'UD2': case 'UD': case 'NR': case 'Rect': case 'NS': case 'CS': return raw.split(',').map(Number);
     case 'CF': {
       const p = raw.split(',').map(Number);
       return [p[0] || 0, p[1] || 0, p[2] || 0, 1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -339,9 +379,9 @@ for (const [name, def] of Object.entries(DEFS)) {
     const m = /^([\w]+):(\w+)(?:=(.*))?$/.exec(tok);
     if (!m) throw new Error('bad prop def ' + tok);
     const [, pn, type, raw] = m;
-    props.set(pn, { type, def: parseDefault(type, raw), enumType: type === 'enum' ? (CLASS_ENUM_PROPS[name] && CLASS_ENUM_PROPS[name][pn]) || ENUM_PROPS[pn] || null : null });
+    props.set(pn, { type, def: parseDefault(type, raw), enumType: type === 'enum' ? (CLASS_ENUM_PROPS[name] && CLASS_ENUM_PROPS[name][pn]) || ENUM_PROPS[pn] || (ENUM_PROPS2018[name] && ENUM_PROPS2018[name][pn]) || null : null });
   }
-  CLASSES.set(name, { name, base: def.base || null, own: props, aliases: def.aliases || {}, abstract: !!def.abstract, service: !!def.service, nocreate: !!def.nocreate, all: null, chain: null });
+  CLASSES.set(name, { name, base: def.base || null, own: props, aliases: def.aliases || {}, abstract: !!def.abstract, service: !!def.service, nocreate: !!def.nocreate, era: def.era || 2012, all: null, chain: null });
 }
 
 function resolve(c) {
@@ -401,11 +441,21 @@ export function isService(name) {
   return !!c && c.service;
 }
 
-export const REPLICATED_SERVICES = ['Workspace', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'Players', 'SoundService', 'ReplicatedStorage', 'ReplicatedFirst', 'Chat'];
+export const REPLICATED_SERVICES = ['Workspace', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'Players', 'SoundService', 'ReplicatedStorage', 'ReplicatedFirst', 'Chat', 'JointsService'];
 
 export function enumName(enumType, value) {
   const e = ENUMS[enumType];
   if (!e) return null;
   for (const [k, v] of Object.entries(e)) if (v === value) return k;
   return null;
+}
+
+export function propEra(cls, name) {
+  for (let c = CLASSES.get(cls); c; c = c.base ? CLASSES.get(c.base) : null) if (ERA2018_PROPS.has(c.name + '.' + name)) return 2018;
+  return 2012;
+}
+
+export function classEra(cls) {
+  const c = CLASSES.get(cls);
+  return c ? c.era : 2012;
 }

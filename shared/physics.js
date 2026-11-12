@@ -1,4 +1,5 @@
 import * as C from './cframe.js';
+import { parseGroups, rapierGroups, groupsCollide } from './collisiongroups.js';
 
 export const GRAVITY = 196.2;
 const STEP = 1 / 60;
@@ -114,8 +115,30 @@ export class Physics {
     this.leave(inst);
   }
 
+  groupTable() {
+    return parseGroups(this.ws ? this.ws.props.get('CollisionGroups') : '');
+  }
+
+  groupsCollide(a, b) {
+    return groupsCollide(this.groupTable(), a, b);
+  }
+
+  refreshGroups() {
+    const t = this.groupTable();
+    for (const rec of this.parts.values()) if (rec.collider) rec.collider.setCollisionGroups(rapierGroups(t, rec.part.props.get('CollisionGroupId') | 0));
+  }
+
   changed(inst, name, old, opts) {
     if (opts && opts.physics) return;
+    if (name === 'CollisionGroups' && inst === this.ws) {
+      this.refreshGroups();
+      return;
+    }
+    if (name === 'CollisionGroupId' && inst.isA('BasePart')) {
+      const rec = this.parts.get(inst);
+      if (rec && rec.collider) rec.collider.setCollisionGroups(rapierGroups(this.groupTable(), inst.props.get('CollisionGroupId') | 0));
+      return;
+    }
     if (inst.isA('BasePart')) {
       const rec = this.parts.get(inst);
       if (!rec) return;
@@ -228,6 +251,7 @@ export class Physics {
     desc.setRestitution(part.props.get('Elasticity') * 0.3);
     desc.setDensity(0.7);
     desc.setSensor(!part.props.get('CanCollide'));
+    desc.setCollisionGroups(rapierGroups(this.groupTable(), part.props.get('CollisionGroupId') | 0));
     desc.setActiveCollisionTypes(this.R.ActiveCollisionTypes.DEFAULT | this.R.ActiveCollisionTypes.KINEMATIC_FIXED | this.R.ActiveCollisionTypes.KINEMATIC_KINEMATIC);
     if (rec.touch) desc.setActiveEvents(this.R.ActiveEvents.COLLISION_EVENTS);
     rec.collider = body ? this.world.createCollider(desc, body) : this.world.createCollider(desc);

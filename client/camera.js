@@ -22,7 +22,7 @@ export class CameraController {
     });
     this.cf = C.cf(0, 20, 20);
     canvas.addEventListener('pointerdown', (e) => {
-      if (e.button === 2) {
+      if (e.button === 2 && !this.luaDriven) {
         this.dragging = true;
         this.dragMoved = 0;
         try {
@@ -41,6 +41,7 @@ export class CameraController {
       }
     });
     window.addEventListener('pointermove', (e) => {
+      if (this.luaDriven) return;
       if (this.dragging || ((this.firstPerson || this.shiftLock) && document.pointerLockElement === canvas)) {
         this.yaw -= e.movementX * 0.002 * Math.PI;
         this.pitch -= e.movementY * 0.0015 * Math.PI;
@@ -50,6 +51,7 @@ export class CameraController {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (this.luaDriven) return;
       const unit = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100;
       if (Math.sign(e.deltaY) !== Math.sign(this.wheelAcc || 0)) this.wheelAcc = 0;
       this.wheelAcc = (this.wheelAcc || 0) + e.deltaY / unit;
@@ -88,6 +90,7 @@ export class CameraController {
   }
 
   mouseLocked() {
+    if (this.luaDriven) return !!(this.world.input2018 && this.world.input2018.behavior === 1 && document.pointerLockElement === this.canvas);
     return document.pointerLockElement === this.canvas && (this.shiftLock || this.firstPerson);
   }
 
@@ -153,6 +156,18 @@ export class CameraController {
     const world = this.world;
     const cam = world.camera;
     const type = cam.props.get('CameraType');
+    if (this.luaDriven) {
+      this.cf = cam.props.get('CFrame');
+      const tc0 = this.renderer.camera;
+      applyCF(tc0, this.cf);
+      const fov0 = cam.props.get('FieldOfView') || 70;
+      if (tc0.fov !== fov0) {
+        tc0.fov = fov0;
+        tc0.updateProjectionMatrix();
+      }
+      world.listener(this.cf);
+      return;
+    }
     this.yaw += this.keyYaw * dt * 2.2;
     this.zoom = this.targetZoom;
     const fp = this.zoom < 1;

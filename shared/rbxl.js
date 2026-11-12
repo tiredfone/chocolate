@@ -348,6 +348,20 @@ function parseBinary(bytes) {
           if (base && CONTENT_PROPS.has(base)) for (let i = 0; i < n; i++) if (vals[i] && !list[i].props.has(base)) list[i].props.set(base, { t, v: vals[i] });
           break;
         }
+        case 32: {
+          vals = [];
+          const fdv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+          for (let i = 0; i < n; i++) {
+            const fl = u32(data, q); q += 4;
+            const family = td.decode(data.subarray(q, q + fl)); q += fl;
+            const weight = fdv.getUint16(q, true); q += 2;
+            const style = data[q++];
+            const cl = u32(data, q); q += 4 + cl;
+            vals.push({ family, weight, italic: style === 1 });
+          }
+          t = 'FontFace';
+          break;
+        }
         default: break;
       }
       if (vals) for (let i = 0; i < n; i++) list[i].props.set(pn, { t, v: vals[i] });
@@ -393,12 +407,42 @@ function parseBinary(bytes) {
 
 const parentOf = new Map();
 
+const FONT_FAMILIES = { sourcesanspro: 3, arial: 1, arimo: 1, accanthisadfstd: 7, guru: 8, comicneueangular: 9, inconsolata: 10, highwaygothic: 11, zekton: 12, pressstart2p: 13, balthazar: 14, romanantique: 15 };
+
+function legacyFont(f) {
+  const m = /([A-Za-z0-9]+)\.json\s*$/.exec(String(f.family || ''));
+  const base = m ? FONT_FAMILIES[m[1].toLowerCase()] : undefined;
+  if (base === undefined) return f.weight >= 700 ? 4 : f.weight >= 600 ? 16 : 3;
+  if (base === 3) return f.italic ? 6 : f.weight >= 700 ? 4 : f.weight >= 600 ? 16 : f.weight <= 300 ? 5 : 3;
+  if (base === 1) return f.weight >= 600 ? 2 : 1;
+  return base;
+}
+
+function fillLegacyFonts(nodes) {
+  const stack = nodes.slice();
+  while (stack.length) {
+    const n = stack.pop();
+    const ff = n.props && n.props.get('FontFace');
+    if (ff && ff.t === 'FontFace') {
+      if (!n.props.has('Font')) n.props.set('Font', { t: 'enum', v: legacyFont(ff.v) });
+      n.props.delete('FontFace');
+    } else if (ff && ff.t === 'raw' && !n.props.has('Font')) {
+      const x = String(ff.v);
+      const fam = /<Family>\s*<url>([^<]*)<\/url>/i.exec(x);
+      const w = /<Weight>(\d+)<\/Weight>/i.exec(x);
+      n.props.set('Font', { t: 'enum', v: legacyFont({ family: fam ? fam[1] : '', weight: w ? +w[1] : 400, italic: /<Style>Italic<\/Style>/i.test(x) }) });
+    }
+    if (n.children) for (const c of n.children) stack.push(c);
+  }
+  return nodes;
+}
+
 export function parsePlace(input) {
   let bytes = null;
   let text = null;
   if (typeof input === 'string') text = input;
   else bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-  if (bytes && bytes.length >= 8 && String.fromCharCode(...bytes.subarray(0, 8)) === '<roblox!') return parseBinary(bytes);
+  if (bytes && bytes.length >= 8 && String.fromCharCode(...bytes.subarray(0, 8)) === '<roblox!') return fillLegacyFonts(parseBinary(bytes));
   if (text === null) text = new TextDecoder().decode(bytes);
-  return parseXML(text);
+  return fillLegacyFonts(parseXML(text));
 }

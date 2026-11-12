@@ -4,6 +4,7 @@ import { parsePlace } from '../shared/rbxl.js';
 import { writePlace, writeModel } from '../shared/rbxlx.js';
 import { endpointUrl, assetBytes } from '../client/assets.js';
 import { UI, SELECTION_MENU, el } from './ui.js';
+import { UI2018 } from './ui2018.js';
 import { Explorer, Properties, Output, Toolbox, ScriptEditor, brickPicker, creatableClasses } from './panes.js';
 import { StudioView, partsOf, boundsOf } from './view.js';
 import { ObjectBrowser } from './browser.js';
@@ -58,7 +59,10 @@ export class Studio {
     this.dirty = false;
     this.docs = new Map();
     this.activeDoc = 'place';
-    this.ui = new UI(root, this);
+    this.era = cfg.clientVersion === 2018 ? 2018 : 2012;
+    this.rotateGrid = this.era === 2018 ? 15 : 0;
+    this.lastGrid = 1;
+    this.ui = this.era === 2018 ? new UI2018(root, this) : new UI(root, this);
     this.explorer = new Explorer(this, this.ui.addPane('explorer', 'Explorer', 'right'));
     this.props = new Properties(this, this.ui.addPane('properties', 'Properties', 'right'));
     this.objects = new Toolbox(this, this.ui.addPane('objects', 'Toolbox', 'left'));
@@ -273,7 +277,11 @@ export class Studio {
   enabled(id) {
     const sel = this.selection.size > 0;
     const movable = [...this.selection].some((s) => partsOf(s).length);
+    if (id.startsWith('na:')) return false;
+    if (id.startsWith('material:') || id === 'color' || id === 'anchor') return movable;
+    if (id.startsWith('insert:')) return true;
     switch (id) {
+      case 'close': case 'gamesettings': return !!endpointUrl('gamePage', this.cfg.placeId);
       case 'undo': return this.undoStack.length > 0;
       case 'redo': return this.redoStack.length > 0;
       case 'cut': case 'copy': case 'delete': case 'duplicate': case 'savemodel': case 'selectchildren': case 'rename': return sel;
@@ -293,6 +301,13 @@ export class Studio {
     if (id.startsWith('grid:')) return this.grid === +id.slice(5);
     if (id.startsWith('view:')) return this.ui.paneOpen(id.slice(5));
     if (id === 'joints') return !!this.manualJoints;
+    if (id === 'snap:move') return this.grid > 0;
+    if (id === 'snap:rotate') return this.rotateGrid > 0;
+    if (id === 'view:commandbar') return !!(this.ui.commandBar && !this.ui.commandBar.hidden);
+    if (id === 'anchor') {
+      const parts = [...this.selection].flatMap(partsOf);
+      return parts.length > 0 && parts.every((p) => p.props.get('Anchored'));
+    }
     return false;
   }
 
@@ -304,7 +319,34 @@ export class Studio {
         this.grid = +id.slice(5);
         return this.refreshUI();
       }
+      if (id === 'view:commandbar') {
+        if (this.ui.commandBar) this.ui.commandBar.hidden = !this.ui.commandBar.hidden;
+        this.resized();
+        return this.refreshUI();
+      }
       if (id.startsWith('view:')) return this.ui.togglePane(id.slice(5));
+      if (id.startsWith('material:')) return this.setProp(sel.flatMap(partsOf), 'Material', +id.slice(9));
+      if (id.startsWith('insert:part:')) {
+        const shape = { Ball: 0, Block: 1, Cylinder: 2 }[id.slice(12)] ?? 1;
+        this.insertObject('Part');
+        const made = [...this.selection][0];
+        if (made && made.ClassName === 'Part' && shape !== 1) {
+          this.setPropRaw(made, 'Shape', shape);
+          if (shape === 0) this.setPropRaw(made, 'Size', [2, 2, 2]);
+          if (shape === 2) this.setPropRaw(made, 'Size', [2, 2, 2]);
+        }
+        return this.refreshUI();
+      }
+      if (id.startsWith('insert:cls:')) {
+        const cls = id.slice(11);
+        const target = [...this.selection][0];
+        const into = cls === 'SpawnLocation' || cls === 'WedgePart' ? null : target && target.isA && (target.isA('BasePart') || target.isA('Model') || target.isA('Folder')) && cls !== 'Script' ? target : target && cls === 'Script' ? target : null;
+        return this.insertObject(cls, into || undefined);
+      }
+      if (id.startsWith('rotgrid:')) {
+        this.rotateGrid = Math.max(0, +id.slice(8) || 0);
+        return this.refreshUI();
+      }
       if (id.startsWith('cam:')) return this.camera(id.slice(4));
       switch (id) {
         case 'undo': return this.undo();
@@ -354,7 +396,46 @@ export class Studio {
           if (document.fullscreenElement) document.exitFullscreen();
           else document.documentElement.requestFullscreen?.().catch(() => {});
           return;
-        case 'about': return this.ui.alert('About Studio', 'Chocolate Studio 26.11.3-hotfix\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
+        case 'snap:move':
+          if (this.grid > 0) {
+            this.lastGrid = this.grid;
+            this.grid = 0;
+          } else this.grid = this.lastGrid || 1;
+          return this.refreshUI();
+        case 'snap:rotate':
+          if (this.rotateGrid > 0) {
+            this.lastRotateGrid = this.rotateGrid;
+            this.rotateGrid = 0;
+          } else this.rotateGrid = this.lastRotateGrid || 15;
+          return this.refreshUI();
+        case 'anchor': {
+          const parts = sel.flatMap(partsOf);
+          return this.setProp(parts, 'Anchored', !parts.every((p) => p.props.get('Anchored')));
+        }
+        case 'color': {
+          const parts = sel.flatMap(partsOf);
+          const n = await this.pickBrickColor(parts[0] ? parts[0].props.get('BrickColor') : this.paintColor);
+          if (n == null) return;
+          this.paintColor = n;
+          return this.setProp(parts, 'BrickColor', n);
+        }
+        case 'gamesettings': return window.open(endpointUrl('gamePage', this.cfg.placeId), '_blank');
+        case 'close': {
+          if (this.dirty && !(await this.ui.confirm('Close Place', 'Close the place without saving your changes?'))) return;
+          this.dirty = false;
+          location.href = endpointUrl('gamePage', this.cfg.placeId);
+          return;
+        }
+        case 'screenshot': {
+          this.r.frame(0);
+          const a = document.createElement('a');
+          a.download = `${this.cfg.placeName || 'Screenshot'}.png`.replace(/[\\/:*?"<>|]/g, '_');
+          a.href = this.r.canvas.toDataURL('image/png');
+          a.click();
+          return;
+        }
+        case 'about': if (this.era === 2018) return this.ui.alert('About Roblox Studio', 'Chocolate Studio, 2018 edition\nEdits places in the browser, alone or with Team Create. This place plays in the 2018 client.');
+          return this.ui.alert('About Studio', 'Chocolate Studio 26.11.3-hotfix\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
         default: return;
       }
     } catch (err) {
@@ -586,6 +667,15 @@ export class Studio {
   }
 
   defaults(inst) {
+    if (inst.isA('BasePart') && this.era === 2018) {
+      for (const [k, v] of [['TopSurface', 0], ['BottomSurface', 0], ['Anchored', false], ['BrickColor', 194], ['FormFactor', 3]]) if (inst.info.all.has(k)) this.setPropRaw(inst, k, v);
+      if (inst.ClassName === 'Part' || inst.ClassName === 'WedgePart') this.setPropRaw(inst, 'Size', [4, 1, 2]);
+      if (inst.ClassName === 'SpawnLocation') {
+        this.setPropRaw(inst, 'Size', [12, 1, 12]);
+        this.setPropRaw(inst, 'Anchored', true);
+      }
+      return;
+    }
     if (inst.isA('BasePart')) {
       for (const [k, v] of [['TopSurface', 3], ['BottomSurface', 4], ['Anchored', false], ['BrickColor', 194]]) if (inst.info.all.has(k)) this.setPropRaw(inst, k, v);
       if (inst.ClassName === 'SpawnLocation' || inst.ClassName === 'Seat') this.setPropRaw(inst, 'Size', [6, 1.2, 6]);
@@ -626,7 +716,7 @@ export class Studio {
       const s = el('select', null, body);
       s.size = 14;
       s.style.width = '100%';
-      for (const c of creatableClasses()) el('option', null, s, c).value = c;
+      for (const c of creatableClasses(this.era)) el('option', null, s, c).value = c;
       s.value = 'Part';
       s.addEventListener('dblclick', () => body.closest('.st-dialog').querySelector('button').click());
       return () => s.value;
@@ -722,6 +812,7 @@ export class Studio {
     this.viewEl.style.visibility = id === 'place' ? 'visible' : 'hidden';
     for (const [k, d] of this.docs) d.ed.show(k === id);
     this.ui.tab(id, '', () => {}, null);
+    if (this.ui.setScriptMode) this.ui.setScriptMode(id.startsWith('script:'));
     if (id !== 'place') this.docs.get(id).ed.reload();
   }
 

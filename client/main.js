@@ -10,6 +10,8 @@ import { T } from '../shared/luahost.js';
 import { configure, publicPath, endpointUrl, loadContentIndex, contentUrl } from './assets.js';
 import { CursorLayer, CURSORS } from './cursor.js';
 import { DevConsole } from './devconsole.js';
+import { Input2018 } from './input2018.js';
+import * as THREE from 'three';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent);
 configure(cfg);
@@ -29,9 +31,14 @@ function setStatus(t) {
 
 const bricksEl = document.getElementById('chocolate-bricks');
 const connectorsEl = document.getElementById('chocolate-connectors');
-loading.style.backgroundImage = `url("${contentUrl('sky/null_plainsky512_ft.jpg')}")`;
+if (cfg.clientVersion === 2018) loading.classList.add('ch-boot-2018');
+else loading.style.backgroundImage = `url("${contentUrl('sky/null_plainsky512_ft.jpg')}")`;
 
 function finishLoading(world) {
+  if (world.era === 2018) {
+    loading.hidden = true;
+    return Promise.resolve();
+  }
   const ws = world.dm.services.get('Workspace');
   let bricks = 0, connectors = 0;
   for (const d of ws ? ws.descendants() : []) {
@@ -123,6 +130,10 @@ async function boot() {
     if (p && gui) gui.bubble(p, m.m);
   });
   net.on('msg', (m) => gui && gui.setHint(m.m));
+  for (const t of ['re', 'rfc', 'rfr']) net.on(t, (m) => {
+    if (world && world.ready) world.onRemote(m);
+    else pending.push(m);
+  });
   const applyFs = (m) => {
     if (!m.s) return;
     for (const [id, st] of Object.entries(m.s)) {
@@ -156,9 +167,34 @@ async function boot() {
   });
   net.on('init', async (m) => {
     setStatus('Loading the world');
+    let input2018 = null;
     try {
       world = new ClientWorld(net, {
         touch,
+        version: cfg.version,
+        placeInfo: () => ({ name: cfg.placeName || '', creator: cfg.creatorName || '' }),
+        mouseBehavior: (v) => input2018 && input2018.setBehavior(v),
+        mouseDelta: () => (input2018 ? input2018.takeDelta() : [0, 0]),
+        mouseButtonDown: (t) => !!(input2018 && input2018.buttons.has(t)),
+        isKeyCodeDown: (k) => !!(input2018 && input2018.isKeyDown(k)),
+        mouseIconEnabled: (on) => { canvas.style.cursor = on ? '' : 'none'; },
+        screenRay: (x, y) => {
+          if (!renderer) return null;
+          const k = world.guiScale();
+          const rc = new THREE.Raycaster();
+          rc.setFromCamera(new THREE.Vector2((x / k / root.clientWidth) * 2 - 1, -(y / k / root.clientHeight) * 2 + 1), renderer.camera);
+          return { o: rc.ray.origin.toArray(), d: rc.ray.direction.toArray() };
+        },
+        worldToScreen: (p) => {
+          if (!renderer) return null;
+          const v = new THREE.Vector3(p[0], p[1], p[2]);
+          const depth = v.clone().applyMatrix4(renderer.camera.matrixWorldInverse).z;
+          v.project(renderer.camera);
+          const k = world.guiScale();
+          const sx = (v.x + 1) / 2 * root.clientWidth * k, sy = (1 - v.y) / 2 * root.clientHeight * k;
+          return [sx, sy, -depth, depth < 0 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1];
+        },
+        measureText: (text, size, font, frame) => (gui && gui.measureText ? gui.measureText(text, size, font, frame) : null),
         screenSize: () => [root.clientWidth, root.clientHeight],
         rotateCamera: (dx, dy) => camera && camera.rotateBy(dx, dy),
         cameraTilt: (dir) => camera && camera.rotateBy(0, dir * 0.1745),
@@ -215,9 +251,15 @@ async function boot() {
         send: (o) => net.send(o),
         flush: () => world.host.tick(world.t),
       });
+      if (world.host && world.host.env) world.host.env.textBounds = (inst) => gui.textBounds(inst);
       if (touch) new TouchInput(world, renderer, gui, root, canvas);
+      if (world.era === 2018) {
+        input2018 = new Input2018(world, gui, canvas, root);
+        camera.luaDriven = true;
+      }
+      world.input2018 = input2018;
       world.ready = true;
-      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else world.applyRep(p);
+      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else if (p.t === 're' || p.t === 'rfc' || p.t === 'rfr') world.onRemote(p); else world.applyRep(p);
       finishLoading(world);
       document.addEventListener('fullscreenchange', () => {
         const us = world.host._userSettings;
@@ -244,6 +286,18 @@ function start(world, renderer, camera, gui, net) {
     if (e.key === 'F9') {
       e.preventDefault();
       if (!e.repeat) devConsole.toggle();
+      return;
+    }
+    const in18 = world.input2018;
+    if (in18) {
+      in18.keyDown(e, gui.isTyping());
+      if (e.key === 'Tab' || e.key === ' ' || e.key.startsWith('Arrow')) e.preventDefault();
+      if (gui.isTyping() || e.repeat) return;
+      world.ensureAudio();
+      held.add(e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase());
+      if (e.code) codes.add(e.code);
+      const lk = e.key.length === 1 ? e.key.toLowerCase() : e.key === 'Enter' ? '\r' : null;
+      if (lk) world.keyDown(lk);
       return;
     }
     if (gui.isTyping()) return;
@@ -288,6 +342,7 @@ function start(world, renderer, camera, gui, net) {
     if (lua) world.keyDown(lua);
   });
   window.addEventListener('keyup', (e) => {
+    if (world.input2018) world.input2018.keyUp(e, gui.isTyping());
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
     held.delete(k);
     if (e.code) codes.delete(e.code);
@@ -296,6 +351,7 @@ function start(world, renderer, camera, gui, net) {
     if (lua) world.keyUp(lua);
   });
   window.addEventListener('blur', () => {
+    if (world.input2018) world.input2018.blur();
     held.clear();
     codes.clear();
     camera.keyYaw = 0;
@@ -309,22 +365,32 @@ function start(world, renderer, camera, gui, net) {
     ms.ndc = [(ms.x / r.width) * 2 - 1, -(ms.y / r.height) * 2 + 1];
     world.emitMouse('Move');
   });
+  window.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch' || !world.input2018) return;
+    if (document.pointerLockElement === canvas || e.target === canvas) world.input2018.mouseMove(e.movementX || 0, e.movementY || 0, false);
+  });
   canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'touch') return;
     world.ensureAudio();
     if (gui.isTyping()) document.activeElement.blur();
+    if (world.input2018) world.input2018.buttonDown(e.button, false);
     if (e.button === 0) world.mouseDown(0);
   });
   window.addEventListener('pointerup', (e) => {
     if (e.pointerType === 'touch') return;
+    if (world.input2018) world.input2018.buttonUp(e.button, false);
     if (e.button === 0 && ms.down) world.mouseUp(0);
   });
   canvas.addEventListener('wheel', (e) => {
     world.emitMouse(e.deltaY > 0 ? 'WheelBackward' : 'WheelForward');
-  });
+    if (world.input2018) {
+      e.preventDefault();
+      world.input2018.wheel(e.deltaY > 0 ? -1 : 1, false);
+    }
+  }, { passive: false });
   let last = performance.now();
   let pingT = 0;
-  const FRAME_MS = 1000 / 30;
+  const FRAME_MS = world.era === 2018 ? 1000 / 60 : 1000 / 30;
   let due = last;
   const loop = (now) => {
     if (now < due - 1) {

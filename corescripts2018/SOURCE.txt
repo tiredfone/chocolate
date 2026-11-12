@@ -1,0 +1,1 @@
+Roblox Core-Scripts, commit f2965847c9eac9715af9323d76b9ef36d40619bb (2018-05-11), from https://github.com/Roblox/Core-Scripts under the Apache License 2.0 in LICENSE.txt. Unmodified. Matches client 0.338.0.202976.

@@ -80,6 +80,9 @@ Endpoints use `{id}` as a placeholder. Paths are relative to `siteUrl` on the se
 | `bodyColors` | server | BodyColors XML for a user |
 | `gears` | server | Equipped gear IDs for a user, any separator. Leave empty to give no gear |
 | `gamePage`, `play`, `login` | browser | Pages to send the player to on leaving, teleporting or when logged out |
+| `thumbnail` | both | A user's headshot image. `Players:GetUserThumbnailAsync` returns it for `ThumbnailType.HeadShot`, and Roblox headshot URLs in GUI images load it |
+| `avatarThumbnail` | both | A user's full avatar image, for the other thumbnail types and Roblox avatar thumbnail URLs (`Thumbs/Avatar.ashx` and the like). Falls back to `thumbnail` when empty |
+| `placeThumbnail` | both | A place's or asset's thumbnail image. `AssetService:GetAssetThumbnailAsync` returns it, so the 2018 loading screen shows the place's picture, and Roblox asset thumbnail URLs load it |
 | `studioPlace`, `studioSave`, `studioTicket`, `studioCollaborators`, `studioToolbox` | browser | Studio; see [docs/STUDIO.md](docs/STUDIO.md) |
 | `presence` | server | `POST { users: [{ id, kind, place }] }` as JSON with `X-Chocolate-Key`: everyone playing (`kind: play`) or in Team Create (`kind: studio`) right now. Sent a second after any join or leave, every 60 seconds and at startup (empty), so the host can replace what it had |
 | `social` | server | `POST { action, ... }` as JSON with `X-Chocolate-Key`, answering `{ ok: true, ... }`. `award { userId, badgeId, placeId }` → `{ awarded, message }` (the host checks the badge belongs to the place and the user is playing it; the message is shown in chat); `hasBadge { userId, badgeId }` → `{ has }`; `statuses { userId, others: [ids] }` → `{ statuses: { id: FriendStatus } }`; `request` and `revoke { from, to }` → `{ status, event }` (FriendStatus and FriendRequestEvent values); `friendsOnline { userId, max }` → `{ friends: [{ VisitorId, UserName, IsOnline, LocationType, LastLocation, PlaceId }] }`. Without it, badges are never awarded and nobody is friends |
@@ -139,7 +142,9 @@ The server answers two local HTTP requests on its port, which must not be proxie
 1. The page asks the host for a ticket, then opens the WebSocket with it.
 2. The server redeems the ticket with the host and picks a server for it, starting one if needed (see Servers).
 3. The worker creates the Player, sets `CharacterAppearance`, loads the character from `appearance` and `bodyColors`, and gives StarterPack tools plus the gear from `gears` on every spawn.
-4. While it loads, the page shows the 2012 engine's loading screen: the default sky behind a grey panel counting Bricks (parts) and Connectors (joints). The client applies the snapshot, creates the engine-built `RobloxGui.ControlFrame` and runs the StarterScript (37801172), which loads the other CoreScripts; the loading screen counts up to the place's totals and fades out.
+4. While it loads, the page shows the 2012 engine's loading screen: the default sky behind a grey panel counting Bricks (parts) and Connectors (joints). The client applies the snapshot, creates the engine-built `RobloxGui.ControlFrame` and runs the StarterScript (37801172), which loads the other CoreScripts; the loading screen counts up to the place's totals and fades out. A 2018 place shows the 2018 loading screen instead (place thumbnail, name, creator and the turning logo), drawn by the host page from its first frame and replaced by the 2018 LoadingScript's own screen once the client runs.
+
+A 2018 server finishes starting the place's scripts before letting the first player in: it waits until no `InsertService:LoadAsset` (which `require(assetId)` uses) has been pending for half a second, for at most 15 seconds, as admin systems such as Adonis expect.
 
 A Studio ticket goes to the same WebSocket. When `redeem` answers `mode: studio`, the server puts the connection in that place's Team Create session instead of a game worker.
 
@@ -157,11 +162,16 @@ node tools/corescripts.mjs touch
 node tools/touch.mjs
 node tools/character.mjs <placeId> <userId> [name]
 node tools/movement.mjs
+node tools/corescripts2018.mjs desktop
+node tools/server2018.mjs <placeId> [2012|2018]
+node tools/e2e2018.mjs <placeId>
 ```
 
 To check the place writer, load a place with `dm.load(parsePlace(bytes), dm.root, { track: true })`, write it with `writePlace(dm)`, parse the result again and compare every instance's properties; nothing should differ.
 
 To check Team Create's sync, load a place into one DataModel, send it to a second with `packPlace` and `unpack` from `shared/teamsync.js`, make changes on one side and apply them to the other with `encodeProp`/`decodeProp` and `packSubtree`/`unpack`, then compare `writePlace` of both; the two files must be identical.
+
+`e2e2018.mjs` runs a 2018 server and client together in one process, including chat. Environment variables: `SECONDS` for how long to run, `ALL=1` to print all server output, `DUMP=Workspace,ReplicatedStorage` to list those services' children on the server, and `LUA='...'` to run a LocalScript probe on the client. `corescripts2018.mjs` takes `LUA`, `PRINT=1`, `KEYS` and `DUMP` the same way. Set `CHOCOLATE_ASSET_DIR` to a folder of copied place files to test without touching the host's asset storage.
 
 `corescripts.mjs` runs the LoadingScript and StarterScript chain and prints the GUI it built and any script errors. `touch.mjs` drives TouchControls and ContextActionTouch with simulated touches. `movement.mjs` walks and jumps the character controller over seams, plates, bricks and walls and prints where it ended up. `character.mjs` starts a place in-process, joins one player and prints the character and backpack. It makes the same read-only requests a real join makes, except it skips the ticket.
 

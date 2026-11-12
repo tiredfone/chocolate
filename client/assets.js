@@ -270,6 +270,74 @@ function parseChunkedMesh(bytes) {
   return { pos: P, nrm: N, uv: U };
 }
 
+const CSG_KEY = [86, 46, 110, 88, 49, 32, 48, 4, 52, 105, 12, 119, 12, 1, 94, 0, 26, 96, 55, 105, 29, 82, 43, 7, 79, 36, 89, 101, 83, 4, 122];
+
+export function parseCSG(raw) {
+  const d = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) d[i] = raw[i] ^ CSG_KEY[i % CSG_KEY.length];
+  if (String.fromCharCode(...d.subarray(0, 6)) !== 'CSGMDL') return null;
+  const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
+  const version = dv.getInt32(6, true);
+  if (version !== 2) return null;
+  let o = 42;
+  const nv = dv.getInt32(o, true), stride = dv.getInt32(o + 4, true);
+  o += 8;
+  if (nv <= 0 || nv > 1e6 || stride < 24 || o + nv * stride + 4 > d.length) return null;
+  const pos = new Float32Array(nv * 3), nrm = new Float32Array(nv * 3);
+  for (let i = 0; i < nv; i++) {
+    const b = o + i * stride;
+    for (let k = 0; k < 3; k++) {
+      pos[i * 3 + k] = dv.getFloat32(b + k * 4, true);
+      nrm[i * 3 + k] = dv.getFloat32(b + 12 + k * 4, true);
+    }
+  }
+  o += nv * stride;
+  const ni = dv.getInt32(o, true);
+  o += 4;
+  if (ni <= 0 || o + ni * 4 > d.length) return null;
+  const idx = new Uint32Array(ni);
+  for (let i = 0; i < ni; i++) {
+    const v = dv.getInt32(o + i * 4, true);
+    idx[i] = v >= 0 && v < nv ? v : 0;
+  }
+  return { pos, nrm, idx };
+}
+
+function base64Bytes(s) {
+  const bin = atob(s.replace(/\s+/g, ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+const unionMeshes = new Map();
+export function unionGeometry(raw) {
+  const m = raw ? parseCSG(raw) : null;
+  if (!m) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(m.pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(m.nrm, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array((m.pos.length / 3) * 2), 2));
+  g.setIndex(new THREE.BufferAttribute(m.idx, 1));
+  g.computeBoundingBox();
+  return g;
+}
+
+export function loadUnionMesh(url) {
+  const id = assetId(url);
+  if (!id) return Promise.resolve(null);
+  let p = unionMeshes.get(id);
+  if (!p) {
+    p = fetchBytes(id).then((bytes) => {
+      const text = new TextDecoder().decode(bytes);
+      const m = /<BinaryString name="MeshData">([^<]*)<\/BinaryString>/.exec(text);
+      return m && m[1].trim() ? unionGeometry(base64Bytes(m[1])) : null;
+    }).catch(() => null);
+    unionMeshes.set(id, p);
+  }
+  return p;
+}
+
 export function loadMesh(url) {
   const id = assetId(url);
   if (!id) return Promise.resolve(null);
@@ -300,8 +368,29 @@ export async function loadContentIndex() {
   }
 }
 
+let content2018 = null;
+
+export async function useContent2018() {
+  if (content2018) return;
+  try {
+    const r = await fetch(publicPath('/client/content2018-index.json?v=') + (settings.version || ''));
+    content2018 = r.ok ? await r.json() : {};
+  } catch {
+    content2018 = {};
+  }
+}
+
+export function contentEra() {
+  return content2018 ? 2018 : 2012;
+}
+
 export function contentUrl(path) {
   let p = String(path).replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/{2,}/g, '/');
+  if (content2018) {
+    const key = p.toLowerCase();
+    const hit = content2018[key] || content2018[key.replace(/\.(dds|tex)$/, '.png')] || content2018['platform/' + key] || content2018['platform/' + key.replace(/\.(dds|tex)$/, '.png')];
+    if (hit) return publicPath('/content2018/') + hit.split('/').map(encodeURIComponent).join('/');
+  }
   if (contentIndex) p = contentIndex[p.toLowerCase()] || p;
   return publicPath('/content/') + p.split('/').map(encodeURIComponent).join('/');
 }

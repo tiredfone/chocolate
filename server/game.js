@@ -5,18 +5,48 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { Lua } from 'wasmoon-lua5.1';
 import { parsePlace } from '../shared/rbxl.js';
 import { DataModel } from '../shared/instance.js';
-import { ScriptHost, T } from '../shared/luahost.js';
+import { ScriptHost, T, wireArgs, unwireArgs } from '../shared/luahost.js';
+import { Core2018 } from '../shared/core2018.js';
+import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
-import { buildCharacter, attachAccessory, gripWeld, syncGrip, liveCharacterOf, Rig, Controller, CharacterProxy, partColorProps, STATES } from '../shared/humanoid.js';
+import { buildCharacter, buildR15, attachAccessory, gripWeld, syncGrip, liveCharacterOf, Rig, Controller, CharacterProxy, partColorProps, STATES, rootOf } from '../shared/humanoid.js';
 import { Replicator } from './replicator.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 import { placeBytes, assetNodes, appearance, luaSource, assetBytes, assetIdOf } from './assets.js';
-import { endpoint } from './config.js';
+import { endpoint, config } from './config.js';
 import { social } from './social.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME = fs.readFileSync(path.join(HERE, '../shared/runtime.lua'), 'utf8');
+let era2018 = null;
+function load2018() {
+  if (!era2018) {
+    era2018 = {
+      runtime: fs.readFileSync(path.join(HERE, '../shared/runtime2018.lua'), 'utf8'),
+      bundle: JSON.parse(fs.readFileSync(path.join(HERE, '../corescripts2018/bundle.json'), 'utf8')),
+      character: [],
+      characterR15: [],
+      r15: null,
+    };
+    try {
+      era2018.r15 = parsePlace(fs.readFileSync(path.join(HERE, '../content2018/avatar/characterR15V2.rbxm')))[0] || null;
+    } catch {}
+    for (const [dir, file, only] of [['content2018/avatar/scripts', 'humanoidAnimateLocalKeyframe.rbxm', null], ['content/fonts', 'humanoidHealth.rbxm', 'Health']]) {
+      try {
+        for (const n of parsePlace(fs.readFileSync(path.join(HERE, '..', dir, file)))) {
+          if (only && n.props.get('Name')?.v !== only) continue;
+          era2018.character.push(n);
+          if (n.props.get('Name')?.v !== 'Animate') era2018.characterR15.push(n);
+        }
+      } catch {}
+    }
+    try {
+      for (const n of parsePlace(fs.readFileSync(path.join(HERE, '../content2018/avatar/scripts/humanoidAnimateR15.rbxm')))) era2018.characterR15.push(n);
+    } catch {}
+  }
+  return era2018;
+}
 const TICK = 1 / 30;
 const MAX_CHAT = 200;
 const SERVER_LIBRARIES = { RbxGui: 45284430, RbxGear: 45374389, RbxUtility: 60595411, RbxStamper: 73157242 };
@@ -74,8 +104,12 @@ export class Game {
     this.kind = io.kind || 'public';
     this.privateId = io.privateId || 0;
     this.allowGear = io.allowGear !== false;
+    this.era = io.era === 2018 ? 2018 : 2012;
     this.io = io;
     this.dm = new DataModel('server');
+    this.dm.era = this.era;
+    this.invokes = new Map();
+    this.invokeSeq = 1;
     this.clients = new Map();
     this.chars = new Map();
     this.mice = new Map();
@@ -138,15 +172,104 @@ export class Game {
         if (this.chars.has(inst)) this.dropChar(inst);
       },
     });
+    if (this.era === 2018) this.prepare2018();
     this.host = new ScriptHost(dm, this.env());
     this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
     for (const [name, id] of Object.entries(SERVER_LIBRARIES)) this.host.libraries.set(name, String(id));
-    await this.host.init(() => Lua.create(), RUNTIME);
+    if (this.era === 2018) this.host.flags = FLAGS_2018;
+    await this.host.init(() => Lua.create(), RUNTIME, this.era === 2018 ? [{ source: load2018().runtime, name: 'runtime2018' }] : []);
+    if (this.era === 2018) this.core.starterScript(dm.service('ScriptContext'), true);
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
     for (let i = 0; i < 3; i++) this.host.tick(this.t);
     this.running = true;
     this.t0 = performance.now();
     this.loop = setInterval(() => this.tick(), TICK * 1000);
+    const begin = performance.now();
+    while (performance.now() - begin < 15000) {
+      const quiet = performance.now() - Math.max(begin, this.lastLoadChange || 0);
+      if (!(this.pendingLoads > 0) && quiet >= 500) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  prepare2018() {
+    const dm = this.dm;
+    for (const s of ['StarterPlayer', 'RobloxReplicatedStorage', 'ReplicatedFirst', 'TweenService', 'TextService', 'LocalizationService', 'HttpService', 'MarketplaceService', 'CollectionService']) dm.service(s);
+    const ws = dm.services.get('Workspace');
+    if (!ws.findChildOfClass('Terrain')) {
+      const t = dm.create('Terrain', null);
+      t.props.set('Name', 'Terrain');
+      t.props.set('Anchored', true);
+      t.props.set('Locked', true);
+      dm.setParent(t, ws);
+    }
+    this.core = new Core2018(dm, load2018().bundle);
+    const rg = dm.create('ScreenGui', null);
+    rg.props.set('Name', 'RobloxGui');
+    dm.setParent(rg, dm.service('CoreGui'));
+    this.core.buildModules(rg);
+    this.core.installPlayerScripts(dm.services.get('StarterPlayer'));
+  }
+
+  dataStoreApi() {
+    const dir = String(config.dataStoreDir || '');
+    const file = dir ? path.join(dir, `${this.placeId | 0}.json`) : null;
+    let data = {};
+    if (file) {
+      try {
+        data = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
+      } catch {}
+    }
+    let timer = null;
+    const save = () => {
+      if (!file || timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(file + '.tmp', JSON.stringify(data));
+          fs.renameSync(file + '.tmp', file);
+        } catch (e) {
+          this.log('warn', 'DataStore save failed: ' + e.message);
+        }
+      }, 2000);
+    };
+    return {
+      get: (store, key) => (data[store] && Object.prototype.hasOwnProperty.call(data[store], key) ? data[store][key] : null),
+      set: (store, key, v) => {
+        if (!data[store]) data[store] = {};
+        if (v == null) delete data[store][key];
+        else data[store][key] = v;
+        save();
+      },
+      entries: (store) => Object.entries(data[store] || {}),
+    };
+  }
+
+  copyPlayerScripts(player) {
+    const sp = this.dm.services.get('StarterPlayer');
+    const sps = sp && sp.findChildOfClass('StarterPlayerScripts');
+    let ps = player.findChildOfClass('PlayerScripts');
+    if (!ps) {
+      ps = this.dm.create('PlayerScripts', null);
+      ps.props.set('Name', 'PlayerScripts');
+      for (const o of this.dm.observers) if (o.created) o.created(ps);
+      this.dm.setParent(ps, player);
+    }
+    if (!sps) return;
+    for (const c of sps.children) {
+      const k = this.cloneAlways(c);
+      if (k) this.dm.setParent(k, ps);
+    }
+  }
+
+  cloneAlways(inst) {
+    const was = inst.props.get('Archivable');
+    inst.props.set('Archivable', true);
+    const k = this.dm.clone(inst);
+    inst.props.set('Archivable', was);
+    if (k) k.props.set('Archivable', was);
+    return k;
   }
 
   stop() {
@@ -154,10 +277,20 @@ export class Game {
     clearInterval(this.loop);
   }
 
+  async close() {
+    if (this.running && this.host && this.host.closeBound) {
+      this.dm.emit(this.dm.root, '__Close');
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    this.stop();
+  }
+
   env() {
     const dm = this.dm;
     return {
       log: (k, m, w) => this.log(k, m, w),
+      thumbnailUrl: (id, kind) => (kind === 'avatar' && endpoint('avatarThumbnail', id)) || endpoint('thumbnail', id) || '',
+      placeThumbnailUrl: (id) => endpoint('placeThumbnail', id) || '',
       coreSource: (id) => luaAsset(id),
       raycast: (o, d, ig) => this.physics.raycast(o, d, ig),
       breakJoints: (p) => this.physics.breakJoints(p),
@@ -167,7 +300,15 @@ export class Game {
       rootPart: (p) => this.physics.rootPart(p),
       loadCharacter: (pl) => this.loadCharacter(pl),
       loadAsset: async (id) => {
-        const nodes = await assetNodes(id);
+        this.pendingLoads = (this.pendingLoads || 0) + 1;
+        this.lastLoadChange = performance.now();
+        let nodes;
+        try {
+          nodes = await assetNodes(id);
+        } finally {
+          this.pendingLoads--;
+          this.lastLoadChange = performance.now();
+        }
         const model = dm.create('Model', null);
         model.props.set('Name', 'Model');
         dm.load(nodes, model);
@@ -182,6 +323,37 @@ export class Game {
       kick: (pl, msg) => {
         const c = this.clientOf(pl);
         if (c) this.io.kick(c.cid, msg || 'You have been kicked from the game');
+      },
+      dataStore: this.dataStoreApi(),
+      addCoreScriptLocal: (name, parent) => { if (this.core) this.core.coreScript(name, parent || dm.service('ScriptContext')); },
+      remote: (r, op, raw) => {
+        if (op === 'fc') {
+          const pl = raw[0] && raw[0].v;
+          const c = pl && pl.ClassName === 'Player' ? this.clientOf(pl) : null;
+          if (c && c.ready) this.io.send(c.cid, JSON.stringify({ t: 're', id: r.id, a: wireArgs(raw.slice(1)) }));
+        } else if (op === 'fa') {
+          const msg = JSON.stringify({ t: 're', id: r.id, a: wireArgs(raw) });
+          for (const c of this.clients.values()) if (c.ready) this.io.send(c.cid, msg);
+        }
+      },
+      invoke: (r, pl, raw) => {
+        const c = pl && pl.ClassName === 'Player' ? this.clientOf(pl) : null;
+        if (!c || !c.ready) return Promise.resolve([false, 'Player is not in the game']);
+        const k = this.invokeSeq++;
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            this.invokes.delete(k);
+            resolve([false, 'InvokeClient timed out']);
+          }, 30000);
+          this.invokes.set(k, { cid: c.cid, resolve, timer, out: true });
+          this.io.send(c.cid, JSON.stringify({ t: 'rfc', id: r.id, k, a: wireArgs(raw) }));
+        });
+      },
+      invokeResult: (r, token, raw) => {
+        const p = this.invokes.get(token | 0);
+        if (!p || p.out) return;
+        this.invokes.delete(token | 0);
+        this.io.send(p.cid, JSON.stringify({ t: 'rfr', k: p.k, a: wireArgs(raw) }));
       },
       onSubscribe: (inst, name) => {
         if (inst && inst.isA('BasePart') && (name === 'Touched' || name === 'TouchEnded')) this.physics.touchInterest(inst);
@@ -328,6 +500,7 @@ export class Game {
     player.props.set('CharacterAppearance', endpoint('appearance', user.id) || '');
     player.props.set('MembershipType', user.membership | 0);
     player.props.set('AccountAge', user.age | 0);
+    player.data = Object.assign(player.data || {}, { avatarType: user.avatarType === 'R15' ? 'R15' : 'R6' });
     const bp = dm.create('Backpack', player);
     bp.props.set('Name', 'Backpack');
     const gui = dm.create('PlayerGui', player);
@@ -355,14 +528,20 @@ export class Game {
     }
     for (const o of dm.observers) if (o.created) for (const x of made) o.created(x);
     this.assignTeam(player);
-    const client = { cid, user, player, ready: false, seq: 0, lastChat: 0, dev: !!user.dev };
+    if (this.era === 2018) this.copyPlayerScripts(player);
+    const client = { cid, user, player, ready: false, seq: 0, lastChat: 0, dev: !!user.dev, remoteT: 0, remoteN: 0 };
     this.clients.set(cid, client);
     this.replicator.addClient(cid, player, (s) => this.io.send(cid, s));
+    const netRep = dm.create('ServerReplicator', null);
+    netRep.props.set('Name', 'ServerReplicator');
+    netRep.data = Object.assign(netRep.data || {}, { player });
+    client.netRep = netRep;
+    dm.setParent(netRep, dm.service('NetworkServer'));
     dm.setParent(player, players);
     this.copyStarterGui(player);
     const rc = this.replicator.clients.get(cid);
     const snap = this.replicator.snapshotFor(rc);
-    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, you: player.id, user: { id: user.id, name: user.name }, snap }));
+    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap }));
     rc.ready = true;
     client.ready = true;
     if (client.dev && this.outHistory) for (const line of this.outHistory) this.io.send(cid, line);
@@ -424,6 +603,7 @@ export class Game {
     if (!c) return;
     this.clients.delete(cid);
     this.replicator.removeClient(cid);
+    if (c.netRep && !c.netRep.destroyed) this.dm.destroy(c.netRep);
     const pl = c.player;
     const players = this.dm.services.get('Players');
     this.dm.emit(players, 'PlayerRemoving', pl);
@@ -522,8 +702,17 @@ export class Game {
     const look = await appearance(uid).catch(() => ({ colors: null, assets: [], gear: [] }));
     if (player.destroyed || !player.parent) return;
     const { pos, spawn } = this.spawnPoint(player);
-    const { model, humanoid } = buildCharacter(dm, player.props.get('Name'), pos);
-    for (const n of loadCharacterScripts()) dm.load([n], model);
+    const r15 = this.era === 2018 && player.data && player.data.avatarType === 'R15' && load2018().r15;
+    const { model, humanoid } = r15 ? buildR15(dm, load2018().r15, player.props.get('Name'), pos) : buildCharacter(dm, player.props.get('Name'), pos, { rootPart: this.era === 2018 });
+    for (const n of this.era === 2018 ? (r15 ? load2018().characterR15 : load2018().character) : loadCharacterScripts()) dm.load([n], model);
+    if (this.era === 2018) {
+      const scs = dm.services.get('StarterPlayer') && dm.services.get('StarterPlayer').findChildOfClass('StarterCharacterScripts');
+      if (scs) for (const c of scs.children) {
+        if (model.findChild(c.props.get('Name'))) dm.destroy(model.findChild(c.props.get('Name')));
+        const k = this.cloneAlways(c);
+        if (k) dm.setParent(k, model);
+      }
+    }
     for (const o of dm.observers) if (o.created) for (const d of [model, ...model.descendants()]) o.created(d);
     if (look.colors) {
       const bcNodes = look.colors.filter((n) => n.cls === 'BodyColors');
@@ -547,11 +736,12 @@ export class Game {
       dm.destroy(model);
       return;
     }
-    const torso = model.findChild('Torso');
+    const torso = rootOf(model);
     const lookAt = spawn ? C.lookVector(spawn.props.get('CFrame')) : [0, 0, -1];
     const yaw = C.lookAt(0, 0, 0, lookAt[0], 0, lookAt[2]);
     const rig = new Rig(model);
-    rig.pose(C.withPos(yaw, pos[0], pos[1], pos[2]), (p, cf) => p.props.set('CFrame', cf));
+    const rootY = r15 ? torso.props.get('CFrame')[1] : pos[1];
+    rig.pose(C.withPos(yaw, pos[0], rootY, pos[2]), (p, cf) => p.props.set('CFrame', cf));
     const bp = player.findChildOfClass('Backpack');
     if (bp) {
       for (const c of [...bp.children]) dm.destroy(c);
@@ -694,7 +884,7 @@ export class Game {
   trackChar(model) {
     if (this.chars.has(model)) return this.chars.get(model);
     const hum = model.findChildOfClass('Humanoid');
-    const torso = model.findChild('Torso');
+    const torso = rootOf(model);
     const head = model.findChild('Head');
     if (!hum || !torso || !head || !this.dm.inWorkspace(model)) return null;
     if (torso.props.get('Anchored')) return null;
@@ -749,7 +939,7 @@ export class Game {
       const model = liveCharacterOf(inst);
       const rec = model && this.chars.get(model);
       if (rec && !rec.dead) {
-        const torso = model.findChild('Torso');
+        const torso = rootOf(model);
         let tcf;
         if (inst === torso) tcf = inst.props.get('CFrame');
         else {
@@ -831,7 +1021,7 @@ export class Game {
         rec.rig.build();
         rec.proxy.refresh();
       }
-      if (hum.props.get('Health') <= 0 || !this.neckOK(rec) || !model.findChild('Torso')) {
+      if (hum.props.get('Health') <= 0 || !this.neckOK(rec) || !rootOf(model)) {
         this.die(rec);
         continue;
       }
@@ -878,7 +1068,7 @@ export class Game {
       }
       const poses = rec.rig.pose(rec.torsoCF);
       for (const [p, cf] of poses) this.dm.setProp(p, 'CFrame', cf, { physics: true });
-      this.dm.setProp(model.findChild('Torso'), 'Velocity', rec.vel, { physics: true });
+      this.dm.setProp(rootOf(model), 'Velocity', rec.vel, { physics: true });
       rec.proxy.update(rec.torsoCF, poses);
       hum.data = hum.data || {};
       hum.data.state = rec.state;
@@ -889,7 +1079,7 @@ export class Game {
     if (rec.seat || rec.dead || seat.props.get('Disabled') || seat.props.get('Occupant')) return;
     const last = this.lastSit.get(rec.model) || 0;
     if (this.t - last < 1.2) return;
-    const torso = rec.model.findChild('Torso');
+    const torso = rootOf(rec.model);
     const dm = this.dm;
     const w = dm.create('Weld', null);
     w.props.set('Name', 'SeatWeld');
@@ -1041,6 +1231,15 @@ export class Game {
     } catch (e) {
       this.log('error', `client message ${m.t}: ${e.message}`);
     }
+  }
+
+  remoteBudget(c) {
+    const now = Date.now();
+    if (now - c.remoteT > 1000) {
+      c.remoteT = now;
+      c.remoteN = 0;
+    }
+    return ++c.remoteN <= 400;
   }
 
   ownedInst(c, id, cls) {
@@ -1272,6 +1471,28 @@ export class Game {
       }
       case 'ping': {
         this.io.send(c.cid, JSON.stringify({ t: 'pong', x: m.x }));
+        break;
+      }
+      case 're': case 'rf': case 'rfr': {
+        if (this.era !== 2018 || !this.remoteBudget(c)) return;
+        if (m.t === 'rfr') {
+          const p = this.invokes.get(m.k | 0);
+          if (!p || !p.out || p.cid !== c.cid) return;
+          this.invokes.delete(m.k | 0);
+          clearTimeout(p.timer);
+          p.resolve(unwireArgs(dm, m.a));
+          return;
+        }
+        const r = this.ownedInst(c, m.id | 0, m.t === 're' ? 'RemoteEvent' : 'RemoteFunction');
+        if (!r) return;
+        const args = unwireArgs(dm, m.a);
+        if (m.t === 're') dm.emit(r, 'OnServerEvent', pl, ...args);
+        else {
+          const k = this.invokeSeq++;
+          this.invokes.set(k, { cid: c.cid, k: m.k | 0 });
+          setTimeout(() => this.invokes.delete(k), 60000);
+          dm.emit(r, '__Invoke', k, pl, ...args);
+        }
         break;
       }
       default:
