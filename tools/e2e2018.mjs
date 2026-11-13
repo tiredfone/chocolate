@@ -14,7 +14,7 @@ if (!placeId) {
 const { Game } = await import(CH + '/server/game.js');
 const { DataModel } = await import(CH + '/shared/instance.js');
 const { applyRecords } = await import(CH + '/shared/codec.js');
-const { ScriptHost, wireArgs, unwireArgs } = await import(CH + '/shared/luahost.js');
+const { ScriptHost, wireArgs, unwireArgs, T } = await import(CH + '/shared/luahost.js');
 const { Core2018 } = await import(CH + '/shared/core2018.js');
 const { FLAGS_2018 } = await import(CH + '/shared/api2018.js');
 
@@ -64,6 +64,8 @@ const env = {
     });
   },
   invokeResult: (r, token, raw) => send({ t: 'rfr', k: token | 0, a: wireArgs(raw) }),
+  focusTextBox: (t, on) => console.log('focusTextBox', t.props.get('Name'), on),
+  shutdown: () => console.log('shutdown requested'),
 };
 const host = new ScriptHost(dm, env);
 host.flags = FLAGS_2018;
@@ -104,6 +106,22 @@ const run = async (seconds) => {
     await new Promise((r) => setTimeout(r, 33));
   }
 };
+if (process.env.LEAVE) {
+  setTimeout(() => {
+    const hub = dm.root.descendants().find((d) => d.props.get('Name') === 'LeaveGameButton');
+    console.log('leave button found:', !!hub);
+    if (hub) {
+      dm.emit(hub, 'MouseButton1Click');
+      dm.emit(hub, 'Activated');
+    }
+  }, (+(process.env.SECONDS || 8) - 3) * 1000);
+}
+if (process.env.SLASH) {
+  setTimeout(() => {
+    console.log('pressing chat hotkey, keys registered:', [...host.guiKeys].join(' '));
+    dm.emit(dm.services.get('GuiService'), 'SpecialKeyPressed', T.e('SpecialKey', 5));
+  }, (+(process.env.SECONDS || 8) - 2) * 1000);
+}
 if (process.env.LUA) {
   const probe = dm.create('LocalScript', null);
   probe.props.set('Name', 'Probe');

@@ -137,9 +137,16 @@ void main() {
     if (base.a < cutoff) discard;
   #endif
   #ifdef STUD_ONLY
-    vec2 so = vec2(vUv.x * 0.5, vUv.y * 0.25);
-    vec2 sf = fract(so);
-    vec4 sv = toGamma(textureGrad(studMap, vec2(sf.x, (4.0 - studRow + sf.y) / 5.0), dFdx(so) * vec2(1.0, 0.2), dFdy(so) * vec2(1.0, 0.2)));
+    #ifdef STUDS2018
+      vec2 so = vec2(vUv.x * 0.5, vUv.y * 0.125);
+      vec2 sf = fract(so);
+      float sl = toGamma(textureGrad(studMap, vec2(sf.x, (3.0 - studRow + sf.y) / 4.0), dFdx(so) * vec2(1.0, 0.25), dFdy(so) * vec2(1.0, 0.25))).r;
+      vec4 sv = vec4(vec3(sl > 0.5 ? 1.0 : 0.0), clamp(abs(sl - 0.5) * 2.0, 0.0, 1.0));
+    #else
+      vec2 so = vec2(vUv.x * 0.5, vUv.y * 0.25);
+      vec2 sf = fract(so);
+      vec4 sv = toGamma(textureGrad(studMap, vec2(sf.x, (4.0 - studRow + sf.y) / 5.0), dFdx(so) * vec2(1.0, 0.2), dFdy(so) * vec2(1.0, 0.2)));
+    #endif
     if (sv.a < 0.004) discard;
     gl_FragColor = vec4(sv.rgb * mix(shadowTint, vec3(1.0), dot(N, lamp0Dir) > 0.0 ? getShadowMask() : 0.0), sv.a);
     #include <fog_fragment>
@@ -164,11 +171,19 @@ void main() {
       #endif
     #endif
     #ifdef USE_STUDS
-      vec2 su = vec2(vUv.x * 0.5, vUv.y * 0.25);
-      vec2 f = fract(su);
-      vec2 auv = vec2(f.x, (4.0 - studRow + f.y) / 5.0);
-      vec4 s = toGamma(textureGrad(studMap, auv, dFdx(su) * vec2(1.0, 0.2), dFdy(su) * vec2(1.0, 0.2)));
-      lit = mix(lit, s.rgb, s.a);
+      #ifdef STUDS2018
+        vec2 su = vec2(vUv.x * 0.5, vUv.y * 0.125);
+        vec2 f = fract(su);
+        vec2 auv = vec2(f.x, (3.0 - studRow + f.y) / 4.0);
+        float sg = toGamma(textureGrad(studMap, auv, dFdx(su) * vec2(1.0, 0.25), dFdy(su) * vec2(1.0, 0.25))).r;
+        lit = lit * (sg * 2.0);
+      #else
+        vec2 su = vec2(vUv.x * 0.5, vUv.y * 0.25);
+        vec2 f = fract(su);
+        vec2 auv = vec2(f.x, (4.0 - studRow + f.y) / 5.0);
+        vec4 s = toGamma(textureGrad(studMap, auv, dFdx(su) * vec2(1.0, 0.2), dFdy(su) * vec2(1.0, 0.2)));
+        lit = mix(lit, s.rgb, s.a);
+      #endif
     #endif
     lit += ks * spec * lamp0Color;
     #ifdef USE_ENV
@@ -263,7 +278,8 @@ export class Material2012 extends THREE.ShaderMaterial {
 
   setStuds(tex, row) {
     this.uniforms.studMap.value = tex;
-    this.uniforms.studRow.value = row;
+    this.uniforms.studRow.value = ERA === 2018 ? [0, 2, 1, 1, 3][row | 0] ?? 0 : row;
+    if (ERA === 2018) this.defines.STUDS2018 = '';
     this.defines.USE_STUDS = '';
     this.needsUpdate = true;
   }

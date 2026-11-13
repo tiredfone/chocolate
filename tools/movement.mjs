@@ -65,5 +65,5 @@ console.log('2.4-stud wall without jumping (expect blocked near z=-7):', JSON.st
 
 const hop = scene([['Floor', [0, -0.5, 0], [60, 1, 60]]]);
 run(hop, 1, { move: [0, 0, 0] });
-console.log('jump held 3s (expect a few landed jumps, maxY about 7-8):', JSON.stringify(run(hop, 3, { move: [0, 0, 0], jump: true })));
+console.log('jump held 3s (expect a few landed jumps, maxY about 9.4: a jump peaks 6.4 studs up):', JSON.stringify(run(hop, 3, { move: [0, 0, 0], jump: true })));
 process.exit(0);

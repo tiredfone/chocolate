@@ -33,6 +33,7 @@ If the host's own avatar comes from different data, fix the host or the endpoint
 | An item listed but not on the character | `assetNodes(id)`: the asset file must be a `<roblox` model; check `assetDir` or the `asset` endpoint |
 | Gear missing from the backpack | `gearFor()` in `server/game.js`; the gear asset must contain a Tool or HopperBin |
 | Correct in the tool but wrong in the browser | Client rendering: `clothingTexture` and `buildDecals` in `client/render.js`, and the browser's requests to the `asset` endpoint |
+| R15 clothing scrambled or misplaced | `R15Atlases` in `client/character2012.js`: R15 meshes sample per-group atlases built from `R15Composit*Base` meshes, never the raw template |
 
 When printing parsed nodes, note that `props` is a `Map`: `JSON.stringify` shows it as `{}`. Print `[...node.props]`.
 

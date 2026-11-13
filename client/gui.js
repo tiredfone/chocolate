@@ -1,7 +1,7 @@
 import { loadFont, textCanvas } from './bitmapfont.js';
 import { brick as brickOf } from '../shared/brickcolor.js';
 import { brick } from '../shared/brickcolor.js';
-import { loadImage, assetId, nineSlice, contentUrl, contentEra, endpointUrl } from './assets.js';
+import { loadImage, assetId, nineSlice, contentUrl, contentEra, endpointUrl, contentImageUrl } from './assets.js';
 
 const STYLE_SLICES = {
   frame1: 'textures/chatBubble_botBlue_bkg', frame2: 'textures/blackBkg_square', frame3: 'textures/blackBkg_round',
@@ -89,6 +89,10 @@ function thumbnailSrc(url) {
 function imageSrc(url) {
   const thumb = thumbnailSrc(url);
   if (thumb) return Promise.resolve(thumb);
+  if (/^rbxasset:\/\//i.test(String(url || '').trim())) {
+    const direct = contentImageUrl(String(url).trim());
+    if (direct) return Promise.resolve(direct);
+  }
   const id = assetId(url) || (/^rbxasset:\/\//i.test(String(url || '')) ? String(url) : null);
   if (!id) return Promise.resolve(null);
   let p = imageUrls.get(id);
@@ -103,7 +107,7 @@ function imageSrc(url) {
       g.scale(1, -1);
       g.drawImage(img, 0, 0);
       return new Promise((res) => c.toBlob((b) => res(b ? URL.createObjectURL(b) : null)));
-    });
+    }).catch(() => null);
     imageUrls.set(id, p);
     p.then((u) => {
       if (!u && imageUrls.get(id) === p) imageUrls.delete(id);
@@ -332,7 +336,7 @@ export class Gui {
       this.layoutChildren(sg, node, era === 2018 ? [l, sg.props.get('IgnoreGuiInset') ? -top18 : 0] : [l, t], [W, GH], live, order++);
     }
     for (const [inst, node] of this.nodes) {
-      if (!live.has(inst) && !node.billboard) {
+      if (!live.has(inst) && !node.billboard && !(this.bbLive && this.bbLive.has(inst))) {
         node.el.remove();
         this.nodes.delete(inst);
       }
@@ -457,13 +461,18 @@ export class Gui {
     this.notify(c, name);
   }
 
-  constrain(c, w, h) {
+  constrain(c, w, h, area) {
     for (const k of c.children) {
       const n = k.ClassName;
       if (n === 'UIAspectRatioConstraint') {
         const ar = Math.max(1e-3, +k.props.get('AspectRatio') || 1);
         if ((k.props.get('AspectType') | 0) === 1) {
-          if ((k.props.get('DominantAxis') | 0) === 1) w = h * ar;
+          if (area && contentEra() === 2018) {
+            w = area[0];
+            h = area[1];
+            if (w / Math.max(1e-3, h) > ar) w = h * ar;
+            else h = w / ar;
+          } else if ((k.props.get('DominantAxis') | 0) === 1) w = h * ar;
           else h = w / ar;
         } else if (w / Math.max(1e-3, h) > ar) w = h * ar;
         else h = w / ar;
@@ -562,7 +571,7 @@ export class Gui {
       const cons = P.get('SizeConstraint');
       const rx = cons === 2 ? area[1] : area[0];
       const ry = cons === 1 ? area[0] : area[1];
-      sizes.set(c, this.constrain(c, rx * sz[0] + sz[1], ry * sz[2] + sz[3]));
+      sizes.set(c, this.constrain(c, rx * sz[0] + sz[1], ry * sz[2] + sz[3], area));
     }
     const placed = layout ? this.arrange(layout, objs, sizes, area) : null;
     return { inner, area, objs, sizes, placed, scroll, canvas };
@@ -579,6 +588,18 @@ export class Gui {
       y = Math.round(area[1] * ps[2] + ps[3] - ap[1] * h);
     }
     return [x + inner[0], y + inner[1]];
+  }
+
+  measureHidden(parent, pPos, pSize, depth = 0) {
+    if (depth > 40) return;
+    const { inner, area, objs, sizes, placed } = this.measureKids(parent, pSize);
+    for (const c of objs) {
+      const [x, y] = this.posOf(c, placed, sizes, area, inner);
+      const abs = [pPos[0] + x, pPos[1] + y];
+      this.setAbs(c, 'AbsolutePosition', abs);
+      this.setAbs(c, 'AbsoluteSize', sizes.get(c));
+      if (c.children.length) this.measureHidden(c, abs, sizes.get(c), depth + 1);
+    }
   }
 
   layoutChildren(parent, pnode, pPos, pSize, live, zBase) {
@@ -617,7 +638,10 @@ export class Gui {
       node.el.classList.toggle('ch-g-box-typing', typing);
       const visible = P.get('Visible') || typing;
       st.display = visible ? '' : 'none';
-      if (!visible) continue;
+      if (!visible) {
+        if (c.children.length && contentEra() === 2018) this.measureHidden(c, abs, [w, h]);
+        continue;
+      }
       st.left = x + 'px';
       st.top = y + 'px';
       st.width = Math.max(0, w) + 'px';
@@ -632,8 +656,14 @@ export class Gui {
         st.transformOrigin = `${ap[0] * 100}% ${ap[1] * 100}%`;
       }
       if (c.ClassName === 'ScrollingFrame') {
-        st.overflow = P.get('ScrollingEnabled') === false ? 'hidden' : 'auto';
+        const cs = P.get('CanvasSize') || [0, 0, 2, 0];
+        const cw = ud([cs[0], cs[1]], w), chh = ud([cs[2], cs[3]], h);
+        const on = P.get('ScrollingEnabled') !== false;
+        st.overflow = '';
+        st.overflowX = on && cw > w + 1 ? 'auto' : 'hidden';
+        st.overflowY = on && chh > h + 1 ? 'auto' : 'hidden';
         node.el.classList.add('ch-g-scroll');
+        node.el.classList.toggle('ch-g-nobar', P.has('ScrollBarThickness') && (P.get('ScrollBarThickness') | 0) <= 0);
       } else st.overflow = P.get('ClipsDescendants') ? 'hidden' : 'visible';
       const style = P.get('Style') | 0;
       const bt = P.get('BackgroundTransparency');
@@ -691,7 +721,11 @@ export class Gui {
       const nw = node.img.naturalWidth, nh = node.img.naturalHeight;
       const r = P.get('SliceCenter') || [0, 0, 0, 0];
       const k = P.has('SliceScale') ? +P.get('SliceScale') || 1 : 1;
-      const top = Math.max(0, r[1]), left = Math.max(0, r[0]), right = Math.max(0, nw - r[2]), bottom = Math.max(0, nh - r[3]);
+      let top = Math.max(0, r[1]), left = Math.max(0, r[0]), right = Math.max(0, nw - r[2]), bottom = Math.max(0, nh - r[3]);
+      if (left + right >= nw && nw > 1) right = Math.max(0, nw - left - 1);
+      if (left + right >= nw && nw > 1) left = Math.max(0, nw - right - 1);
+      if (top + bottom >= nh && nh > 1) bottom = Math.max(0, nh - top - 1);
+      if (top + bottom >= nh && nh > 1) top = Math.max(0, nh - bottom - 1);
       is.display = 'none';
       cs.borderStyle = 'solid';
       cs.borderWidth = `${top * k}px ${right * k}px ${bottom * k}px ${left * k}px`;
@@ -794,8 +828,9 @@ export class Gui {
       st.lineHeight = P.has('LineHeight') ? String((+P.get('LineHeight') || 1) * 1.15) : '';
       const trunc = (P.get('TextTruncate') | 0) === 1;
       st.textOverflow = trunc ? 'ellipsis' : '';
-      st.overflow = trunc ? 'hidden' : '';
-      st.maxWidth = trunc ? '100%' : '';
+      st.overflow = trunc ? 'hidden' : 'visible';
+      st.maxWidth = trunc || wrap ? '100%' : 'none';
+      st.flexShrink = trunc || wrap ? '' : '0';
     }
     const xa = P.get('TextXAlignment'), ya = P.get('TextYAlignment');
     if (c.ClassName === 'TextBox') {
@@ -941,19 +976,33 @@ export class Gui {
       if (!root) return;
       for (const d of root.descendants()) if (d.ClassName === 'BillboardGui') list.push(d);
     };
-    if (this.frameCount % 15 === 0 || !this.bbList) {
+    if (this.frameCount % 15 === 0 || !this.bbWorld) {
       scan(ws);
-      scan(pg);
-      this.bbList = list;
+      this.bbWorld = list.slice();
     }
+    list.length = 0;
+    scan(pg);
+    this.bbList = this.bbWorld.concat(list);
     const live = new Set();
     for (const bb of this.bbList) {
       if (bb.destroyed) continue;
       const ad = bb.props.get('Adornee') || (bb.parent && bb.parent.isA('BasePart') ? bb.parent : null);
       if (!ad || !ad.isA('BasePart') || bb.props.get('Enabled') === false) continue;
       const cf = ad.props.get('CFrame');
-      const off = bb.props.get('StudsOffset');
-      const p = this.project([cf[0] + off[0], cf[1] + off[1], cf[2] + off[2]]);
+      const off = bb.props.get('StudsOffset') || [0, 0, 0];
+      const wo = bb.props.get('StudsOffsetWorldSpace') || [0, 0, 0];
+      const ex = bb.props.get('ExtentsOffset') || [0, 0, 0];
+      const as = ad.props.get('Size') || [0, 0, 0];
+      const camq = this.renderer.camera.quaternion;
+      const basis = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map((v) => new (this.renderer.camera.position.constructor)(v[0], v[1], v[2]).applyQuaternion(camq));
+      const loc = [off[0] + ex[0] * as[0] / 2, off[1] + ex[1] * as[1] / 2, off[2] + ex[2] * as[2] / 2];
+      const at = [cf[0] + wo[0], cf[1] + wo[1], cf[2] + wo[2]];
+      for (let i = 0; i < 3; i++) {
+        at[0] += basis[i].x * loc[i];
+        at[1] += basis[i].y * loc[i];
+        at[2] += basis[i].z * loc[i];
+      }
+      const p = this.project(at);
       const node = this.nodeFor(bb, this.billboards);
       node.billboard = true;
       live.add(bb);
@@ -976,30 +1025,53 @@ export class Gui {
       this.layoutChildren(bb, node, [p[0] - w / 2, p[1] - h / 2], [w, h], live);
     }
     for (const [inst, node] of this.nodes) {
-      if (node.billboard && !live.has(inst)) {
+      if (!live.has(inst) && (node.billboard || (this.bbLive && this.bbLive.has(inst)))) {
         node.el.remove();
         this.nodes.delete(inst);
       }
     }
+    this.bbLive = live;
   }
 
   frame() {
     this.frameCount = (this.frameCount || 0) + 1;
+    if (!this.preloaded && contentEra() === 2018) {
+      this.preloaded = true;
+      this.overlay.classList.add('ch-era-2018');
+      for (const u of ['rbxasset://textures/ui/dialog_white.png', 'rbxasset://textures/ui/dialog_tail.png', 'rbxasset://textures/ui/dialog_purple.png', 'rbxasset://textures/ui/chatBubble_white_notify_bkg.png']) imageSrc(u);
+    }
     this.layout();
+    this.applyPendingFocus();
     this.updateBillboards();
     this.updateTags();
   }
 
   focusTextBox(inst, on) {
     const node = this.nodes.get(inst);
-    if (!node) return;
+    if (!node) {
+      if (on) this.pendingFocus = { inst, tries: 30 };
+      else if (this.pendingFocus && this.pendingFocus.inst === inst) this.pendingFocus = null;
+      return;
+    }
     if (on) {
       if (this.touch) {
         node.el.classList.add('ch-g-box-typing');
         node.el.style.display = '';
       }
       node.el.focus();
-    } else node.el.blur();
+      this.pendingFocus = document.activeElement === node.el ? null : { inst, tries: 30 };
+    } else {
+      if (this.pendingFocus && this.pendingFocus.inst === inst) this.pendingFocus = null;
+      node.el.blur();
+    }
+  }
+
+  applyPendingFocus() {
+    const pf = this.pendingFocus;
+    if (!pf) return;
+    const node = this.nodes.get(pf.inst);
+    if (node && !pf.inst.destroyed) node.el.focus();
+    if ((node && document.activeElement === node.el) || --pf.tries <= 0 || pf.inst.destroyed) this.pendingFocus = null;
   }
 
   pointerOverGui(x, y) {

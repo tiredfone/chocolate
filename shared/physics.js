@@ -463,6 +463,7 @@ export class Physics {
         } else continue;
         if (!on) {
           h.joint.configureMotorVelocity(0, 0);
+          h.cmd = 0;
           continue;
         }
         const wcf = wheelPart.props.get('CFrame');
@@ -473,7 +474,11 @@ export class Physics {
         const wv = (spin[0] * axis[0] + spin[1] * axis[1] + spin[2] * axis[2]) * (s / (sign > 0 ? h.radiusB : h.radiusA)) * sign;
         const wb = this.parts.get(wheelPart)?.asm?.body;
         const m = wb ? wb.mass() : 1;
-        h.joint.configureMotorVelocity(wv, Math.max(0.5, torque * m * 0.02));
+        const radius = Math.max(0.1, sign > 0 ? h.radiusB : h.radiusA);
+        const step = ((Math.max(1, torque) * (st ? 3 : 1)) / radius) * STEP;
+        const cur = Number.isFinite(h.cmd) ? h.cmd : 0;
+        h.cmd = cur + Math.max(-step, Math.min(step, wv - cur));
+        h.joint.configureMotorVelocity(h.cmd, Math.max(0.5, torque * m * 0.02));
         if (wb && wb.isSleeping()) wb.wakeUp();
         if (rec.asm.body.isSleeping()) rec.asm.body.wakeUp();
       }

@@ -65,6 +65,15 @@ A place's `ClientVersion` (2012 or 2018) comes from `redeem` as `clientVersion`.
 - Collision groups live in `Workspace.CollisionGroups` (`name^id^mask` entries joined by `\`, Roblox's own format) and `BasePart.CollisionGroupId`; `shared/collisiongroups.js` parses them, physics sets Rapier collision groups from them and the character controller's filter honours them.
 - `game:BindToClose` callbacks run on shutdown: the worker fires `__Close` and waits 2.5 s before exiting.
 - Tween methods take their callback in Lua and call it with `TweenStatus.Completed` or `Canceled`.
+- 2018 games draw with 2018 content: studs come from the `platform/textures/studs.png` atlas (`STUDS2018` in `client/shade2012.js`; sections top to bottom are studs, weld, inlet, universal) and the default sky is `sky512_*`. Nothing in a 2018 game should fall back to a 2012 texture when `content2018/` has one.
+- R15 limbs are UV-mapped to Roblox's composited body atlases, not to the clothing template. `R15Atlases` in `client/character2012.js` renders each group (torso, each arm, each leg) by drawing its `R15Composit*Base` mesh in the body colour and then again with the pants and shirt templates, as vanilla's renderer does. Never put the raw 585x559 template on an R15 mesh.
+- Internal instances that Lua never sees, such as the KeyframeSequences the animator loads, are destroyed with `dm.destroy(inst, true)` so they do not take `ghosts` slots. R15 animations hold thousands of `Pose`s; ghosting them evicted real destroyed instances, and `ChildRemoved` handlers then failed with `Instance no longer exists`.
+- A thread that waits on an event again inside its own resume stays subscribed (`fireLocal` checks `eventWaiters` before unsubscribing). Without that, `RenderStepped:wait()` loops stalled and the leave screen never shut the game down.
+- `GuiService.SelectedCoreObject` and `PlayerGui.SelectedObject` fire `SelectionLost` and `SelectionGained` when they change, and Enter clicks the selected object, so the 2018 leave and reset prompts work from the keyboard. `/` fires the chat hotkey (`SpecialKey` 5).
+- 2018 bubble chat is the `BubbleChat` BillboardGuis; the engine draws no 2012 bubble. Billboards in `PlayerGui` are laid out every frame and those in the Workspace every 15 frames; `StudsOffset` is in camera space, `StudsOffsetWorldSpace` and `ExtentsOffset` in world space.
+- Jumps follow exact kinematics: a jump peaks at `JumpPower² / (2 × 196.2)` studs (6.37 at the default 50).
+- `VehicleSeat` wheels ramp their motor target speed by the seat's torque instead of jumping to `MaxSpeed`, so cars accelerate smoothly and stay upright.
+- The server rejects a character update that moves farther than `WalkSpeed` allows, so a LocalScript that sets its own `HumanoidRootPart.CFrame` far away is snapped back. Teleport from a server Script.
 
 ## Engine API
 

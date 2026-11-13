@@ -43,6 +43,7 @@ Read the failing CoreScript by ID through the configured source (`luaSource(id)`
 | Script waits forever for a GUI object | The engine made it in 2012: build it in `ClientWorld.buildControlFrame` or nearby in `client/world.js` |
 | Needs the browser (camera, fullscreen, leave) | Add a function to `ClientWorld.env()` and a hook in `client/main.js` |
 | Button acts through `SetVerb` | Handle the verb in `env().verb` in `client/world.js` |
+| `Instance no longer exists` from a `ChildRemoved` or other handler | The instance was evicted from the host's `ghosts`. Find what the client destroys in bulk (`window.__world.dm.ghosts`) and destroy internal instances with `dm.destroy(inst, true)` |
 | 2018 method or async method | `def` in `installMethods2018` in `shared/api2018.js`; a yielding one returns a Promise and also needs `LM.<Name>` calling `callAsync` in `shared/runtime2018.lua` plus its class in `LUA_CLASS` |
 | A script kicks or crashes the player on purpose (admin and anti-exploit systems) | Read the check it fails and match Roblox's real behaviour: security identity (`__gameCaller`, `__denied`, `settings()`, `loadstring`, `RobloxLocked` in `shared/runtime.lua`), what `typeof`, `getfenv`, `pcall` and `FindService` return, what replicates (`REPLICATED_SERVICES`, `hiddenProp`) and how instance references cross remotes. Never special-case the script |
 

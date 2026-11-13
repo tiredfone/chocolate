@@ -813,7 +813,7 @@ local function fireLocal(key, ...)
   if w then
     eventWaiters[key] = nil
     for i = 1, #w do resume(w[i], ...) end
-    if not subs[key] then
+    if not subs[key] and not eventWaiters[key] then
       local id, name = string.match(key, "^(-?%d+):(.+)$")
       if id then JS_UNSUB(tonumber(id), name) end
     end

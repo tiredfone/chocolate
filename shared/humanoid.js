@@ -330,6 +330,7 @@ export class Controller {
     const wantJump = this.jumpHeldFor > 0 && !platform;
     if (hum.props.get('Jump')) hum.dm.setProp(hum, 'Jump', false, { local: true });
     const climbing = !platform && this.climbCheck(dir);
+    let fell = false;
     if (climbing) {
       this.vel[1] = ws * 0.7;
       this.state = STATES.climb;
@@ -338,11 +339,12 @@ export class Controller {
       this.vel[1] = Math.max(this.vel[1], Math.sqrt(2 * GRAVITY * 2.4));
     } else {
       this.vel[1] -= GRAVITY * dt;
+      fell = true;
       this.jumpCooldown = Math.max(0, this.jumpCooldown - dt);
       const e18 = hum.dm && hum.dm.era === 2018;
       const footing = this.grounded || (e18 && !this.jumped && (this.sinceGround || 0) < 0.12);
       if (footing && wantJump && (e18 || this.landedFor > LANDED_DELAY) && this.jumpCooldown <= 0 && this.vel[1] <= 0) {
-        this.vel[1] = hum.props.get('JumpPower') || 50;
+        this.vel[1] = (hum.props.get('JumpPower') || 50) - GRAVITY * dt;
         this.grounded = false;
         this.jumped = true;
         this.landedFor = 0;
@@ -351,7 +353,7 @@ export class Controller {
       }
     }
     const settle = this.grounded && this.vel[1] <= 0 && !climbing;
-    const desired = { x: this.vel[0] * dt, y: settle ? 0 : this.vel[1] * dt, z: this.vel[2] * dt };
+    const desired = { x: this.vel[0] * dt, y: settle ? 0 : (this.vel[1] + (fell ? 0.5 * GRAVITY * dt : 0)) * dt, z: this.vel[2] * dt };
     this.kcc.computeColliderMovement(this.collider, desired, this.R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.filter());
     const mvd = this.kcc.computedMovement();
     let grounded = this.kcc.computedGrounded();

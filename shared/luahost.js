@@ -390,16 +390,22 @@ export class ScriptHost {
         dm.emit(cs, ev, inst);
         for (const d of inst.descendants()) dm.emit(cs, ev, d);
       },
-      changed: (inst, name) => {
+      changed: (inst, name, old) => {
+        if ((name === 'SelectedCoreObject' || name === 'SelectedObject') && (inst.ClassName === 'GuiService' || inst.ClassName === 'PlayerGui')) {
+          const now = inst.props.get(name);
+          if (old && old !== now && old.isA && old.isA('GuiObject') && !old.destroyed) dm.emit(old, 'SelectionLost');
+          if (now && now !== old && now.isA && now.isA('GuiObject')) dm.emit(now, 'SelectionGained');
+        }
         if (name === 'Disabled' && inst.isA('BaseScript')) this.scanScripts(inst);
         if (name === 'Character' && inst.ClassName === 'Player') {
           const ch = inst.props.get('Character');
           if (ch && !ch.destroyed) this.scanScripts(ch);
         }
       },
-      destroyed: (inst) => {
+      destroyed: (inst, quiet) => {
         if (this.killed) this.killed.add(inst.id);
         if (this.running.has(inst.id) && !(this.selfDestroyed && this.selfDestroyed.has(inst.id))) this.stopScript(inst);
+        if (quiet) return;
         this.ghosts.set(inst.id, inst);
         if (this.ghosts.size > 20000) {
           const first = this.ghosts.keys().next().value;

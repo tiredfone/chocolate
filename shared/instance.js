@@ -233,16 +233,16 @@ export class DataModel {
     for (const c of inst.children) this.emitAncestry(c, changed, parent);
   }
 
-  destroy(inst) {
+  destroy(inst, quiet = false) {
     if (inst.destroyed || inst === this.root || isService(inst.ClassName)) return;
-    for (const c of [...inst.children]) this.destroy(c);
+    for (const c of [...inst.children]) this.destroy(c, quiet);
     if (inst.parent) {
       inst.parentLocked = false;
       this.setParent(inst, null);
     }
     inst.destroyed = true;
     inst.parentLocked = true;
-    for (const o of this.observers) if (o.destroyed) o.destroyed(inst);
+    for (const o of this.observers) if (o.destroyed) o.destroyed(inst, quiet);
     inst.listeners = null;
     this.byId.delete(inst.id);
   }

@@ -2,7 +2,7 @@ import * as C from './cframe.js';
 
 const IDENTITY = C.cf();
 const seqCache = new Map();
-const OPS = new Set(['play', 'stop', 'speed', 'weight']);
+const OPS = new Set(['play', 'stop', 'speed', 'weight', 'time']);
 
 export function animAssetId(url) {
   if (typeof url === 'number') return url > 0 ? url : null;
@@ -63,7 +63,7 @@ export class Animations {
     const p = this.loadAsset(id).then((model) => {
       const ks = model.ClassName === 'KeyframeSequence' ? model : model.descendants().find((d) => d.ClassName === 'KeyframeSequence');
       const seq = ks ? parseSequence(ks) : null;
-      if (!model.destroyed) this.dm.destroy(model);
+      if (!model.destroyed) this.dm.destroy(model, true);
       if (!seq) throw new Error(`asset ${id} has no KeyframeSequence`);
       return seq;
     });
@@ -71,6 +71,12 @@ export class Animations {
     p.catch(() => seqCache.delete(id));
     if (seqCache.size > 300) seqCache.delete(seqCache.keys().next().value);
     return p;
+  }
+
+  trackOf(inst) {
+    const hum = inst && inst.data && inst.data.hum;
+    const an = hum && this.byHum.get(hum);
+    return an ? an.tracks.find((t) => t.inst === inst) || null : null;
   }
 
   static validOp(op) {
@@ -114,6 +120,7 @@ export class Animations {
       tr.fade = Math.max(0, num(a, 0.1));
       if (tr.fade === 0) tr.w = 0;
     } else if (op === 'speed') tr.speed = num(a, 1);
+    else if (op === 'time') tr.t = Math.max(0, num(a, 0));
     else if (op === 'weight') {
       tr.weight = Math.max(0, num(a, 1));
       tr.fade = Math.max(0, num(b, 0.1));

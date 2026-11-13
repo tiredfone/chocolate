@@ -123,11 +123,13 @@ async function boot() {
     const to = m.to ? dm.byId.get(m.to) || null : null;
     if (speaker) dm.emit(players, 'PlayerChatted', T.e('PlayerChatType', kind), speaker, m.m, to);
     const head = m.h && dm.byId.get(m.h);
-    if (head && gui && kind !== 2) gui.bubble(head, m.m);
+    if (head && gui && kind !== 2 && world.era !== 2018) gui.bubble(head, m.m);
   });
   net.on('bubble', (m) => {
     const p = world && world.dm.byId.get(m.id);
-    if (p && gui) gui.bubble(p, m.m);
+    if (!p) return;
+    if (world.era === 2018) world.dm.emit(world.dm.services.get('Chat'), 'Chatted', p, m.m, T.e('ChatColor', (m.c | 0) || 0));
+    else if (gui) gui.bubble(p, m.m);
   });
   net.on('msg', (m) => gui && gui.setHint(m.m));
   for (const t of ['re', 'rfc', 'rfr']) net.on(t, (m) => {
@@ -293,6 +295,22 @@ function start(world, renderer, camera, gui, net) {
       in18.keyDown(e, gui.isTyping());
       if (e.key === 'Tab' || e.key === ' ' || e.key.startsWith('Arrow')) e.preventDefault();
       if (gui.isTyping() || e.repeat) return;
+      if (e.key === 'Enter') {
+        const gs = world.dm.services.get('GuiService');
+        const pg = world.player && world.player.findChildOfClass('PlayerGui');
+        const sel = (gs && gs.props.get('SelectedCoreObject')) || (pg && pg.props.get('SelectedObject'));
+        if (sel && !sel.destroyed && sel.isA('GuiButton') && sel.props.get('Visible') !== false) {
+          e.preventDefault();
+          world.dm.emit(sel, 'MouseButton1Click');
+          world.dm.emit(sel, 'Activated');
+          return;
+        }
+      }
+      if (e.key === '/' && world.host.guiKeys && world.host.guiKeys.has('special:5')) {
+        e.preventDefault();
+        world.dm.emit(world.dm.services.get('GuiService'), 'SpecialKeyPressed', T.e('SpecialKey', 5));
+        return;
+      }
       world.ensureAudio();
       held.add(e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase());
       if (e.code) codes.add(e.code);

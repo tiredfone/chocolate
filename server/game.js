@@ -406,8 +406,8 @@ export class Game {
         this.store.set(`${pl.props.get('userId')}:${kind}:${k}`, v);
       },
       loadData: async (pl, k, kind) => this.store.get(`${pl.props.get('userId')}:${kind}:${k}`),
-      bubbleChat: (part, msg) => {
-        if (part && part.isA('BasePart')) this.broadcast({ t: 'bubble', id: part.id, m: cleanText(msg, MAX_CHAT) });
+      bubbleChat: (part, msg, color) => {
+        if (part && part.isA('BasePart')) this.broadcast({ t: 'bubble', id: part.id, m: cleanText(msg, MAX_CHAT), c: (typeof color === 'number' ? color : color && color.value) | 0 });
       },
       findSpace: (m, parts, cf, target) => this.findSpace(m, parts, cf, target),
       changeState: () => null,
@@ -420,6 +420,7 @@ export class Game {
         if (hum.id > 0 && hum.repWas && hum.repWas.rep) this.broadcast({ t: 'anim', h: hum.id, k, op, id, a, b, c });
       },
       playingTracks: (h) => this.anims.playing(h),
+      animTrack: (t) => this.anims.trackOf(t),
     };
   }
 

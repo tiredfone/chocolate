@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { brick } from '../shared/brickcolor.js';
 import { sunDirection } from '../shared/luahost.js';
 import { loadTexture, loadMesh, loadImage, proceduralTexture, trussTexture, spriteTexture, contentTexture, loadUnionMesh, unionGeometry } from './assets.js';
-import { Material2012, MATERIALS, MATERIALS2018, LIGHTS, rawColor, texPosAttribute, applyLighting as light2012, setShadeEra } from './shade2012.js';
+import { Material2012, MATERIALS, MATERIALS2018, LIGHTS, rawColor, texPosAttribute, applyLighting as light2012, setShadeEra, shadeEra } from './shade2012.js';
 import { ParticleSystem2012, SYSTEMS, preloadParticles } from './particles2012.js';
-import { CharacterAtlases, BODY_MESH, clothingOf } from './character2012.js';
+import { CharacterAtlases, R15Atlases, BODY_MESH, clothingOf } from './character2012.js';
 import { contentMesh } from './assets.js';
 
 const MATERIAL_KIND = {
@@ -19,7 +19,12 @@ const SKY_2018 = ['rt', 'lf', 'up', 'dn', 'bk', 'ft'].map((f) => `rbxasset://tex
 let DEFAULT_SKY = SKY_2012;
 
 let studAtlas = null;
+let studAtlas2018 = null;
 function studTexture() {
+  if (shadeEra() === 2018) {
+    if (!studAtlas2018) studAtlas2018 = contentTexture('platform/textures/studs.png', { placeholder: 'rgb(128,128,128)' });
+    return studAtlas2018;
+  }
   if (!studAtlas) studAtlas = contentTexture('textures/surfacesAlpha.png', { placeholder: 'rgba(0,0,0,0)' });
   return studAtlas;
 }
@@ -202,6 +207,7 @@ export class Renderer {
     this.setupLighting();
     preloadParticles();
     this.atlases = new CharacterAtlases(r);
+    this.r15Atlases = new R15Atlases(r);
     contentMesh('fonts/head.mesh').then((g) => {
       if (!g) return;
       g = g.clone();
@@ -708,34 +714,6 @@ export class Renderer {
     return m.ClassName === 'SpecialMesh' && m.props.get('MeshType') === 0;
   }
 
-  r15Clothing(model, c) {
-    const shirt = model.children.find((x) => x.ClassName === 'Shirt');
-    const pants = model.children.find((x) => x.ClassName === 'Pants');
-    const urls = [pants && pants.props.get('PantsTemplate'), shirt && shirt.props.get('ShirtTemplate')].filter(Boolean);
-    if (!urls.length) return null;
-    const key = urls.join('|') + `|${c.r.toFixed(3)},${c.g.toFixed(3)},${c.b.toFixed(3)}`;
-    if (!this.r15Tex) this.r15Tex = new Map();
-    let p = this.r15Tex.get(key);
-    if (!p) {
-      p = Promise.all(urls.map((u) => loadImage(u))).then((imgs) => {
-        const cv = document.createElement('canvas');
-        cv.width = 585;
-        cv.height = 559;
-        const g = cv.getContext('2d');
-        g.fillStyle = `rgb(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)})`;
-        g.fillRect(0, 0, cv.width, cv.height);
-        for (const im of imgs) if (im) g.drawImage(im, 0, 0, cv.width, cv.height);
-        const tex = new THREE.CanvasTexture(cv);
-        tex.flipY = false;
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.anisotropy = 4;
-        return tex;
-      });
-      this.r15Tex.set(key, p);
-    }
-    return p;
-  }
-
   buildMeshPart(part, size, transp) {
     const holder = new THREE.Group();
     const c = this.partColor(part);
@@ -756,12 +734,11 @@ export class Renderer {
     } else {
       const model = part.parent;
       if (model && model.findChildOfClass('Humanoid') && R15_LIMBS.has(part.props.get('Name')) && part.props.get('Name') !== 'Head') {
-        const p = this.r15Clothing(model, c);
-        if (p) p.then((t) => {
-          if (!t) return;
+        const t = this.r15Atlases.get(model, part.props.get('Name'));
+        if (t) {
           mat.color.setRGB(1, 1, 1);
           mat.map = t;
-        });
+        }
       }
     }
     const url = part.props.get('MeshId');

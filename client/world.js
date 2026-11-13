@@ -1,6 +1,6 @@
 import { DataModel } from '../shared/instance.js';
 import { applyRecords, decodeValue, encodeValue } from '../shared/codec.js';
-import { ScriptHost, wireArgs, unwireArgs } from '../shared/luahost.js';
+import { ScriptHost, wireArgs, unwireArgs, T } from '../shared/luahost.js';
 import { Core2018 } from '../shared/core2018.js';
 import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
@@ -305,6 +305,7 @@ export class ClientWorld {
         if (this.net && hum.id > 0 && this.ownModel && hum.parent === this.ownModel) this.net.send({ t: 'anim', h: hum.id, k: tr.id, op, id, a, b, c });
       },
       playingTracks: (h) => this.anims.playing(h),
+      animTrack: (t) => this.anims.trackOf(t),
       humanoidMoveTo: (h, pos) => {
         if (this.own && h === this.own.hum) this.own.moveTo = pos ? pos.slice() : null;
       },
@@ -331,7 +332,10 @@ export class ClientWorld {
         if (!id) return '';
         return new TextDecoder().decode(await assetBytes(id));
       },
-      bubbleChat: (part, msg) => this.hooks.bubble && this.hooks.bubble(part, msg),
+      bubbleChat: (part, msg, color) => {
+        if (this.era === 2018) this.dm.emit(this.dm.services.get('Chat'), 'Chatted', part, msg, T.e('ChatColor', typeof color === 'number' ? color : (color && color.value) | 0));
+        else if (this.hooks.bubble) this.hooks.bubble(part, msg);
+      },
       addCoreScriptLocal: (name, parent) => {
         if (this.core && !this.core.coreScript(name, parent && !parent.destroyed ? parent : this.dm.services.get('ScriptContext')) && this.hooks.log) this.hooks.log('warn', `CoreScript ${name} is not available`, null);
       },

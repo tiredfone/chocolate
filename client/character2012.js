@@ -105,3 +105,91 @@ export class CharacterAtlases {
     r.setClearColor(cc, ca);
   }
 }
+
+export const R15_GROUP = {
+  UpperTorso: 'torso', LowerTorso: 'torso',
+  LeftUpperArm: 'leftArm', LeftLowerArm: 'leftArm', LeftHand: 'leftArm',
+  RightUpperArm: 'rightArm', RightLowerArm: 'rightArm', RightHand: 'rightArm',
+  LeftUpperLeg: 'leftLeg', LeftLowerLeg: 'leftLeg', LeftFoot: 'leftLeg',
+  RightUpperLeg: 'rightLeg', RightLowerLeg: 'rightLeg', RightFoot: 'rightLeg',
+};
+const R15_ATLAS = {
+  torso: { base: 'avatar/compositing/R15CompositTorsoBase.mesh', w: 388, h: 272, layers: ['pants', 'shirt'], color: 'UpperTorso' },
+  leftArm: { base: 'avatar/compositing/R15CompositLeftArmBase.mesh', w: 264, h: 284, layers: ['shirt'], color: 'LeftUpperArm' },
+  rightArm: { base: 'avatar/compositing/R15CompositRightArmBase.mesh', w: 264, h: 284, layers: ['shirt'], color: 'RightUpperArm' },
+  leftLeg: { base: 'avatar/compositing/R15CompositLeftArmBase.mesh', w: 264, h: 284, layers: ['pants'], color: 'LeftUpperLeg' },
+  rightLeg: { base: 'avatar/compositing/R15CompositRightArmBase.mesh', w: 264, h: 284, layers: ['pants'], color: 'RightUpperLeg' },
+};
+
+export class R15Atlases {
+  constructor(renderer) {
+    this.r = renderer;
+    this.cache = new WeakMap();
+  }
+
+  get(model, partName) {
+    const group = R15_GROUP[partName];
+    if (!group) return null;
+    const clothes = clothingOf(model);
+    if (!clothes) return null;
+    const def = R15_ATLAS[group];
+    const cp = model.findChild(def.color);
+    const color = cp && cp.isA('BasePart') ? cp.props.get('Color') || null : null;
+    const bc = cp && cp.isA('BasePart') ? cp.props.get('BrickColor') : 194;
+    const key = JSON.stringify([clothes.shirt, clothes.pants, color, bc]);
+    let all = this.cache.get(model);
+    if (!all) {
+      all = {};
+      this.cache.set(model, all);
+    }
+    let e = all[group];
+    if (e && e.key === key) return e.rt.texture;
+    if (!e) {
+      const rt = new THREE.WebGLRenderTarget(def.w * 2, def.h * 2, { depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+      rt.texture.colorSpace = THREE.SRGBColorSpace;
+      e = { key, rt, gen: 0, cam: new THREE.OrthographicCamera(0, def.w, def.h, 0, -1000, 1000) };
+      all[group] = e;
+    }
+    e.key = key;
+    e.gen++;
+    const tint = color && color.length === 3 ? new THREE.Color().setRGB(color[0], color[1], color[2], THREE.SRGBColorSpace) : srgb(brick(bc));
+    this.compose(e, def, clothes, tint, e.gen);
+    return e.rt.texture;
+  }
+
+  async compose(e, def, clothes, tint, gen) {
+    const geo = await contentMesh(def.base);
+    if (!geo || e.gen !== gen) return;
+    const scene = new THREE.Scene();
+    const add = (mat, order) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.renderOrder = order;
+      m.frustumCulled = false;
+      scene.add(m);
+    };
+    add(new THREE.MeshBasicMaterial({ color: tint, depthTest: false, depthWrite: false, side: THREE.DoubleSide }), 1);
+    this.draw(e, scene);
+    const texs = await Promise.all(def.layers.map((k) => (clothes[k] ? loadTexture(clothes[k]) : null)));
+    if (e.gen !== gen) {
+      for (const o of scene.children) o.material.dispose();
+      return;
+    }
+    texs.forEach((tex, i) => {
+      if (tex) add(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }), 2 + i);
+    });
+    this.draw(e, scene);
+    for (const o of scene.children) o.material.dispose();
+  }
+
+  draw(e, scene) {
+    const r = this.r;
+    const prev = r.getRenderTarget();
+    const cc = r.getClearColor(new THREE.Color()), ca = r.getClearAlpha();
+    r.setRenderTarget(e.rt);
+    r.setClearColor(0x000000, 0);
+    r.clear();
+    r.render(scene, e.cam);
+    r.setRenderTarget(prev);
+    r.setClearColor(cc, ca);
+  }
+}

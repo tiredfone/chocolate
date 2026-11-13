@@ -46,6 +46,13 @@ const LOCAL_CONTENT = {
   'textures/ui/leavemenuleavebtn.png': '/client/ui/LeaveMenuLeaveBtn.png',
   'textures/ui/leavemenucancelbtn.png': '/client/ui/LeaveMenuCancelBtn.png',
 };
+export function contentImageUrl(url) {
+  const path = builtin(url);
+  if (!path || path.includes('..')) return null;
+  const local = LOCAL_CONTENT[path.toLowerCase()];
+  return local ? publicPath(local) : contentUrl(path);
+}
+
 function contentImage(path) {
   if (path.includes('..')) return Promise.resolve(null);
   let p = contentImages.get(path);

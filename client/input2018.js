@@ -133,10 +133,15 @@ export class Input2018 {
   }
 
   wheel(dir, overGui) {
-    const io = this.wheelIO;
-    io.props.set('UserInputState', 1);
-    io.props.set('Position', [...this.pos().slice(0, 2), dir]);
-    this.send(io, overGui, 'c');
+    const parts = 4;
+    for (let i = 0; i < parts; i++) {
+      setTimeout(() => {
+        const io = this.wheelIO;
+        io.props.set('UserInputState', 1);
+        io.props.set('Position', [...this.pos().slice(0, 2), dir / parts]);
+        this.send(io, overGui, 'c');
+      }, i * 16);
+    }
   }
 
   takeDelta() {

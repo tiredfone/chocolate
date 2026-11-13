@@ -144,6 +144,8 @@ The server answers two local HTTP requests on its port, which must not be proxie
 3. The worker creates the Player, sets `CharacterAppearance`, loads the character from `appearance` and `bodyColors`, and gives StarterPack tools plus the gear from `gears` on every spawn.
 4. While it loads, the page shows the 2012 engine's loading screen: the default sky behind a grey panel counting Bricks (parts) and Connectors (joints). The client applies the snapshot, creates the engine-built `RobloxGui.ControlFrame` and runs the StarterScript (37801172), which loads the other CoreScripts; the loading screen counts up to the place's totals and fades out. A 2018 place shows the 2018 loading screen instead (place thumbnail, name, creator and the turning logo), drawn by the host page from its first frame and replaced by the 2018 LoadingScript's own screen once the client runs.
 
+A 2018 game renders with the 2018 client's content: the 2018 stud atlas and sky, and R15 clothing composited into per-limb atlases as the 2018 client does.
+
 A 2018 server finishes starting the place's scripts before letting the first player in: it waits until no `InsertService:LoadAsset` (which `require(assetId)` uses) has been pending for half a second, for at most 15 seconds, as admin systems such as Adonis expect.
 
 A Studio ticket goes to the same WebSocket. When `redeem` answers `mode: studio`, the server puts the connection in that place's Team Create session instead of a game worker.

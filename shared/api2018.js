@@ -471,6 +471,23 @@ export const FLAGS_2018 = new Set([]);
 export function installComputed2018(def, host, { T }) {
   const dm = host.dm;
   const env = host.env;
+  const trackOf = (t) => (env.animTrack ? env.animTrack(t) : null);
+  def('TimePosition', 'AnimationTrack', (t) => {
+    const r = trackOf(t);
+    return r ? r.t : 0;
+  });
+  def('Speed', 'AnimationTrack', (t) => {
+    const r = trackOf(t);
+    return r ? r.speed : 1;
+  });
+  def('WeightCurrent', 'AnimationTrack', (t) => {
+    const r = trackOf(t);
+    return r ? r.w * r.weight : 0;
+  });
+  def('WeightTarget', 'AnimationTrack', (t) => {
+    const r = trackOf(t);
+    return r ? r.target * r.weight : 0;
+  });
   def('ViewportSize', 'Camera', () => T.v2(env.screenSize ? env.screenSize() : [1024, 768]));
   def('ClockTime', 'Lighting', (l) => {
     const m = /^(-?\d+):?(\d+)?:?(\d+)?/.exec(String(l.props.get('TimeOfDay'))) || [];
@@ -514,6 +531,10 @@ export function installSetters2018(def, host) {
     if (!a || a.tag !== 'v3') throw new Error("bad argument #3 to '?' (Vector3 expected)");
     return a.v;
   };
+  def('TimePosition', 'AnimationTrack', (t, a) => {
+    const v = a && a.tag === 'n' ? +a.v : 0;
+    if (env.animate && t.data && t.data.hum) env.animate(t, 'time', Math.max(0, v));
+  });
   def('Orientation', 'BasePart', (p, a) => {
     const o = v3(a);
     const cf = p.props.get('CFrame');
