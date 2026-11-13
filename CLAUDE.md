@@ -73,6 +73,10 @@ A place's `ClientVersion` (2012 or 2018) comes from `redeem` as `clientVersion`.
 - 2018 bubble chat is the `BubbleChat` BillboardGuis; the engine draws no 2012 bubble. Billboards in `PlayerGui` are laid out every frame and those in the Workspace every 15 frames; `StudsOffset` is in camera space, `StudsOffsetWorldSpace` and `ExtentsOffset` in world space.
 - Jumps follow exact kinematics: a jump peaks at `JumpPower² / (2 × 196.2)` studs (6.37 at the default 50).
 - `VehicleSeat` wheels ramp their motor target speed by the seat's torque instead of jumping to `MaxSpeed`, so cars accelerate smoothly and stay upright.
+- R15 characters take the player's body scale from `redeem` (`scale: { height, width, depth, head }`). `buildR15` scales part sizes, the head mesh, attachments, Motor6D offsets and `HipHeight` before placing the rig, and adds Roblox's `BodyHeightScale`, `BodyWidthScale`, `BodyDepthScale` and `HeadScale` NumberValues to the Humanoid; `attachAccessory` scales each accessory by the part it attaches to (head scale on the head, the body average elsewhere).
+- `UserInputService:GetLastInputType()` reports the last real input (Touch on phones from the start), and `LastInputTypeChanged` fires when it changes. The 2018 ControlScript picks touch controls only from this, so without it phones get no thumbstick or jump button.
+- Skybox side faces are drawn upright (images arrive vertically flipped from `createImageBitmap`); the top and bottom faces are rotated so their edges meet the sides. Facing `SkyboxFt`, `SkyboxLf` is on the right, as in Roblox.
+- A player's server body is kinematic, which Rapier treats as infinitely heavy. Its solid collider carries a contact filter (`pushHooks` in `shared/physics.js`) so it only pushes dynamic assemblies up to `CHARACTER_PUSH_MASS` (150); heavier loose structures, such as a building a disaster has broken free, do not move when a player walks into them.
 - The server rejects a character update that moves farther than `WalkSpeed` allows, so a LocalScript that sets its own `HumanoidRootPart.CFrame` far away is snapped back. Teleport from a server Script.
 
 ## Engine API

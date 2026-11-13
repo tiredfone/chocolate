@@ -87,7 +87,7 @@ tick(30);
 
 const gui = { screenGuis, isTyping: () => false };
 const root = { addEventListener() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: W, height: H }) };
-const world = { dm, ready: true, ensureAudio() {}, mouseState: { x: 0, y: 0, ndc: [0, 0] }, mouse, updateMouse() {}, mouseDown() { calls.push(['tap']); }, mouseUp() {} };
+const world = { dm, ready: true, ensureAudio() {}, mouseState: { x: 0, y: 0, ndc: [0, 0] }, mouse, updateMouse() {}, mouseDown() { calls.push(['tap']); }, mouseUp() {}, emitMouse() {} };
 const ti = new TouchInput(world, { pick: () => ({}) }, gui, root, null);
 const ev = (id, x, y) => ({ pointerType: 'touch', pointerId: id, clientX: x, clientY: y, target: null, preventDefault() {} });
 

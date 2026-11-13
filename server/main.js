@@ -102,6 +102,18 @@ function cleanPerks(p) {
   return { badge, chatColor: hex(p.chatColor), nameColor: hex(p.nameColor) };
 }
 
+function cleanScale(sc) {
+  const out = { height: 1, width: 1, depth: 1, head: 1 };
+  if (!sc || typeof sc !== 'object') return out;
+  const lim = { height: [0.5, 1.5], width: [0.5, 1.5], depth: [0.5, 1.5], head: [0.5, 1.5] };
+  for (const k of Object.keys(lim)) {
+    const v = Number(sc[k]);
+    if (Number.isFinite(v)) out[k] = Math.max(lim[k][0], Math.min(lim[k][1], v));
+  }
+  if (sc.depth === undefined) out.depth = out.width;
+  return out;
+}
+
 function chooseInstance(info) {
   const placeId = info.placeId | 0;
   const max = Math.max(1, Math.min(100, (info.maxPlayers | 0) || DEFAULT_MAX));
@@ -411,7 +423,7 @@ wss.on('connection', async (ws, req, url) => {
   clearTimeout(p.idleTimer);
   s.place = p;
   p.members.set(cid, { id: info.userId | 0, name: String(info.username) });
-  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6' } });
+  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6', scale: cleanScale(info.scale) } });
   s.joined = true;
   for (const str of early.splice(0)) p.worker.postMessage({ t: 'msg', cid, data: str });
   log(`${p.tag} ${info.username} (${info.userId}) connected`);

@@ -311,6 +311,7 @@ export class ClientWorld {
       },
       kick: (pl, msg) => { if (pl === this.player && this.hooks.kicked) this.hooks.kicked(msg || 'You have been kicked'); },
       focusTextBox: (t, on) => this.hooks.focusTextBox && this.hooks.focusTextBox(t, on),
+      lastInputType: () => (this.input2018 ? this.input2018.last : this.touch ? 7 : 8),
       isKeyDown: (k) => (typeof k === 'number' && this.hooks.isKeyCodeDown ? this.hooks.isKeyCodeDown(k) : this.keys.has(String(k).toLowerCase())),
       setMessage: (m) => this.hooks.setMessage && this.hooks.setMessage(m),
       breakJoints: (p) => { if (this.ownModel && p.id > 0 && p.isDescendantOf(this.ownModel)) this.net.send({ t: 'break', id: p.id }); return null; },

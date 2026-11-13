@@ -37,3 +37,5 @@ node tools/corescripts.mjs touch
 - `TouchControlsSheet.png` is built from the iOS app's `thumbstickOuter` (0,0), `thumbstickInner` (220,0), `jumpButtonPress` (0,222) and `jumpbutton` (176,222). Keep those rectangles if it is rebuilt.
 - ChatScript's chat bar lives in the 20px strip reserved by `GuiService:SetGlobalGuiInset`; the inset must keep working for chat to be visible.
 - Text boxes focused from Lua must be focused inside the tap's event handler for mobile keyboards to open. `Gui` runs a Lua step on button clicks in touch mode for that reason; keep it.
+
+In 2018 games the ControlScript shows touch controls only when `UserInputService:GetLastInputType()` is `Touch`. If the TouchGui exists but every control is `Visible = false`, check `lastInputType` in `ClientWorld.env()` and `Input2018.setLast`.

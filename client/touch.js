@@ -96,6 +96,7 @@ export class TouchInput {
     const processed = hits.some((g) => g.isA('GuiButton') || g.ClassName === 'TextBox' || g.props.get('Active'));
     const rec = { io, x, y, sx: x, sy: y, t0: performance.now(), began: hits, processed, moved: 0 };
     this.active.set(e.pointerId, rec);
+    if (this.world.input2018) this.world.input2018.setLast(7);
     this.world.ensureAudio();
     if (this.gui.isTyping() && !(e.target && e.target.closest && e.target.closest('input,textarea'))) document.activeElement.blur();
     const uis = dm.services.get('UserInputService');

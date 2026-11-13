@@ -3,6 +3,7 @@ import { parseGroups, rapierGroups, groupsCollide } from './collisiongroups.js';
 
 export const GRAVITY = 196.2;
 const STEP = 1 / 60;
+const CHARACTER_PUSH_MASS = 150;
 const JOINABLE = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
 const RIGID_JOINTS = new Set(['Weld', 'ManualWeld', 'ManualGlue', 'Snap', 'Glue', 'Motor', 'Motor6D', 'VelocityMotor']);
 const HINGE_JOINTS = new Set(['Rotate', 'RotateP', 'RotateV']);
@@ -904,11 +905,27 @@ export class Physics {
     while (this.acc >= STEP) {
       this.applyMovers(STEP);
       if (this.vehicleSeats.size) this.driveVehicles();
-      this.world.step(this.events);
+      this.world.step(this.events, this.pushHooks());
       this.acc -= STEP;
       this.drainEvents();
     }
     this.writeBack();
+  }
+
+  pushHooks() {
+    if (this.hooks) return this.hooks;
+    const R = this.R;
+    this.hooks = {
+      filterContactPair: (c1, c2, b1, b2) => {
+        const i1 = this.byHandle.get(c1);
+        const other = i1 && i1.solidProxy ? b2 : b1;
+        const body = this.world.getRigidBody(other);
+        if (body && body.isDynamic() && body.mass() > CHARACTER_PUSH_MASS) return null;
+        return R.SolverFlags.COMPUTE_IMPULSE;
+      },
+      filterIntersectionPair: () => true,
+    };
+    return this.hooks;
   }
 
   drainEvents() {

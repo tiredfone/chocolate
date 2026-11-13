@@ -307,6 +307,7 @@ export class Renderer {
         const g = c.getContext('2d');
         if (i === 2) g.setTransform(0, -1, 1, 0, 0, im.width);
         else if (i === 3) g.setTransform(0, 1, -1, 0, im.height, 0);
+        else g.setTransform(1, 0, 0, -1, 0, im.height);
         g.drawImage(im, 0, 0);
         return c;
       }));

@@ -501,7 +501,7 @@ export class Game {
     player.props.set('CharacterAppearance', endpoint('appearance', user.id) || '');
     player.props.set('MembershipType', user.membership | 0);
     player.props.set('AccountAge', user.age | 0);
-    player.data = Object.assign(player.data || {}, { avatarType: user.avatarType === 'R15' ? 'R15' : 'R6' });
+    player.data = Object.assign(player.data || {}, { avatarType: user.avatarType === 'R15' ? 'R15' : 'R6', scale: user.scale || null });
     const bp = dm.create('Backpack', player);
     bp.props.set('Name', 'Backpack');
     const gui = dm.create('PlayerGui', player);
@@ -704,7 +704,7 @@ export class Game {
     if (player.destroyed || !player.parent) return;
     const { pos, spawn } = this.spawnPoint(player);
     const r15 = this.era === 2018 && player.data && player.data.avatarType === 'R15' && load2018().r15;
-    const { model, humanoid } = r15 ? buildR15(dm, load2018().r15, player.props.get('Name'), pos) : buildCharacter(dm, player.props.get('Name'), pos, { rootPart: this.era === 2018 });
+    const { model, humanoid } = r15 ? buildR15(dm, load2018().r15, player.props.get('Name'), pos, player.data.scale) : buildCharacter(dm, player.props.get('Name'), pos, { rootPart: this.era === 2018 });
     for (const n of this.era === 2018 ? (r15 ? load2018().characterR15 : load2018().character) : loadCharacterScripts()) dm.load([n], model);
     if (this.era === 2018) {
       const scs = dm.services.get('StarterPlayer') && dm.services.get('StarterPlayer').findChildOfClass('StarterCharacterScripts');

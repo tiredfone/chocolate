@@ -417,7 +417,7 @@ export class CharacterProxy {
     const torso = rootOf(this.model);
     if (!torso) return;
     if (this.blocking) {
-      this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0).setEnabled(!this.seated), this.body);
+      this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0).setEnabled(!this.seated).setActiveHooks(this.R.ActiveHooks.FILTER_CONTACT_PAIRS), this.body);
       this.ph.byHandle.set(this.solid.handle, { part: torso, noRay: true, character: this.model, solidProxy: true });
     }
     const bt = this.body.translation(), br = this.body.rotation();
@@ -493,11 +493,62 @@ export function partColorProps(model) {
   }
 }
 
-export function buildR15(dm, template, name, at) {
+const rigScales = new WeakMap();
+
+export function r15ScaleOf(model) {
+  return rigScales.get(model) || null;
+}
+
+function scaleRig(dm, model, hum, sc) {
+  const body = [sc.width, sc.height, sc.depth];
+  const head = [sc.head, sc.head, sc.head];
+  const kOf = (p) => (p && p.props.get('Name') === 'Head' ? head : body);
+  const mulPos = (cf, k) => {
+    const o = cf.slice();
+    o[0] *= k[0];
+    o[1] *= k[1];
+    o[2] *= k[2];
+    return o;
+  };
+  for (const p of model.children) {
+    if (!p.isA('BasePart')) continue;
+    const k = kOf(p);
+    const sz = p.props.get('Size');
+    p.props.set('Size', [sz[0] * k[0], sz[1] * k[1], sz[2] * k[2]]);
+    for (const c of p.children) {
+      if (c.ClassName === 'Attachment') c.props.set('CFrame', mulPos(c.props.get('CFrame'), k));
+      else if (c.ClassName === 'SpecialMesh') {
+        const ms = c.props.get('Scale') || [1, 1, 1];
+        c.props.set('Scale', [ms[0] * k[0], ms[1] * k[1], ms[2] * k[2]]);
+        const off = c.props.get('Offset');
+        if (off) c.props.set('Offset', [off[0] * k[0], off[1] * k[1], off[2] * k[2]]);
+      } else if (c.isA('JointInstance')) {
+        const p0 = c.props.get('Part0'), p1 = c.props.get('Part1');
+        if (c.props.get('C0')) c.props.set('C0', mulPos(c.props.get('C0'), kOf(p0)));
+        if (c.props.get('C1')) c.props.set('C1', mulPos(c.props.get('C1'), kOf(p1)));
+      }
+    }
+  }
+  if (hum) {
+    hum.props.set('HipHeight', (+hum.props.get('HipHeight') || 2) * sc.height);
+    for (const [n, v] of [['BodyHeightScale', sc.height], ['BodyWidthScale', sc.width], ['BodyDepthScale', sc.depth], ['HeadScale', sc.head]]) {
+      let nv = hum.findChild(n);
+      if (!nv || nv.ClassName !== 'NumberValue') {
+        nv = dm.create('NumberValue', hum);
+        nv.props.set('Name', n);
+      }
+      nv.props.set('Value', v);
+    }
+  }
+  rigScales.set(model, sc);
+}
+
+export function buildR15(dm, template, name, at, scale) {
   const [model] = dm.load([template], null);
   model.props.set('Name', name);
   const root = model.findChild('HumanoidRootPart');
   const hum = model.findChildOfClass('Humanoid');
+  if (scale && ['height', 'width', 'depth', 'head'].some((k) => Number.isFinite(scale[k]) && Math.abs(scale[k] - 1) > 1e-4)) scaleRig(dm, model, hum, { height: 1, width: 1, depth: 1, head: 1, ...scale });
   const hip = hum ? +hum.props.get('HipHeight') || 1.35 : 1.35;
   const rc = root.props.get('CFrame');
   const target = [at[0], at[1] - 3 + hip + root.props.get('Size')[1] / 2, at[2]];
@@ -585,6 +636,29 @@ export function buildCharacter(dm, name, at, opts = {}) {
   return { model, parts, humanoid: hum };
 }
 
+function scaleHandle(model, handle, onHead) {
+  const sc = rigScales.get(model);
+  if (!sc) return;
+  const k = onHead ? sc.head : (sc.width + sc.height + sc.depth) / 3;
+  if (Math.abs(k - 1) < 1e-4) return;
+  const sz = handle.props.get('Size');
+  handle.props.set('Size', [sz[0] * k, sz[1] * k, sz[2] * k]);
+  for (const c of handle.children) {
+    if (c.ClassName === 'Attachment') {
+      const cf = c.props.get('CFrame').slice();
+      cf[0] *= k;
+      cf[1] *= k;
+      cf[2] *= k;
+      c.props.set('CFrame', cf);
+    } else if (c.isA('DataModelMesh')) {
+      const ms = c.props.get('Scale') || [1, 1, 1];
+      c.props.set('Scale', [ms[0] * k, ms[1] * k, ms[2] * k]);
+      const off = c.props.get('Offset');
+      if (off) c.props.set('Offset', [off[0] * k, off[1] * k, off[2] * k]);
+    }
+  }
+}
+
 export function attachAccessory(dm, model, acc) {
   const head = model.findChild('Head');
   const handle = acc.findChild('Handle');
@@ -599,6 +673,7 @@ export function attachAccessory(dm, model, acc) {
     }
     if (!body) continue;
     const part = body.parent;
+    scaleHandle(model, handle, part.props.get('Name') === 'Head');
     const w = dm.create('Weld', handle);
     w.props.set('Name', 'AccessoryWeld');
     w.props.set('Part0', part);
@@ -610,14 +685,21 @@ export function attachAccessory(dm, model, acc) {
     handle.props.set('Anchored', false);
     return;
   }
-  const ap = acc.props.get('AttachmentPoint') || C.cf();
+  scaleHandle(model, handle, true);
+  const sc = rigScales.get(model);
+  const hk = sc ? sc.head : 1;
+  const ap = (acc.props.get('AttachmentPoint') || C.cf()).slice();
+  ap[0] *= hk;
+  ap[1] *= hk;
+  ap[2] *= hk;
+  const top = C.cf(0, 0.5 * hk, 0);
   const w = dm.create('Weld', handle);
   w.props.set('Name', 'HeadWeld');
   w.props.set('Part0', head);
   w.props.set('Part1', handle);
-  w.props.set('C0', C.cf(0, 0.5, 0));
+  w.props.set('C0', top);
   w.props.set('C1', ap.slice());
-  handle.props.set('CFrame', C.mul(C.mul(head.props.get('CFrame'), C.cf(0, 0.5, 0)), C.inv(ap)));
+  handle.props.set('CFrame', C.mul(C.mul(head.props.get('CFrame'), top), C.inv(ap)));
   handle.props.set('CanCollide', false);
   handle.props.set('Anchored', false);
 }

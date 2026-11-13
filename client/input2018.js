@@ -1,4 +1,5 @@
 import { ENUMS } from '../shared/classes.js';
+import { T } from '../shared/luahost.js';
 
 const K = ENUMS.KeyCode;
 const CODE = {
@@ -38,7 +39,7 @@ export class Input2018 {
     this.buttons = new Set();
     this.delta = [0, 0];
     this.behavior = 0;
-    this.last = UIT.Keyboard;
+    this.last = world.touch ? UIT.Touch : UIT.Keyboard;
     this.moveIO = this.make(UIT.MouseMovement, 0);
     this.wheelIO = this.make(UIT.MouseWheel, 0);
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -64,6 +65,12 @@ export class Input2018 {
     return [ms.x * k, ms.y * k - 36, 0];
   }
 
+  setLast(type) {
+    if (this.last === type) return;
+    this.last = type;
+    this.dm.emit(this.dm.services.get('UserInputService'), 'LastInputTypeChanged', T.e('UserInputType', type));
+  }
+
   send(io, processed, kind) {
     this.dm.emit(this.dm.services.get('UserInputService'), '__Input', io, !!processed, kind);
   }
@@ -74,7 +81,7 @@ export class Input2018 {
     const io = this.make(UIT.Keyboard, key);
     io.props.set('UserInputState', 0);
     this.keys.set(key, io);
-    this.last = UIT.Keyboard;
+    this.setLast(UIT.Keyboard);
     this.send(io, typing, 'b');
   }
 
@@ -104,7 +111,7 @@ export class Input2018 {
     io.props.set('UserInputState', 0);
     io.props.set('Position', this.pos());
     this['btn' + button] = io;
-    this.last = UIT.MouseButton1;
+    this.setLast(UIT.MouseButton1);
     this.send(io, overGui, 'b');
   }
 
@@ -128,7 +135,7 @@ export class Input2018 {
     io.props.set('UserInputState', 1);
     io.props.set('Position', this.pos());
     io.props.set('Delta', [dx * k, dy * k, 0]);
-    this.last = UIT.MouseMovement;
+    this.setLast(UIT.MouseMovement);
     this.send(io, overGui, 'c');
   }
 
