@@ -2,6 +2,7 @@ import * as C from './cframe.js';
 
 const IDENTITY = C.cf();
 const seqCache = new Map();
+const HOLD_WHILE_LOADING = 3;
 const OPS = new Set(['play', 'stop', 'speed', 'weight', 'time']);
 
 export function animAssetId(url) {
@@ -58,6 +59,25 @@ export class Animations {
     this.byHum = new Map();
   }
 
+  preload(ids, onProgress) {
+    const list = [...new Set((ids || []).map((v) => animAssetId(v)).filter(Boolean))];
+    let done = 0;
+    if (onProgress) onProgress(0, list.length);
+    const one = async (id) => {
+      for (let n = 0; n < 4; n++) {
+        try {
+          await this.sequence(id);
+          break;
+        } catch {
+          await new Promise((r) => setTimeout(r, 500 * 2 ** n));
+        }
+      }
+      done++;
+      if (onProgress) onProgress(done, list.length);
+    };
+    return Promise.all(list.map(one));
+  }
+
   sequence(id) {
     if (seqCache.has(id)) return seqCache.get(id);
     const p = this.loadAsset(id).then((model) => {
@@ -96,11 +116,18 @@ export class Animations {
       if (!id) return;
       if (!tr || tr.id !== id) {
         if (tr) an.tracks.splice(an.tracks.indexOf(tr), 1);
-        tr = { key, id, inst, seq: null, t: 0, w: 0, target: 1, fade: 0.1, speed: 1, weight: 1 };
-        this.sequence(id).then((seq) => {
+        tr = { key, id, inst, seq: null, t: 0, w: 0, target: 1, fade: 0.1, speed: 1, weight: 1, wait: 0 };
+        const load = (n) => this.sequence(id).then((seq) => {
           tr.seq = seq;
           if (tr.inst && !tr.inst.destroyed) tr.inst.props.set('Length', seq.length);
-        }).catch(() => { tr.failed = true; });
+        }).catch(() => {
+          if (n >= 4 || tr.target === 0 || !an.tracks.includes(tr)) {
+            tr.failed = true;
+            return;
+          }
+          setTimeout(() => load(n + 1), 600 * 2 ** n);
+        });
+        load(0);
       } else {
         an.tracks.splice(an.tracks.indexOf(tr), 1);
       }
@@ -151,11 +178,27 @@ export class Animations {
         continue;
       }
       const blend = new Map();
+      let pending = false;
+      for (const tr of an.tracks) {
+        if (tr.seq || tr.failed || tr.target === 0) continue;
+        tr.wait += dt;
+        if (tr.wait < HOLD_WHILE_LOADING) pending = true;
+      }
       for (const tr of [...an.tracks]) {
         if (tr.failed) {
           an.tracks.splice(an.tracks.indexOf(tr), 1);
           continue;
         }
+        if (pending && tr.seq && tr.target === 0 && tr.w > 0) {
+          const w = Math.min(1, tr.w * tr.weight);
+          for (const [name, list] of tr.seq.keys) {
+            const cf = sampleKeys(list, tr.t);
+            const base = blend.get(name) || IDENTITY;
+            blend.set(name, w >= 1 ? cf : C.lerp(base, cf, w));
+          }
+          continue;
+        }
+        if (!tr.seq && tr.target > 0) continue;
         const rate = tr.fade > 0 ? dt / tr.fade : Infinity;
         tr.w = tr.target > tr.w ? Math.min(tr.target, tr.w + rate) : Math.max(tr.target, tr.w - rate);
         if (tr.target === 0 && tr.w <= 0) {

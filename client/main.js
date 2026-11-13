@@ -262,7 +262,16 @@ async function boot() {
       world.input2018 = input2018;
       world.ready = true;
       for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else if (p.t === 're' || p.t === 'rfc' || p.t === 'rfr') world.onRemote(p); else world.applyRep(p);
-      finishLoading(world);
+      const animsReady = world.era === 2018 && Array.isArray(m.anims) && m.anims.length
+        ? Promise.race([
+          world.anims.preload(m.anims, (done, total) => setStatus(`Loading animations (${done}/${total})`)),
+          new Promise((r) => setTimeout(r, 20000)),
+        ])
+        : Promise.resolve();
+      animsReady.then(() => {
+        setStatus('Starting');
+        finishLoading(world);
+      });
       document.addEventListener('fullscreenchange', () => {
         const us = world.host._userSettings;
         const gs = us && us.findChild('GameSettings');

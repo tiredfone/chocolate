@@ -48,6 +48,7 @@ function load2018() {
   return era2018;
 }
 const TICK = 1 / 30;
+const PRELOAD_ANIMS = new Set(['idle', 'walk', 'run', 'jump', 'fall', 'climb', 'sit', 'toolnone']);
 const MAX_CHAT = 200;
 const SERVER_LIBRARIES = { RbxGui: 45284430, RbxGear: 45374389, RbxUtility: 60595411, RbxStamper: 73157242 };
 const luaCache = new Map();
@@ -542,7 +543,8 @@ export class Game {
     this.copyStarterGui(player);
     const rc = this.replicator.clients.get(cid);
     const snap = this.replicator.snapshotFor(rc);
-    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap }));
+    const anims = this.era === 2018 ? this.preloadAnims(player.data && player.data.avatarType === 'R15') : [];
+    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap, anims }));
     rc.ready = true;
     client.ready = true;
     if (client.dev && this.outHistory) for (const line of this.outHistory) this.io.send(cid, line);
@@ -692,6 +694,34 @@ export class Game {
       if (free(x, y, z) || i === 11) return { pos: [x, free(x, y, z) ? y : lift(x, y, z), z], spawn: null };
     }
     return { pos: [0, 3.2, 0], spawn: null };
+  }
+
+  preloadAnims(r15) {
+    const ids = new Set();
+    const scan = (animate, nodeStyle) => {
+      const kids = (n) => (nodeStyle ? n.children || [] : n.children);
+      const name = (n) => (nodeStyle ? n.props.get('Name')?.v ?? n.props.get('Name') : n.props.get('Name'));
+      const cls = (n) => (nodeStyle ? n.cls || n.ClassName : n.ClassName);
+      for (const sv of kids(animate)) {
+        if (!PRELOAD_ANIMS.has(String(name(sv)).toLowerCase())) continue;
+        for (const a of kids(sv)) {
+          if (cls(a) !== 'Animation') continue;
+          const raw = a.props.get('AnimationId');
+          const id = assetIdOf(String(raw && typeof raw === 'object' && 'v' in raw ? raw.v : raw || ''));
+          if (id) ids.add(id);
+        }
+      }
+    };
+    const set = r15 ? load2018().characterR15 : load2018().character;
+    for (const n of set) {
+      const nm = n.props.get('Name');
+      if ((nm && nm.v !== undefined ? nm.v : nm) === 'Animate') scan(n, true);
+    }
+    const sp = this.dm.services.get('StarterPlayer');
+    const scs = sp && sp.findChildOfClass('StarterCharacterScripts');
+    const own = scs && scs.findChild('Animate');
+    if (own) scan(own, false);
+    return [...ids].slice(0, 24);
   }
 
   async loadCharacter(player) {
