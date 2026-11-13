@@ -97,7 +97,7 @@ let t = 0;
 const tick = async (n) => {
   for (let i = 0; i < n; i++) {
     t += 1 / 30;
-    host.tick(t);
+    host.tick(t); host.renderStep(1 / 30);
     const rs = dm.services.get('RunService');
     dm.emit(rs, 'RenderStepped', 1 / 30);
     dm.emit(rs, 'Stepped', t, 1 / 30);
@@ -153,12 +153,12 @@ if (process.env.KEYS) {
     io.props.set('KeyCode', ENUMS.KeyCode[name]);
     io.props.set('UserInputState', 0);
     dm.emit(uisvc, '__Input', io, false, 'b');
-    for (let i = 0; i < 15; i++) { t += 1 / 30; host.tick(t); }
+    for (let i = 0; i < 15; i++) { t += 1 / 30; host.tick(t); host.renderStep(1 / 30); }
     console.log(`key ${name}: Move calls ${JSON.stringify([...new Set(moves)])}, Humanoid.Jump=${humanoid.props.get('Jump')}`);
     moves.length = 0;
     io.props.set('UserInputState', 2);
     dm.emit(uisvc, '__Input', io, false, 'e');
-    for (let i = 0; i < 15; i++) { t += 1 / 30; host.tick(t); }
+    for (let i = 0; i < 15; i++) { t += 1 / 30; host.tick(t); host.renderStep(1 / 30); }
     humanoid.props.set('Jump', false);
   }
 }

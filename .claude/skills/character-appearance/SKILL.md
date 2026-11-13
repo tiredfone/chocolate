@@ -33,6 +33,8 @@ If the host's own avatar comes from different data, fix the host or the endpoint
 | An item listed but not on the character | `assetNodes(id)`: the asset file must be a `<roblox` model; check `assetDir` or the `asset` endpoint |
 | Gear missing from the backpack | `gearFor()` in `server/game.js`; the gear asset must contain a Tool or HopperBin |
 | Correct in the tool but wrong in the browser | Client rendering: `clothingTexture` and `buildDecals` in `client/render.js`, and the browser's requests to the `asset` endpoint |
+| R15 body or accessories the wrong size | The `scale` from `redeem` (`player.data.scale`), `scaleRig` in `buildR15` and `scaleHandle` in `attachAccessory` (`shared/humanoid.js`); the Humanoid's `BodyHeightScale`/`BodyWidthScale`/`BodyDepthScale`/`HeadScale` values show what was applied |
+| Idle or other animations missing or late | `Animations.sequence` and `preload` in `shared/animator.js`, the `anims` list in `init` (`preloadAnims` in `server/game.js`), and the browser's `chocolate-animations-v1` cache. R15 idle has a second "look around" variant (head turned about 56°, arm raised) that is expected, not a bug |
 | R15 clothing scrambled or misplaced | `R15Atlases` in `client/character2012.js`: R15 meshes sample per-group atlases built from `R15Composit*Base` meshes, never the raw template |
 
 When printing parsed nodes, note that `props` is a `Map`: `JSON.stringify` shows it as `{}`. Print `[...node.props]`.

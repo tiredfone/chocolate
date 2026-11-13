@@ -446,10 +446,12 @@ export class ScriptHost {
     this.step = rt.step;
     this.rtFire = rt.fire;
     this.extSteps = [];
+    this.extRenderSteps = [];
     for (const x of extensions) {
       rt.extend(x.source, x.name);
       const r = g.get('__EXT');
       if (r && r.step) this.extSteps.push(r.step);
+      if (r && r.renderStep) this.extRenderSteps.push(r.renderStep);
       this.lua.doStringSync('__EXT = nil');
     }
     this.lua.doStringSync('__RT = nil');
@@ -610,6 +612,15 @@ export class ScriptHost {
   stopScript(inst) {
     this.running.delete(inst.id);
     this.queue.push('stop', inst.id);
+  }
+
+  renderStep(dt) {
+    if (!this.extRenderSteps || !this.extRenderSteps.length) return;
+    try {
+      for (const s of this.extRenderSteps) s(this.lastTick || 0, dt);
+    } catch (e) {
+      this.logs('error', 'render step: ' + (e && e.message ? e.message : e), null);
+    }
   }
 
   tick(t) {

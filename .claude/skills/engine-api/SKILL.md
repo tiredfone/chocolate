@@ -24,6 +24,8 @@ CHOCOLATE_ASSET_DIR=/tmp/places ALL=1 SECONDS=20 node tools/e2e2018.mjs <placeId
 CHOCOLATE_ASSET_DIR=/tmp/places LUA='print(workspace:FindFirstChild("X"))' node tools/e2e2018.mjs <placeId>
 ```
 
+For anything the browser shows (camera, animation, GUI), measure it rather than eyeballing a screenshot: expose the world and renderer from the test page (`window.__world`, `window.__render`), sample positions with `setInterval` inside the page and compare them, as the jump camera fix did (camera height minus root height should be constant). Headless Chrome with SwiftShader runs heavy places at a fraction of real speed, which makes frame-order bugs larger and easier to see.
+
 Startup only covers part of a game. For scripts driven by touches, deaths or remotes, start `Game` from `server/game.js` in a small Node script, join a player with `game.join`, and play the client's part with `game.message(cid, JSON.stringify(m))`: `char` messages walk the character (in steps no faster than WalkSpeed allows, or the server teleports it back), `hp` lowers its health. The server's teleports to the client arrive inside `rep` messages' `after`. For the client's GUI and rendering, load the play page's markup in headless Chrome against a test game server and a fake `redeem`, launched with `--in-process-gpu --use-angle=swiftshader --enable-unsafe-swiftshader` for WebGL.
 
 A declared 2018 method that chocolate does not implement returns nil with a warning ("X is not implemented in this client") instead of an error, so run with all output and search for that line.
@@ -44,6 +46,8 @@ Read the failing CoreScript by ID through the configured source (`luaSource(id)`
 | Needs the browser (camera, fullscreen, leave) | Add a function to `ClientWorld.env()` and a hook in `client/main.js` |
 | Button acts through `SetVerb` | Handle the verb in `env().verb` in `client/world.js` |
 | `Instance no longer exists` from a `ChildRemoved` or other handler | The instance was evicted from the host's `ghosts`. Find what the client destroys in bulk (`window.__world.dm.ghosts`) and destroy internal instances with `dm.destroy(inst, true)` |
+| Camera or a render-step script lags the character by a frame | `BindToRenderStep` callbacks must run in `host.renderStep`, after the character is posed in `ClientWorld.update`, not in `host.tick` |
+| Character or object moved by a player that Roblox would not let move | The server's player body is kinematic (infinite mass); check `pushHooks` and `CHARACTER_PUSH_MASS` in `shared/physics.js` |
 | 2018 method or async method | `def` in `installMethods2018` in `shared/api2018.js`; a yielding one returns a Promise and also needs `LM.<Name>` calling `callAsync` in `shared/runtime2018.lua` plus its class in `LUA_CLASS` |
 | A script kicks or crashes the player on purpose (admin and anti-exploit systems) | Read the check it fails and match Roblox's real behaviour: security identity (`__gameCaller`, `__denied`, `settings()`, `loadstring`, `RobloxLocked` in `shared/runtime.lua`), what `typeof`, `getfenv`, `pcall` and `FindService` return, what replicates (`REPLICATED_SERVICES`, `hiddenProp`) and how instance references cross remotes. Never special-case the script |
 

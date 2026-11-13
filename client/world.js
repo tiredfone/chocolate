@@ -794,11 +794,7 @@ export class ClientWorld {
     const dm = this.dm;
     this.host.tick(this.t);
     const rs = dm.services.get('RunService');
-    if (rs && (dm.hasListener(rs, 'RenderStepped') || dm.hasListener(rs, 'Stepped') || dm.hasListener(rs, 'Heartbeat'))) {
-      dm.emit(rs, 'RenderStepped', dt);
-      dm.emit(rs, 'Stepped', this.t, dt);
-      dm.emit(rs, 'Heartbeat', dt);
-    }
+    if (rs && dm.hasListener(rs, 'Stepped')) dm.emit(rs, 'Stepped', this.t, dt);
     const own = this.own;
     if (own) {
       const rec = own.rec;
@@ -895,6 +891,9 @@ export class ClientWorld {
       for (const [p, cf] of poses) if (p && !p.destroyed) dm.setProp(p, 'CFrame', cf, { local: true });
       if (rec.proxy) rec.proxy.update(rec.cf, poses);
     }
+    if (rs && dm.hasListener(rs, 'Heartbeat')) dm.emit(rs, 'Heartbeat', dt);
+    if (rs && dm.hasListener(rs, 'RenderStepped')) dm.emit(rs, 'RenderStepped', dt);
+    this.host.renderStep(dt);
     this.physics.world.step();
     this.sendMouse(false);
   }

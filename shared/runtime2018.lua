@@ -1005,6 +1005,8 @@ end
 return {
   step = function(t, dt)
     stepTweens(t)
+  end,
+  renderStep = function(t, dt)
     if R.SIDE == "client" and #E.renderSteps > 0 then
       local list = {}
       for i, r in ipairs(E.renderSteps) do list[i] = r end

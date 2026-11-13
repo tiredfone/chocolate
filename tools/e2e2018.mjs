@@ -101,7 +101,7 @@ let t = 0;
 const run = async (seconds) => {
   for (let i = 0; i < seconds * 30; i++) {
     t += 1 / 30;
-    host.tick(t);
+    host.tick(t); host.renderStep(1 / 30);
     pump();
     await new Promise((r) => setTimeout(r, 33));
   }
