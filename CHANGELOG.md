@@ -1,5 +1,41 @@
 # Changelog
 
+## 26.12-preview
+
+### 2018 client
+
+- Places can run on a 2018 client (`ClientVersion` 2018): Roblox's 2018 CoreScripts, chat, menus, topbar, touch controls and loading screen, R15 characters with body scale and packages, 2018 studs, sky and nametags, and 2018 security identity rules so admin and anti-exploit scripts such as Adonis work.
+- All 2018 services exist with their icons, and StarterPlayer works: `StarterPlayerScripts`, `StarterCharacterScripts`, `StarterCharacter`, `StarterHumanoid` and the player settings.
+- Holding Space no longer gives an extra jump, shift lock follows the CameraScript, and the settings menu's Graphics slider, volume and sensitivity work and are remembered.
+- A TextButton darkens its background, not its text, when pressed. GUI objects get their own input events.
+- Other players use their 2018 animations and nametags instead of the 2012 ones. R6 limbs have no studs or inlets in 2018.
+- Wedges are drawn the right way round, skies with odd image sizes load, and a sky that fails to load falls back to the whole default sky.
+
+### Terrain
+
+- 2012 cell terrain and 2018 smooth terrain, with the Terrain Lua API of each era (`SetCell`, `AutowedgeCell`, `CellCenterToWorld` and the rest; `FillBlock`, `FillBall`, `FillRegion`, `ReadVoxels`, `WriteVoxels` and the rest). Smooth terrain uses the 2018 client's terrain textures; water is translucent.
+- Characters walk and collide on terrain, it replicates to every player, and it is saved in the place.
+- Studio terrain tools: Generate, Add, Subtract, Paint, Grow, Erode, Smooth and Flatten for 2018; Generate, Add, Remove, Paint, Elevation, Crater and Smoother for 2012. Brushes are undoable and sync over Team Create.
+
+### Physics and characters
+
+- Unions collide with their real shape instead of a box, which fixes obbies built from unions.
+- Ledges and ladders can be climbed on both clients, and `Touched` fires in the same tick, even for thin parts crossed between updates.
+- Players no longer get stuck on each other or climb on top of each other: they block one another with a cylinder, are pushed apart when they overlap, and slide past.
+- NPCs moved by the server fire `Running`, `FreeFalling`, `Jumping` and `StateChanged`, so their Animate script leaves the fall pose after landing.
+- The R15 idle animation no longer jitters: poses with zero weight are skipped, easing styles are honoured, and animations blend by weight and priority like Roblox.
+- Packages carry R6 and R15 parts; R15 characters wear a package's R15 limbs.
+
+### Data and Team Create
+
+- 2012 Data Persistence (`SaveNumber`, `SaveString`, `SaveBoolean`, `SaveInstance` and their `Load*`) is kept per player and place.
+- Team Create works for 2018 places, and Team Test starts a private test server from the place as everyone is editing it.
+
+### Studio
+
+- The Explorer has a search bar and a + button on each object to insert a child, every pane and the viewport have right-click menus, and 2018 places show all default 2018 services.
+- Every 2018 ribbon action works: Game Settings, Play Solo with a debugger (breakpoints, stepping, call stack, watches), Run, Team Test, Union, Negate and Separate, the command bar, Run Script, plugins with toolbars and dock widgets, the UI Editor, the Network Simulator, auto-saves, Find and Replace, stats, grid, axis and recording.
+
 ## 26.11.3-hotfix
 
 ### Avatars and meshes

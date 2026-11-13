@@ -3,14 +3,24 @@ import { isCreatable, isService, ENUMS } from '../shared/classes.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { writePlace, writeModel } from '../shared/rbxlx.js';
 import { endpointUrl, assetBytes } from '../client/assets.js';
-import { UI, SELECTION_MENU, el } from './ui.js';
+import { UI, SELECTION_MENU, el, setClassIconSheet } from './ui.js';
 import { UI2018 } from './ui2018.js';
-import { Explorer, Properties, Output, Toolbox, ScriptEditor, brickPicker, creatableClasses } from './panes.js';
+import { Explorer, Properties, Output, Toolbox, ScriptEditor, brickPicker, creatableClasses, classIcon, setIconEra } from './panes.js';
 import { StudioView, partsOf, boundsOf } from './view.js';
 import { ObjectBrowser } from './browser.js';
+import { Extras } from './extras.js';
+import { solid, shapeOf } from './csgops.js';
+import { StudioLua, analysisPane } from './lua.js';
+import { Debugger } from './debug.js';
+import { TerrainTools } from './terrain.js';
 import { Gui } from '../client/gui.js';
 
-const TOOLS = ['drag', 'axis', 'resize', 'lock', 'anchor', 'paint', 'dropper', 'material', 'move', 'rotate', 'size', 'surface0', 'surface1', 'surface2', 'surface3', 'surface4', 'surface5', 'surface6', 'surface7'];
+const TOOLS = ['drag', 'axis', 'resize', 'lock', 'anchor', 'paint', 'dropper', 'material', 'move', 'rotate', 'size', 'surface0', 'surface1', 'surface2', 'surface3', 'surface4', 'surface5', 'surface6', 'surface7', 'surface10'];
+const INSERT_COMMON = ['Part', 'Script', 'LocalScript', 'Model', 'Decal', 'Sound', 'ClickDetector', 'Configuration', 'StringValue', 'IntValue', 'NumberValue', 'BoolValue', 'ObjectValue'];
+const INSERT_COMMON_2018 = ['Part', 'Script', 'LocalScript', 'ModuleScript', 'Model', 'Folder', 'RemoteEvent', 'RemoteFunction', 'Decal', 'Sound', 'PointLight', 'ClickDetector', 'Attachment', 'StringValue', 'IntValue', 'BoolValue'];
+const INSERTABLE_SERVICES_2018 = ['Players', 'Lighting', 'ReplicatedFirst', 'ReplicatedStorage', 'ServerScriptService', 'ServerStorage', 'StarterGui', 'StarterPack', 'StarterPlayer', 'Teams', 'SoundService', 'Chat', 'LocalizationService', 'TestService', 'Debris',
+  'InsertService', 'CollectionService', 'PhysicsService', 'TweenService', 'HttpService', 'RunService', 'MarketplaceService', 'BadgeService', 'DataStoreService', 'TeleportService', 'UserInputService',
+  'ContextActionService', 'GamePassService', 'PointsService', 'PathfindingService', 'TextService', 'GroupService', 'VRService', 'HapticService', 'Selection', 'ChangeHistoryService', 'TimerService', 'CookiesService', 'LogService', 'AssetService', 'FriendService', 'NotificationService'];
 const SERVICES = ['Workspace', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'SoundService', 'Debris'];
 
 class StudioGui extends Gui {
@@ -37,6 +47,33 @@ class StudioGui extends Gui {
   }
 }
 
+class PlayDoc {
+  constructor(parent, url) {
+    this.el = el('div', 'st-playdoc', parent);
+    this.frame = el('iframe', null, this.el);
+    this.frame.allow = 'fullscreen; autoplay; pointer-lock; gamepad';
+    this.frame.src = url;
+    this.ta = { readOnly: false, blur() {} };
+  }
+
+  show(on) {
+    this.el.hidden = !on;
+    if (on) setTimeout(() => this.frame.focus(), 0);
+  }
+
+  reload() {}
+
+  dispose() {
+    this.frame.src = 'about:blank';
+    this.el.remove();
+  }
+}
+
+function socketUrl(path) {
+  if (/^wss?:\/\//.test(path)) return path;
+  return `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${path}`;
+}
+
 function cloneVal(v) {
   return Array.isArray(v) ? v.slice() : v;
 }
@@ -60,6 +97,8 @@ export class Studio {
     this.docs = new Map();
     this.activeDoc = 'place';
     this.era = cfg.clientVersion === 2018 ? 2018 : 2012;
+    setIconEra(this.era);
+    if (this.era === 2018) setClassIconSheet('/studio/ui2018/images/ClassImages.PNG');
     this.rotateGrid = this.era === 2018 ? 15 : 0;
     this.lastGrid = 1;
     this.ui = this.era === 2018 ? new UI2018(root, this) : new UI(root, this);
@@ -72,6 +111,12 @@ export class Studio {
     this.viewEl.appendChild(renderer.canvas);
     this.view = new StudioView(this, this.viewEl, renderer, physics);
     this.gui = new StudioGui(this.viewEl, this.dm, renderer);
+    this.extras = new Extras(this);
+    this.terrainTools = new TerrainTools(this);
+    this.lua = new StudioLua(this);
+    this.debugger = new Debugger(this);
+    this.pluginIcons = new Map();
+    if (this.lua.installed().length) setTimeout(() => this.lua.loadPlugins().catch((e) => this.print('Plugins could not start: ' + e.message, 'err')), 500);
     this.ui.tab('place', cfg.placeName || 'Place', () => this.showDoc('place'));
     this.ui.setTitle(`${cfg.placeName || 'Place'} - Studio`);
     this.ui.layout();
@@ -131,6 +176,8 @@ export class Studio {
 
   frame(dt) {
     this.view.frame(dt);
+    this.extras.frame(dt);
+    if (this.lua.host) this.lua.tick(dt);
     this.ph.world.step();
     this.r.frame(dt);
     if (this.activeDoc === 'place' || !this.activeDoc) this.gui.layout();
@@ -209,6 +256,12 @@ export class Studio {
   }
 
   commitTransform(start, targets, name) {
+    if (this.extras && this.extras.blocked(targets)) {
+      this.restore(start);
+      this.ui.status('Collisions is on: parts cannot be moved into other parts');
+      this.selectionChanged();
+      return;
+    }
     const end = this.snapshot(targets);
     if (end.every(([p, cf, s], i) => cf.every((v, k) => Math.abs(v - start[i][1][k]) < 1e-9) && s.every((v, k) => v === start[i][2][k]))) return;
     for (const [p] of end) {
@@ -260,14 +313,36 @@ export class Studio {
   }
 
   selectionChanged() {
+    if (this.lua && this.lua.host) {
+      const svc = this.dm.services.get('Selection');
+      if (svc) this.dm.emit(svc, 'SelectionChanged');
+    }
     this.explorer.dirty = true;
     this.props.dirty = true;
     this.view.refreshSelection();
     this.refreshUI();
   }
 
-  selectionMenu() {
-    return SELECTION_MENU;
+  selectionMenu(target) {
+    const common = (this.era === 2018 ? INSERT_COMMON_2018 : INSERT_COMMON).filter((c) => isCreatable(c));
+    const insert = [...common.map((c) => ['insertin:' + c, c]), null, ['insertin:?', 'Advanced Objects...']];
+    if (!this.selection.size && !target) {
+      return [['paste', 'Paste\tCtrl+V'], null, ['Insert Object', insert], ['insert:model', 'Insert Model...'], ['open', 'Insert from File...'], null, ['selectall', 'Select All\tCtrl+A'], ['cam:extents', 'Zoom Extents']];
+    }
+    return [
+      ['cut', 'Cut\tCtrl+X'], ['copy', 'Copy\tCtrl+C'], ['pasteinto', 'Paste Into\tCtrl+Shift+V'], ['duplicate', 'Duplicate\tCtrl+D'], ['delete', 'Delete\tDel'], ['rename', 'Rename\tF2'], null,
+      ['group', 'Group\tCtrl+G'], ['ungroup', 'Ungroup\tCtrl+U'], ['selectchildren', 'Select Children'], ['cam:lookat', 'Zoom to\tF'], null,
+      ['Insert Object', insert], ['insertfile', 'Insert from File...'], null,
+      ['anchor', 'Anchor'], ['lock', 'Lock'], null,
+      ['savemodel', 'Save to File...'],
+    ];
+  }
+
+  insertMenu(parent, rect) {
+    this.ui.classPicker(rect, creatableClasses(this.era), (cls) => {
+      if (parent && !this.selection.has(parent)) this.select([parent]);
+      this.insertObject(cls, parent || undefined);
+    });
   }
 
   refreshUI() {
@@ -275,28 +350,46 @@ export class Studio {
   }
 
   enabled(id) {
+    if (this.extras && this.extras.handles(id)) return this.extras.enabled(id);
     const sel = this.selection.size > 0;
     const movable = [...this.selection].some((s) => partsOf(s).length);
     if (id.startsWith('na:')) return false;
     if (id.startsWith('material:') || id === 'color' || id === 'anchor') return movable;
     if (id.startsWith('insert:')) return true;
     switch (id) {
-      case 'close': case 'gamesettings': return !!endpointUrl('gamePage', this.cfg.placeId);
+      case 'close': return !!endpointUrl('gamePage', this.cfg.placeId);
+      case 'gamesettings': return !!(endpointUrl('studioSettings', this.cfg.placeId) || endpointUrl('gamePage', this.cfg.placeId));
       case 'undo': return this.undoStack.length > 0;
       case 'redo': return this.redoStack.length > 0;
       case 'cut': case 'copy': case 'delete': case 'duplicate': case 'savemodel': case 'selectchildren': case 'rename': return sel;
       case 'paste': case 'pasteinto': return !!this.clipboard;
       case 'group': return sel;
       case 'ungroup': return [...this.selection].some((s) => s.ClassName === 'Model');
+      case 'union': case 'negate': return movable;
+      case 'separate': return [...this.selection].some((s) => s.isA && s.isA('PartOperation'));
       case 'rotate': case 'tilt': case 'up': case 'down': case 'cam:lookat': return movable;
       case 'pause': case 'reset': case 'exit': return false;
       case 'publish': case 'publish2': return !!endpointUrl('studioSave', this.cfg.placeId);
-      case 'run': case 'playsolo': return !!endpointUrl('play', this.cfg.placeId);
+      case 'run': return !!endpointUrl('play', this.cfg.placeId);
+      case 'playsolo': return !!endpointUrl('play', this.cfg.placeId) && !this.playStarting;
+      case 'stop': return !!this.playing;
+      case 'runscript': case 'analysis': case 'plugins': return true;
+      case 'dbg:into': case 'dbg:over': case 'dbg:out': case 'dbg:continue': return !!(this.debugger && this.debugger.paused);
+      case 'dbg:pause': return !!this.playing && !(this.debugger && this.debugger.paused);
+      case 'gotoerror': return !!(this.debugger && this.debugger.lastError);
+      case 'expandfolds': case 'collapsefolds': {
+        const d = this.docs.get(this.activeDoc);
+        return !!(d && d.script);
+      }
+      case 'teamtest': return !!(this.team && this.team.open && endpointUrl('play', this.cfg.placeId));
+      case 'teamtest:stop': return !!(this.team && this.team.open && this.team.test);
       default: return true;
     }
   }
 
   checked(id) {
+    if (this.extras && this.extras.handles(id)) return this.extras.checked(id);
+    if (this.terrainTools && this.terrainTools.handles(id)) return this.terrainTools.checked(id);
     if (id.startsWith('tool:')) return this.tool === id.slice(5);
     if (id.startsWith('grid:')) return this.grid === +id.slice(5);
     if (id.startsWith('view:')) return this.ui.paneOpen(id.slice(5));
@@ -304,6 +397,7 @@ export class Studio {
     if (id === 'snap:move') return this.grid > 0;
     if (id === 'snap:rotate') return this.rotateGrid > 0;
     if (id === 'view:commandbar') return !!(this.ui.commandBar && !this.ui.commandBar.hidden);
+    if (id.startsWith('break:')) return this.debugger && this.debugger.mode === id.slice(6);
     if (id === 'anchor') {
       const parts = [...this.selection].flatMap(partsOf);
       return parts.length > 0 && parts.every((p) => p.props.get('Anchored'));
@@ -314,6 +408,8 @@ export class Studio {
   async exec(id) {
     const sel = [...this.selection];
     try {
+      if (this.extras.handles(id)) return await this.extras.exec(id);
+      if (this.terrainTools.handles(id)) return await this.terrainTools.exec(id);
       if (id.startsWith('tool:')) return this.setTool(id.slice(5));
       if (id.startsWith('grid:')) {
         this.grid = +id.slice(5);
@@ -348,7 +444,14 @@ export class Studio {
         return this.refreshUI();
       }
       if (id.startsWith('cam:')) return this.camera(id.slice(4));
+      if (id.startsWith('insertin:')) {
+        const cls = id.slice(9);
+        const into = sel[0] || undefined;
+        if (cls === '?') return this.insertMenu(into || null, { left: window.innerWidth / 2 - 120, right: window.innerWidth / 2 - 120, top: 120, bottom: 120 });
+        return this.insertObject(cls, into);
+      }
       switch (id) {
+        case 'insertfile': return this.openFile(sel[0] || null);
         case 'undo': return this.undo();
         case 'redo': return this.redo();
         case 'delete': return this.remove(sel);
@@ -419,7 +522,49 @@ export class Studio {
           this.paintColor = n;
           return this.setProp(parts, 'BrickColor', n);
         }
-        case 'gamesettings': return window.open(endpointUrl('gamePage', this.cfg.placeId), '_blank');
+        case 'gamesettings': return this.gameSettings();
+        case 'teamtest': {
+          if (this.team.test) return this.joinTeamTest();
+          this.team.wantTest = true;
+          this.print('Starting Team Test with the place as everyone is editing it now...', 'info');
+          return this.team.send({ t: 'teamtest', on: true });
+        }
+        case 'teamtest:stop': return this.team.send({ t: 'teamtest', on: false });
+        case 'runscript': return this.runScriptFile();
+        case 'analysis': {
+          this.print('Checking scripts...');
+          await this.lua.ensure();
+          return analysisPane(this, this.lua);
+        }
+        case 'plugins': return this.managePlugins();
+        case 'dbg:into': return this.debugger.command('into');
+        case 'dbg:over': return this.debugger.command('over');
+        case 'dbg:out': return this.debugger.command('out');
+        case 'dbg:continue': return this.debugger.command('continue');
+        case 'dbg:pause': return this.debugger.command('pause');
+        case 'addwatch': return this.debugger.addWatch();
+        case 'break:never': case 'break:all': case 'break:unhandled':
+          this.debugger.mode = id.slice(6);
+          return this.refreshUI();
+        case 'gotoerror': return this.debugger.gotoError();
+        case 'view:breakpoints':
+          this.debugger.renderBreakpoints();
+          return this.ui.togglePane('breakpoints');
+        case 'view:callstack':
+          this.debugger.renderStack();
+          return this.ui.togglePane('callstack');
+        case 'view:watch':
+          this.debugger.renderWatch();
+          return this.ui.togglePane('watch');
+        case 'expandfolds': case 'collapsefolds': {
+          const d = this.docs.get(this.activeDoc);
+          if (d && d.ed && d.ed.fold) id === 'collapsefolds' ? d.ed.fold() : d.ed.unfold();
+          return;
+        }
+        case 'union': return this.csgUnion(sel);
+        case 'negate': return this.csgNegate(sel);
+        case 'separate': return this.csgSeparate(sel);
+        case 'stop': return this.endPlaySolo(true);
         case 'close': {
           if (this.dirty && !(await this.ui.confirm('Close Place', 'Close the place without saving your changes?'))) return;
           this.dirty = false;
@@ -435,7 +580,7 @@ export class Studio {
           return;
         }
         case 'about': if (this.era === 2018) return this.ui.alert('About Roblox Studio', 'Chocolate Studio, 2018 edition\nEdits places in the browser, alone or with Team Create. This place plays in the 2018 client.');
-          return this.ui.alert('About Studio', 'Chocolate Studio 26.11.3-hotfix\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
+          return this.ui.alert('About Studio', 'Chocolate Studio 26.12-preview\nEdits places in the browser, alone or with Team Create, and saves them in the 2012 place format.');
         default: return;
       }
     } catch (err) {
@@ -445,6 +590,7 @@ export class Studio {
   }
 
   async setTool(t) {
+    if (this.terrainTools && this.terrainTools.tool) this.terrainTools.setTool(null);
     if (t === this.tool) {
       this.tool = 'none';
       this.view.refreshSelection();
@@ -724,8 +870,313 @@ export class Studio {
     if (cls) this.insertObject(cls);
   }
 
+  async startPlaySolo() {
+    if (this.playing && this.debugger.paused) return this.debugger.command('continue');
+    if (this.playing) return this.showDoc('play');
+    if (this.playStarting) return;
+    this.playStarting = true;
+    this.refreshUI();
+    this.print('Starting Play Solo with the place as it is now...', 'info');
+    try {
+      const xml = await this.debugger.prepare().catch((e) => {
+        this.print('Scripts could not be prepared for debugging: ' + e.message, 'warn');
+        return writePlace(this.dm);
+      });
+      const bps = this.debugger.payload(), watches = this.debugger.watches;
+      if (this.team && this.team.open) {
+        this.team.send({ t: 'playsolo', on: true, xml, bps, watches });
+        return;
+      }
+      const ws = await this.soloSocket();
+      ws.send(JSON.stringify({ t: 'playsolo', on: true, xml, bps, watches }));
+    } catch (e) {
+      this.playStarting = false;
+      this.refreshUI();
+      throw e;
+    }
+  }
+
+  soloSocket() {
+    if (this.solo && this.solo.readyState === 1) return Promise.resolve(this.solo);
+    return (async () => {
+      const r = await fetch(endpointUrl('studioTestTicket', this.cfg.placeId), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': this.cfg.csrf || '' },
+        body: '{}',
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ticket) throw new Error((j && j.error) || 'Play Solo is not available');
+      const base = socketUrl(j.ws || this.cfg.ticketWs || '/chocolate/ws');
+      const ws = new WebSocket(`${base}${base.includes('?') ? '&' : '?'}ticket=${j.ticket}`);
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('The game server did not answer')), 20000);
+        ws.onmessage = (ev) => {
+          let m;
+          try {
+            m = JSON.parse(ev.data);
+          } catch {
+            return;
+          }
+          if (m.t === 'solo') {
+            clearTimeout(timer);
+            resolve();
+          } else if (m.t === 'playsolo') this.onPlaySolo(m);
+          else if (m.t === 'dbg') this.debugger.onServer(m);
+          else if (m.t === 'kick') {
+            clearTimeout(timer);
+            reject(new Error(m.m || 'The game server refused Play Solo'));
+          }
+        };
+        ws.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error('Could not reach the game server'));
+        };
+      });
+      ws.onclose = () => {
+        if (this.solo === ws) this.solo = null;
+        if (this.playing) this.endPlaySolo(false);
+        this.playStarting = false;
+        this.refreshUI();
+      };
+      this.solo = ws;
+      return ws;
+    })();
+  }
+
+  onPlaySolo(m) {
+    this.playStarting = false;
+    if (m.on && m.job) {
+      const url = endpointUrl('play', this.cfg.placeId);
+      this.playing = m.job;
+      const id = 'play';
+      if (this.docs.has(id)) this.closeDoc(id, true);
+      const ed = new PlayDoc(this.ui.docs, this.extras.playUrl(`${url}${url.includes('?') ? '&' : '?'}server=${encodeURIComponent('job:' + m.job)}`));
+      const cls = this.extras.playClass();
+      if (cls) ed.el.classList.add(cls);
+      ed.frame.addEventListener('load', () => this.extras.sendMute());
+      this.docs.set(id, { ed, play: true });
+      this.ui.tab(id, 'Play Solo', () => this.showDoc(id), () => this.closeDoc(id));
+      this.showDoc(id);
+      this.print('Play Solo is running. Close its tab or press Stop to end it.', 'info');
+      this.debugger.sendBreakpoints();
+    } else {
+      if (m.error) this.print('Play Solo: ' + m.error, 'err');
+      if (this.playing) this.endPlaySolo(false);
+    }
+    this.refreshUI();
+  }
+
+  sendDebug(msg) {
+    if (this.team && this.team.open) this.team.send(msg);
+    else if (this.solo && this.solo.readyState === 1) this.solo.send(JSON.stringify(msg));
+  }
+
+  endPlaySolo(notify = true) {
+    const was = this.playing;
+    this.playing = null;
+    this.debugger.stopped();
+    if (this.docs.has('play')) this.closeDoc('play', true);
+    if (notify && was) {
+      if (this.team && this.team.open) this.team.send({ t: 'playsolo', on: false });
+      else if (this.solo && this.solo.readyState === 1) this.solo.send(JSON.stringify({ t: 'playsolo', on: false }));
+    }
+    if (was) this.print('Play Solo stopped', 'info');
+    this.refreshUI();
+  }
+
+  async runCommand(code) {
+    this.print('> ' + code);
+    try {
+      if (!this.lua.host) this.print('Starting Lua...');
+      await this.lua.run(code, 'Command');
+    } catch (e) {
+      this.print(String(e.message || e), 'err');
+    }
+  }
+
+  runScriptFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.lua,.luau,.txt';
+    input.addEventListener('change', async () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      if (f.size > 2 * 1024 * 1024) return this.print('That script is too large to run', 'err');
+      this.print(`Running ${f.name}`);
+      await this.lua.run(await f.text(), f.name.replace(/\.[^.]+$/, '')).catch((e) => this.print(String(e.message || e), 'err'));
+    });
+    input.click();
+  }
+
+  pluginIcon(icon) {
+    if (this.pluginIcons.has(icon)) return this.pluginIcons.get(icon);
+    const m = /(?:[?&]id=|rbxassetid:\/\/)(\d+)/.exec(String(icon));
+    const p = m ? assetBytes(+m[1]).then((b) => URL.createObjectURL(new Blob([b]))).catch(() => null) : Promise.resolve(/^https?:|^data:/.test(icon) ? icon : null);
+    this.pluginIcons.set(icon, p);
+    return p;
+  }
+
+  async managePlugins() {
+    const lua = this.lua;
+    const list = lua.installed();
+    const res = await this.ui.dialog('Manage Plugins', (body) => {
+      el('div', null, body, 'Plugins are Roblox plugin models, installed by asset ID. They run in this browser for your account only, and can change the place like the command bar does.').style.marginBottom = '8px';
+      const rows = el('div', 'st-plugin-list', body);
+      const state = list.slice();
+      const draw = () => {
+        rows.replaceChildren();
+        if (!state.length) el('div', 'st-gs-note', rows, 'No plugins installed.');
+        state.forEach((p, i) => {
+          const r = el('div', 'st-plugin-row', rows);
+          el('span', null, r, `${p.name || 'Plugin'} (${p.id})`);
+          const x = el('button', null, r, 'Remove');
+          x.addEventListener('click', () => {
+            state.splice(i, 1);
+            draw();
+          });
+        });
+      };
+      draw();
+      const add = el('div', 'st-plugin-add', body);
+      const id = el('input', null, add);
+      id.placeholder = 'Asset ID';
+      id.inputMode = 'numeric';
+      const name = el('input', null, add);
+      name.placeholder = 'Name (optional)';
+      const b = el('button', null, add, 'Add');
+      b.addEventListener('click', () => {
+        const n = parseInt(id.value, 10);
+        if (!(n > 0) || state.some((p) => +p.id === n)) return;
+        state.push({ id: n, name: name.value.trim().slice(0, 60) || `Plugin ${n}` });
+        id.value = name.value = '';
+        draw();
+      });
+      return () => state;
+    }, [['Save and Reload', true], ['Cancel', null]]);
+    if (!res) return;
+    lua.saveInstalled(res);
+    lua.unloadPlugins();
+    await lua.loadPlugins();
+    this.ui.refreshPlugins();
+  }
+
+  joinTeamTest() {
+    const url = endpointUrl('play', this.cfg.placeId);
+    if (!url || !this.team || !this.team.test) return;
+    const w = window.open(`${url}${url.includes('?') ? '&' : '?'}server=${encodeURIComponent('job:' + this.team.test)}`, '_blank');
+    if (!w) this.ui.alert('Team Test', 'Your browser blocked the Team Test window. Allow pop-ups for this site, then choose Team Test again.');
+  }
+
+  async gameSettings() {
+    const url = endpointUrl('studioSettings', this.cfg.placeId);
+    if (!url) return window.open(endpointUrl('gamePage', this.cfg.placeId), '_blank');
+    const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+    const cur = await r.json().catch(() => ({}));
+    if (!r.ok || !cur.success) throw new Error(cur.error || `Game Settings could not be loaded (${r.status})`);
+    const ro = !cur.canEdit;
+    const next = await this.ui.dialog('Game Settings', (body) => {
+      body.classList.add('st-gs');
+      const nav = el('div', 'st-gs-nav', body);
+      const pages = el('div', 'st-gs-pages', body);
+      const tabs = [];
+      const page = (name) => {
+        const t = el('div', 'st-gs-tab', nav, name);
+        const pg = el('div', 'st-gs-page', pages);
+        tabs.push([t, pg]);
+        t.addEventListener('click', () => {
+          for (const [a, b] of tabs) {
+            a.classList.toggle('active', a === t);
+            b.hidden = b !== pg;
+          }
+        });
+        return pg;
+      };
+      const field = (pg, label, input) => {
+        const row = el('label', 'st-gs-field', pg);
+        el('span', null, row, label);
+        row.appendChild(input);
+        input.disabled = ro;
+        return input;
+      };
+      const basic = page('Basic Info');
+      const name = document.createElement('input');
+      name.type = 'text';
+      name.maxLength = 50;
+      name.value = cur.name;
+      field(basic, 'Name', name);
+      const desc = document.createElement('textarea');
+      desc.rows = 6;
+      desc.maxLength = 1000;
+      desc.value = cur.description;
+      field(basic, 'Description', desc);
+      const opts = page('Options');
+      const max = document.createElement('input');
+      max.type = 'number';
+      max.min = '1';
+      max.max = '50';
+      max.value = String(cur.maxPlayers);
+      field(opts, 'Max Players', max);
+      const ver = document.createElement('select');
+      for (const v of cur.clientVersions || [2012, 2018]) el('option', null, ver, `${v} client`).value = String(v);
+      ver.value = String(cur.clientVersion);
+      field(opts, 'Client', ver);
+      const check = (pg, label, on) => {
+        const row = el('label', 'st-gs-check', pg);
+        const c = el('input', null, row);
+        c.type = 'checkbox';
+        c.checked = !!on;
+        c.disabled = ro;
+        el('span', null, row, label);
+        return c;
+      };
+      const gear = check(opts, 'Allow players to use their gear', cur.allowGear);
+      const avatarPg = page('Avatar');
+      const av = document.createElement('select');
+      for (const [v, l] of [['player', 'Player Choice'], ['R6', 'R6'], ['R15', 'R15']]) el('option', null, av, l).value = v;
+      av.value = cur.avatarType;
+      field(avatarPg, 'Avatar Type', av);
+      const avNote = el('div', 'st-gs-note', avatarPg);
+      const syncAv = () => {
+        const old = ver.value !== '2018';
+        av.disabled = ro || old;
+        avNote.textContent = old ? 'The 2012 client always uses R6 characters.' : 'R15 characters use the player\'s body scale.';
+      };
+      ver.addEventListener('change', syncAv);
+      syncAv();
+      const perm = page('Permissions');
+      const team = check(perm, 'Team Create (collaborators can edit this place with you)', cur.teamCreate);
+      el('div', 'st-gs-note', perm, 'Add or remove collaborators in the Team Create window. Changes to Team Create apply the next time Studio is opened.');
+      if (ro) el('div', 'st-gs-note st-gs-ro', body, 'Only the owner can change these settings.');
+      tabs[0][0].click();
+      return () => ({ name: name.value.trim(), description: desc.value, maxPlayers: Math.max(1, Math.min(50, +max.value || 20)), clientVersion: +ver.value, allowGear: gear.checked, teamCreate: team.checked, avatarType: av.value });
+    }, ro ? [['Close', null]] : [['Save', true], ['Cancel', null]]);
+    if (!next) return;
+    const w = await fetch(url, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': this.cfg.csrf || '' },
+      body: JSON.stringify(next),
+    });
+    const res = await w.json().catch(() => ({}));
+    if (!w.ok || !res.success) {
+      this.ui.alert('Game Settings', res.error || `Settings were not saved (${w.status})`);
+      return;
+    }
+    if (res.name && res.name !== this.cfg.placeName) {
+      this.cfg.placeName = res.name;
+      this.ui.setTitle(`${res.name}${this.dirty ? '*' : ''} - Studio`);
+      const t = this.ui.tabs.querySelector('[data-id="place"] span');
+      if (t) t.textContent = res.name;
+    }
+    this.print('Game settings saved', 'info');
+    if ((res.clientVersion === 2018) !== (this.era === 2018)) this.print(`This place now plays in the ${res.clientVersion} client. Reopen Studio to edit it with the ${res.clientVersion} tools.`, 'info');
+  }
+
   async insertService() {
-    const missing = ['Teams', 'SoundService', 'Debris', 'StarterGui', 'StarterPack', 'Lighting'].filter((s) => !this.dm.services.get(s) || this.dm.services.get(s).studioHidden);
+    const list = this.era === 2018 ? INSERTABLE_SERVICES_2018 : ['Teams', 'SoundService', 'Debris', 'StarterGui', 'StarterPack', 'Lighting'];
+    const shown = new Set(this.explorer.roots());
+    const missing = list.filter((s) => isService(s) && (!this.dm.services.get(s) || !shown.has(this.dm.services.get(s))));
     const name = await this.ui.dialog('Insert Service', (body) => {
       if (!missing.length) {
         el('div', null, body, 'All services are already in the place.');
@@ -738,6 +1189,7 @@ export class Studio {
     if (!name) return;
     const svc = this.dm.service(name);
     svc.studioHidden = false;
+    svc.keepService = true;
     this.explorer.dirty = true;
     this.markDirty();
   }
@@ -791,6 +1243,9 @@ export class Studio {
         }
         if (save) this.save();
       });
+      ed.onCommand = (cmd) => this.exec(cmd);
+      ed.onGutter = (line) => this.debugger.toggle(script, line);
+      ed.setMarks(this.debugger.linesOf(script), 0);
       doc = { ed, script };
       this.docs.set(id, doc);
       this.ui.tab(id, script.props.get('Name'), () => this.showDoc(id), () => this.closeDoc(id));
@@ -816,9 +1271,10 @@ export class Studio {
     if (id !== 'place') this.docs.get(id).ed.reload();
   }
 
-  closeDoc(id) {
+  closeDoc(id, quiet = false) {
     const d = this.docs.get(id);
     if (!d) return;
+    if (d.play && !quiet) return this.endPlaySolo(true);
     d.ed.dispose();
     this.docs.delete(id);
     this.ui.removeTab(id);
@@ -834,6 +1290,23 @@ export class Studio {
       if (e.target.closest && e.target.closest('input, textarea, select')) return;
       const k = e.key.toLowerCase();
       const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl && e.shiftKey && k === 'f') {
+        e.preventDefault();
+        this.exec('findall');
+        return;
+      }
+      if (ctrl && e.shiftKey && k === 'x') {
+        e.preventDefault();
+        if (this.ui.mobile()) this.ui.showSheet('explorer');
+        else this.ui.togglePane('explorer', true);
+        this.explorer.focusSearch();
+        return;
+      }
+      if (!ctrl && e.key === 'F2' && this.selection.size) {
+        e.preventDefault();
+        this.exec('rename');
+        return;
+      }
       const map = ctrl ? { z: 'undo', y: 'redo', x: 'cut', c: 'copy', v: e.shiftKey ? 'pasteinto' : 'paste', d: 'duplicate', a: 'selectall', g: 'group', u: 'ungroup', r: 'rotate', t: 'tilt', s: 'publish' } : { delete: 'delete', f: 'cam:lookat' };
       const cmd = map[k] || (!ctrl && k === 'backspace' && this.selection.size ? 'delete' : null);
       if (cmd && this.enabled(cmd)) {
@@ -871,32 +1344,175 @@ export class Studio {
     made.forEach(walk);
   }
 
-  openFile() {
+  csgCopy(src, dst) {
+    for (const k of ['Anchored', 'CanCollide', 'Material', 'Reflectance', 'Transparency', 'BrickColor', 'Color', 'Locked', 'CastShadow']) {
+      if (src.info.all.has(k) && dst.info.all.has(k)) dst.props.set(k, cloneVal(src.props.get(k)));
+    }
+  }
+
+  csgPayload(list, frame) {
+    const inv = C.inv(frame);
+    const saved = [];
+    for (const p of list) for (const d of [p, ...p.descendants()]) {
+      if (!d.isA || !d.isA('BasePart')) continue;
+      saved.push([d, d.props.get('CFrame')]);
+      d.props.set('CFrame', C.mul(inv, d.props.get('CFrame')));
+    }
+    let xml;
+    try {
+      xml = writeModel(this.dm, list);
+    } finally {
+      for (const [d, cf] of saved) d.props.set('CFrame', cf);
+    }
+    return btoa(unescape(encodeURIComponent(xml)));
+  }
+
+  makeOperation(cls, name, frame, size, data, payload, like) {
+    const op = this.dm.create(cls, null);
+    op.props.set('Name', name);
+    if (like) this.csgCopy(like, op);
+    op.props.set('CFrame', frame);
+    op.props.set('Size', size.slice());
+    if (op.info.all.has('InitialSize')) op.props.set('InitialSize', size.slice());
+    op.extra = new Map([
+      ['MeshData', { t: 'raw', v: `<BinaryString name="MeshData">${data}</BinaryString>` }],
+      ['ChildData', { t: 'raw', v: `<BinaryString name="ChildData">${payload}</BinaryString>` }],
+    ]);
+    for (const k of ['Name', 'CFrame', 'Size', 'InitialSize', 'Anchored', 'CanCollide', 'Material', 'Transparency', 'BrickColor', 'Color']) if (op.info.all.has(k)) this.touch(op, k);
+    return op;
+  }
+
+  swapIn(olds, news, label) {
+    const parent = olds[0].parent;
+    const was = olds.map((p) => [p, p.parent]);
+    for (const p of olds) this.reparentRaw(p, null);
+    for (const n of news) this.reparentRaw(n, n.csgParent || parent);
+    const placed = news.map((n) => [n, n.parent]);
+    this.record(label, () => {
+      for (const [n] of placed) this.reparentRaw(n, null);
+      for (const [p, par] of was) this.reparentRaw(p, par);
+      this.select(olds);
+    }, () => {
+      for (const p of olds) this.reparentRaw(p, null);
+      for (const [n, par] of placed) this.reparentRaw(n, par);
+      this.select(news);
+    });
+    this.select(news);
+  }
+
+  csgUnion(sel) {
+    const parts = [...new Set(sel.flatMap(partsOf))].filter((p) => p.isA('BasePart'));
+    if (parts.length < 2 && !parts.some((p) => p.ClassName === 'NegateOperation')) throw new Error('Select two or more parts to union');
+    this.ui.status('Making union...');
+    const r = solid(parts);
+    const frame = C.cf(r.center[0], r.center[1], r.center[2]);
+    const tops = sel.filter((s) => !sel.some((o) => o !== s && s.isDescendantOf(o)));
+    const like = parts.find((p) => p.ClassName !== 'NegateOperation');
+    const u = this.makeOperation('UnionOperation', 'Union', frame, r.size, r.data, this.csgPayload(tops, frame), like);
+    u.csgMesh = r.mesh;
+    this.swapIn(tops, [u], 'Union');
+    this.ui.status(`Union made from ${parts.length} parts`);
+  }
+
+  csgNegate(sel) {
+    const parts = sel.filter((p) => p.isA && p.isA('BasePart'));
+    if (!parts.length) throw new Error('Select parts to negate');
+    const out = [];
+    for (const p of parts) {
+      if (p.ClassName === 'NegateOperation') {
+        const back = this.unpackChildren(p);
+        if (back) {
+          this.swapIn([p], back, 'Negate');
+          out.push(...back);
+        }
+        continue;
+      }
+      const shape = shapeOf(p);
+      if (!shape) continue;
+      const n = this.makeOperation('NegateOperation', p.props.get('Name'), p.props.get('CFrame').slice(), p.props.get('Size'), shape.data, this.csgPayload([p], p.props.get('CFrame')), p);
+      n.csgMesh = shape.mesh;
+      this.swapIn([p], [n], 'Negate');
+      out.push(n);
+    }
+    this.select(out);
+  }
+
+  unpackChildren(op) {
+    const raw = op.extra && op.extra.get('ChildData');
+    const b64 = raw && typeof raw.v === 'string' ? raw.v.replace(/<[^>]*>/g, '').trim() : '';
+    if (!b64) return null;
+    let xml;
+    try {
+      xml = decodeURIComponent(escape(atob(b64)));
+    } catch {
+      return null;
+    }
+    if (!/^\s*<roblox/.test(xml)) return null;
+    const made = this.dm.load(parsePlace(xml), null, { track: true });
+    const tops = made.filter((m) => !m.parent);
+    const frame = op.props.get('CFrame');
+    const init = op.info.all.has('InitialSize') ? op.props.get('InitialSize') : null;
+    const size = op.props.get('Size');
+    const k = Array.isArray(init) && init.every((v) => v > 0) ? [size[0] / init[0], size[1] / init[1], size[2] / init[2]] : [1, 1, 1];
+    for (const t of tops) for (const d of [t, ...t.descendants()]) {
+      if (!d.isA || !d.isA('BasePart')) continue;
+      const rel = d.props.get('CFrame').slice();
+      rel[0] *= k[0];
+      rel[1] *= k[1];
+      rel[2] *= k[2];
+      d.props.set('CFrame', C.mul(frame, rel));
+      for (const name of ['CFrame']) this.touch(d, name);
+    }
+    for (const t of tops) t.csgParent = op.parent;
+    return tops;
+  }
+
+  csgSeparate(sel) {
+    const ops = sel.filter((p) => p.isA && p.isA('PartOperation'));
+    if (!ops.length) throw new Error('Select a union to separate');
+    const out = [];
+    for (const op of ops) {
+      const back = this.unpackChildren(op);
+      if (!back) {
+        this.print(`${op.props.get('Name')} was made outside this Studio, so its parts cannot be separated here`, 'err');
+        continue;
+      }
+      this.swapIn([op], back, 'Separate');
+      out.push(...back);
+    }
+    if (out.length) this.select(out);
+  }
+
+  replacePlace(nodes, label) {
+    for (const c of [...this.dm.root.children]) {
+      if (isService(c.ClassName)) for (const k of [...c.children]) if (k.ClassName !== 'Camera') this.reparentRaw(k, null);
+      else this.reparentRaw(c, null);
+    }
+    this.dm.load(nodes, this.dm.root, { track: true });
+    this.undoStack = [];
+    this.redoStack = [];
+    this.markDirty();
+    this.select([]);
+    this.view.frameAll();
+    this.print(`Opened ${label}`, 'info');
+  }
+
+  openFile(into = null) {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.rbxl,.rbxlx,.rbxm,.rbxmx';
+    input.accept = into ? '.rbxm,.rbxmx' : '.rbxl,.rbxlx,.rbxm,.rbxmx';
     input.addEventListener('change', async () => {
       const f = input.files && input.files[0];
       if (!f) return;
       const bytes = new Uint8Array(await f.arrayBuffer());
       const nodes = parsePlace(bytes);
-      const isPlace = nodes.some((n) => n.cls === 'Workspace');
+      const isPlace = !into && nodes.some((n) => n.cls === 'Workspace');
       if (isPlace) {
         const ok = await this.ui.confirm('Open', `Replace everything in this place with ${f.name}? You can still leave without saving.`);
         if (!ok) return;
-        for (const c of [...this.dm.root.children]) {
-          if (isService(c.ClassName)) for (const k of [...c.children]) if (k.ClassName !== 'Camera') this.reparentRaw(k, null);
-          else this.reparentRaw(c, null);
-        }
-        this.dm.load(nodes, this.dm.root, { track: true });
-        this.undoStack = [];
-        this.redoStack = [];
-        this.markDirty();
-        this.select([]);
-        this.view.frameAll();
-        this.print(`Opened ${f.name}`, 'info');
+        this.replacePlace(nodes, f.name);
       } else {
-        const ws = this.dm.services.get('Workspace');
+        const ws = into && into.parent ? into : this.dm.services.get('Workspace');
         const made = this.dm.load(nodes, ws, { track: true }).filter((m) => m.parent === ws);
         this.adopt(made);
         this.add(made, 'Insert File');
@@ -934,6 +1550,7 @@ export class Studio {
   }
 
   async playSolo() {
+    if (this.era === 2018 && (endpointUrl('studioTestTicket', this.cfg.placeId) || (this.team && this.team.open))) return this.startPlaySolo();
     if (this.dirty) {
       const ok = await this.ui.confirm('Play Solo', 'Save the place and open it in a new tab to test it?');
       if (!ok) return;

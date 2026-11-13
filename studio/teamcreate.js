@@ -124,6 +124,7 @@ export class TeamSync {
     };
     for (const m of conn.early) this.handle(m);
     if (conn.snap.dirty) app.markDirty();
+    this.test = conn.snap.test && conn.snap.test.on ? conn.snap.test.job : null;
     const others = this.users.length - 1;
     app.print(others > 0 ? `Team Create: editing with ${others} other ${others === 1 ? 'person' : 'people'}` : 'Team Create: you are the only editor right now', 'info');
   }
@@ -241,6 +242,16 @@ export class TeamSync {
         this.app.markDirty();
         break;
       }
+      case 'terr': {
+        if (m.u === this.me || typeof m.d !== 'string') return;
+        const tt = this.app.terrainTools && this.app.terrainTools.terrain();
+        if (!tt) return;
+        try {
+          tt.data.decode(m.d);
+        } catch {}
+        this.app.markDirty();
+        break;
+      }
       case 'nack':
         this.app.print(`Team Create did not accept one of your changes (${m.m}). Reload Studio if the place looks different for others.`, 'err');
         break;
@@ -258,6 +269,23 @@ export class TeamSync {
         break;
       case 'chat':
         this.chatLine(m.name, m.m, m.color);
+        break;
+      case 'playsolo':
+        this.app.onPlaySolo(m);
+        break;
+      case 'dbg':
+        this.app.debugger.onServer(m);
+        break;
+      case 'teamtest':
+        this.test = m.on ? m.job : null;
+        if (m.on) {
+          this.app.print(`${m.by ? m.by + ' started a' : 'A'} Team Test is running. Choose Team Test to join it.`, 'info');
+          if (this.wantTest) {
+            this.wantTest = false;
+            this.app.joinTeamTest();
+          }
+        } else this.app.print(m.by ? `${m.by} ended the Team Test` : 'The Team Test ended', 'info');
+        this.app.refreshUI();
         break;
       case 'saved':
         this.app.dirty = false;

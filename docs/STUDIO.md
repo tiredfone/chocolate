@@ -1,8 +1,8 @@
 # Chocolate Studio
 
-Chocolate Studio (version 26.11.3-hotfix) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
+Chocolate Studio (version 26.12-preview) is a place editor that runs in the browser and looks and works like the 2012 Studio. It loads a place file, lets the owner and their collaborators edit it, alone or together with Team Create, and saves it back in the 2012 XML format. It runs on desktop browsers, phones and tablets.
 
-Studio does not run scripts. Test > Play Solo saves the place and opens its play page, so testing happens in the real game.
+Studio does not run scripts itself. In 2018 Studio, Play starts a private test server from the place as it is in Studio, unsaved changes included, and shows the game in a Play Solo tab inside Studio; Stop, or closing the tab, ends it. Only you can join that server, and it never takes public players. Without Team Create, Studio gets a play-test ticket from `studioTestTicket` (the `studioTicket` endpoint with `?purpose=test`, which works even when Team Create is off) and sends the place over the game socket as `{ t: 'playsolo', on: true, xml }`; in Team Create it sends `{ t: 'playsolo', on: true }` and the server uses the session's copy. 2012 Studio's Play Solo saves the place and opens its play page.
 
 - [Setup](#setup)
 - [Using Studio](#using-studio)
@@ -66,6 +66,17 @@ Clicking a part selects its outermost model, as in 2012. Alt+click selects the p
 Click the active tool's button again to turn it off. With no tool, clicks and touches only move the camera. This is the easiest way to look around on a phone.
 
 The mouse uses the 2012 Studio cursors: the arrow, the grab hand while dragging, `ResizeCursor` for the resize tools, `LockCursor`/`UnlockCursor` and `AnchorCursor`/`UnAnchorCursor` depending on the part under the mouse, `FillCursor`, `DropperCursor`, `MaterialCursor`, and `FlatCursor`, `WeldCursor`, `HingeCursor` and `MotorCursor` for the surface tools.
+
+### Terrain
+
+Terrain > Terrain Tools (2018: the TERRAIN tab, or the Terrain group on HOME) opens the terrain pane. A place's terrain follows its era.
+
+- **2018 smooth terrain** is stored as 4-stud voxels with a material and an occupancy, drawn as a smooth surface with the 2018 client's own terrain atlas (`platform/terrain/diffuse.png`, top, side and bottom tiles per material) and water as a translucent surface. Tools: Generate (map size, hill height, water, caves and seed), Add, Subtract, Paint, Grow, Erode, Smooth, Flatten (to the height where the stroke started) and Clear. Brushes have a size, a strength and a sphere or cube shape, and use the material picked from the 2018 material icons.
+- **2012 cell terrain** is 4-stud cells that are solid blocks or wedges (`CellBlock`, `CellOrientation`), coloured and textured per `CellMaterial`, with water cells. Tools: Generate, Add, Remove, Paint, Elevation (raises or lowers the columns under the brush), Crater, Smoother (adds wedges to the edges under the brush) and Clear.
+
+Hold the left mouse button over the world to use a brush; the blue sphere or box shows where it acts. Each stroke is one undo step. Strokes, Generate and Clear are sent to the other Team Create editors as `{ t: 'terr', d }` (the changed 16-voxel chunks, encoded by `TerrainData.encode`), and editors who join later get the terrain with the place. Terrain the command bar or a plugin makes through the Terrain Lua API is saved with the place but is not an undo step and is not sent to other editors.
+
+Terrain is saved in the `Terrain` instance as a `ChocolateTerrain` BinaryString (`shared/terrain.js`), which the game server loads, collides with and sends to players. Roblox's own `SmoothGrid` and `ClusterGridV3` data is kept unchanged in the file but not read.
 
 ### Camera
 
@@ -133,6 +144,20 @@ Type in the search box to filter by name. More loads the next page. Clicking a m
 
 The menus fold into the button at the top left, the toolbars scroll sideways, and Explorer, Properties, Toolbox, Output and Team Create become tabs on a sheet at the bottom; tap the open tab again to close the sheet. Handles take a finger within about 34 pixels. Inputs use 16 pixel text so iOS does not zoom when you type.
 
+### Command bar, Run Script and plugins
+
+The command bar under the viewport runs Lua against the place (Up and Down recall earlier commands), and Tools > Run Script (2018: Test > Run Script) runs a `.lua` file. Each run's changes become one undo step. Script Analysis compiles every script in the place and lists syntax errors; click one to jump to the line.
+
+Plugins are Roblox plugin models. Install them with Manage Plugins (PLUGINS tab, or Tools > Manage Plugins) by asset ID; they are kept in this browser and load each time Studio opens. They get the usual `plugin` object: `CreateToolbar` and `CreateButton` (buttons appear on the PLUGINS tab, or a plugin toolbar in 2012 Studio), `GetMouse` with `Activate`/`Deactivate` (the mouse gets `Button1Down`, `Button1Up`, `Move`, `Hit`, `Target`, `X` and `Y` from the viewport while the plugin is active), `GetSetting`/`SetSetting`, `CreateDockWidgetPluginGui` (shown as a Studio pane that draws its GUI), `OpenScript`, `Union`/`Negate`/`Separate` and `GetStudioUserId`. `Selection` (`Get`, `Set`, `Add`, `Remove`, `SelectionChanged`) and `ChangeHistoryService` (`SetWaypoint`, `Undo`, `Redo`) are tied to Studio's selection and undo history. The place's own Scripts and LocalScripts never run in Studio.
+
+### Debugging Play Solo
+
+Click a line number in a script to set a breakpoint (red). Press Play: when a Script or LocalScript reaches that line, Studio opens it at the line, the Call Stack and Watch panes show where it stopped, its local variables and your watch expressions (Add Watch, or select an expression first). Step Into, Step Over, Step Out, and Play (which continues) are on the SCRIPT MENU and TEST tabs; Pause stops at the next line any script runs. Only the paused script waits: the rest of the game keeps running. Errors from the game appear in Output; Go To Error opens the script at the line, and with the On All Exceptions or On Unhandled Exceptions break mode Studio does this as soon as the error appears.
+
+### Union, Negate and Separate
+
+MODEL > Union combines the selected parts into one UnionOperation, cutting away any NegateOperations in the selection. Negate turns parts into NegateOperations (shown translucent red); negating one again turns it back. Separate splits a union made in this Studio back into its parts, wherever the union has been moved since. Unions from Roblox place files cannot be separated.
+
 ## Team Create
 
 Team Create lets several people edit one place at the same time. It is on whenever the page config has a `studioTicket` endpoint.
@@ -152,6 +177,12 @@ The place's owner can always edit. The owner adds collaborators by username in t
 
 Each editor has a colour. Their selection shows as a box in that colour in everyone else's viewport, and their name in that colour in the chat.
 
+### Team Test
+
+Test > Team Test (2018: Test > Team Test) starts a test server from the place as everyone is editing it now, unsaved changes included, and opens it for you. Every editor of the session sees that a Team Test is running and joins it with the same button. Only people who have been in that Team Create session can join; anyone else is turned away, and test servers never take public players or appear in the server list. Exit Game (or Test > End Team Test) shuts the test server down for everyone. It also stops by itself once it has been empty for a while.
+
+Messages: an editor sends `{ t: 'teamtest', on: true | false }`; the server answers everyone with `{ t: 'teamtest', on, job, by }`, and `snap` carries `test: { on, job }` for editors who join later. Players join through the `play` endpoint with `?server=job:<job>`.
+
 The session stays on the server for 10 minutes after the last editor leaves, so a reconnecting editor finds unsaved work. After that, unsaved changes are gone: save before you leave.
 
 If Studio cannot join Team Create, it opens the place from `studioPlace` on its own and says so in Output. If the connection drops while editing, Studio tells you; your later changes stay on your screen only, so save them or reload to rejoin.
@@ -170,6 +201,7 @@ Messages are JSON over the game WebSocket. Instance ids (`g`) are `s<n>` for obj
 | both | `{ t: 'sel', g: [...] }` | The sender's selection |
 | both | `{ t: 'chat', m }` | Chat, at most 200 characters |
 | client | `{ t: 'saved' }` | The sender saved the place |
+| both | `{ t: 'terr', d }` | Terrain chunks changed by a brush, Generate, Clear, undo or redo |
 | server | `{ t: 'users', users, joined, left }` | Who is editing |
 | server | `{ t: 'nack', s, m }` | An operation was rejected |
 
@@ -236,6 +268,8 @@ Add an import map entry with a `?v=` version for every `.js` file in `client/`, 
 | `endpoints.studioTicket` | Team Create ticket. Leave it out to edit alone |
 | `endpoints.studioCollaborators` | Collaborator list for the Team Create pane |
 | `endpoints.studioToolbox` | Toolbox models. Leave it out to show only Basic Objects |
+| `endpoints.studioSettings` | Game Settings window (`GET` reads, owner `POST` saves name, description, max players, client, gear, avatar type and Team Create). Leave it out to link to `gamePage` instead |
+| `endpoints.studioTestTicket` | Play-test ticket for 2018 Play Solo. Leave it out to open the play page instead |
 | `endpoints.play` | Page opened by Run and Play Solo. Leave it out to disable them |
 | `role` | `owner` or `editor`; informational, the endpoints decide |
 
@@ -472,14 +506,18 @@ Every menu item and toolbar button calls `exec` with one of these.
 | `view:explorer`, `view:properties`, `view:objects`, `view:output` | Show or hide a pane |
 | `run`, `playsolo` | Save and open the play page |
 | `joints` | Toggle Manual Joints |
+| `terrain:editor` | Open the terrain pane |
+| `terrain:generate`, `terrain:clear` | Generate terrain from a dialog, or clear all terrain |
+| `terrain:add`, `terrain:subtract`, `terrain:paint`, `terrain:grow`, `terrain:erode`, `terrain:smooth`, `terrain:flatten`, `terrain:elevate`, `terrain:crater` | Terrain brushes (the 2012 pane shows Remove, Elevation, Crater and Smoother) |
 | `fullscreen`, `about` | Full screen and About |
 
 Running the current tool's command again turns the tool off.
 
 ## Limitations
 
-- No Lua runs in Studio: no Run in place, command bar or Execute Script.
-- No terrain editing or Find and Replace.
+- The place's own scripts never run in Studio itself; Play Solo, Run and Team Test run them on a test server.
+- Terrain has no Regions tool (copy, paste and move of terrain regions), and Roblox's own smooth and cell terrain data in imported places is kept but not shown.
+- Swimming in terrain water is not simulated: water is drawn but characters walk on the bottom.
 - Team Create has no script locking: two people typing in the same script overwrite each other's text, last change wins.
 - Autocomplete follows `local` aliases only one simple assignment deep and does not know the types of function results.
 - Pause and Reset on the Run toolbar are disabled.

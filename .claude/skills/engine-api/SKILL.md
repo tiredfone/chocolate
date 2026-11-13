@@ -48,6 +48,8 @@ Read the failing CoreScript by ID through the configured source (`luaSource(id)`
 | `Instance no longer exists` from a `ChildRemoved` or other handler | The instance was evicted from the host's `ghosts`. Find what the client destroys in bulk (`window.__world.dm.ghosts`) and destroy internal instances with `dm.destroy(inst, true)` |
 | Camera or a render-step script lags the character by a frame | `BindToRenderStep` callbacks must run in `host.renderStep`, after the character is posed in `ClientWorld.update`, not in `host.tick` |
 | Character or object moved by a player that Roblox would not let move | The server's player body is kinematic (infinite mass); check `pushHooks` and `CHARACTER_PUSH_MASS` in `shared/physics.js` |
+| Terrain method (`SetCell`, `FillBlock`, `ReadVoxels` and the rest) | `installTerrain` in `shared/terrainapi.js`, working on `TerrainData` from `terrainOf`; methods that build Lua tables (3D voxel arrays) are `LM.*` in `shared/runtime2018.lua` over a `__` JS method, with their class in `LUA_CLASS` |
+| A `Region3` argument arrives empty | `Region3` crosses as `r3` (six numbers: min then max); read `args[0]` as an array |
 | 2018 method or async method | `def` in `installMethods2018` in `shared/api2018.js`; a yielding one returns a Promise and also needs `LM.<Name>` calling `callAsync` in `shared/runtime2018.lua` plus its class in `LUA_CLASS` |
 | A script kicks or crashes the player on purpose (admin and anti-exploit systems) | Read the check it fails and match Roblox's real behaviour: security identity (`__gameCaller`, `__denied`, `settings()`, `loadstring`, `RobloxLocked` in `shared/runtime.lua`), what `typeof`, `getfenv`, `pcall` and `FindService` return, what replicates (`REPLICATED_SERVICES`, `hiddenProp`) and how instance references cross remotes. Never special-case the script |
 
@@ -60,6 +62,7 @@ Match 2012 behaviour, not modern Roblox: check what the script does with the val
 - A destroyed instance is still a valid reference (`ghosts`); do not turn it into nil when it crosses to Lua or the network.
 - Server-side `env` lacks browser functions, so every `def` must tolerate a missing `env.*`.
 - `memberIndex()` builds the methods table with a dummy host (`dm` and `env` mostly empty), so a `def` must only touch `host.dm` and `env` inside its function body. Studio's autocomplete and Object Browser read that index, so new members appear there automatically.
+- Change terrain only through `TerrainData.set`, `fillBox`, `fillBall` or `decode`, so the dirty chunks reach physics, the renderer, replication and Studio.
 - No comments in code.
 
 ## 4. Verify

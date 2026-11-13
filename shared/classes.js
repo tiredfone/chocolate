@@ -135,6 +135,8 @@ const DEFS = {
   JointsService: { base: 'Instance', service: true },
   TestService: { base: 'Instance', service: true },
   ChangeHistoryService: { base: 'Instance', service: true },
+  PluginToolbar: { base: 'Instance' },
+  PluginToolbarButton: { base: 'Instance', props: 'Enabled:bool=true ClickableWhenViewportHidden:bool=false Icon:Content' },
   Selection: { base: 'Instance', service: true },
   ScriptContext: { base: 'Instance', service: true },
   NetworkServer: { base: 'Instance', service: true },
@@ -161,7 +163,7 @@ const DEFS = {
   PlayerScripts: { base: 'Instance' },
   Player: {
     base: 'Instance',
-    props: 'PersonalServerRank:int=0 userId:int=0 UserId:int=0 Character:Ref CharacterAppearance:string Neutral:bool=true TeamColor:BC=194 MembershipType:enum=0 ChatMode:enum=1 AccountAge:int=0 DisplayName:string CameraMode:enum=0 DataReady:bool=true',
+    props: 'PersonalServerRank:int=0 userId:int=0 UserId:int=0 Character:Ref CharacterAppearance:string Neutral:bool=true TeamColor:BC=194 MembershipType:enum=0 ChatMode:enum=1 AccountAge:int=0 DisplayName:string CameraMode:enum=0 DataReady:bool=true DataComplexity:int=0 DataComplexityLimit:int=45000',
     aliases: { UserId: 'userId' },
   },
   Team: { base: 'Instance', props: 'TeamColor:BC=194 AutoAssignable:bool=true AutoColorCharacters:bool=true Score:int=0' },

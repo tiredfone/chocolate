@@ -19,7 +19,7 @@ async function httpGet(url, timeoutMs = 15000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix' } });
+    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': config.userAgent || 'Chocolate/26.12-preview' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const buf = new Uint8Array(await r.arrayBuffer());
     if (buf.length > MAX_BYTES) throw new Error('asset too large');

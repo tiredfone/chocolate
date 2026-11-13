@@ -17,6 +17,7 @@ export const LUA_CLASS = {
   GetAsync: ['GlobalDataStore'], SetAsync: ['GlobalDataStore'], UpdateAsync: ['GlobalDataStore'], IncrementAsync: ['GlobalDataStore'],
   RemoveAsync: ['GlobalDataStore'], OnUpdate: ['GlobalDataStore'], GetSortedAsync: ['OrderedDataStore'],
   GetAssetThumbnailAsync: ['AssetService'],
+  ReadVoxels: ['Terrain'], WriteVoxels: ['Terrain'],
   BindToClose: ['DataModel'],
   GetGroupsAsync: ['GroupService'], GetGroupInfoAsync: ['GroupService'],
   JSONEncode: ['HttpService'], JSONDecode: ['HttpService'], UrlEncode: ['HttpService'],

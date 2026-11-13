@@ -6,6 +6,8 @@ import { Material2012, MATERIALS, MATERIALS2018, LIGHTS, rawColor, texPosAttribu
 import { ParticleSystem2012, SYSTEMS, preloadParticles } from './particles2012.js';
 import { CharacterAtlases, R15Atlases, BODY_MESH, clothingOf } from './character2012.js';
 import { contentMesh } from './assets.js';
+import { TerrainView } from './terrainview.js';
+import { terrainOf, CELL_COLORS, CELL_WATER } from '../shared/terrain.js';
 
 const MATERIAL_KIND = {
   256: 'plastic', 272: 'smoothplastic', 288: 'neon', 512: 'wood', 528: 'woodplanks', 784: 'slate', 800: 'slate', 816: 'concrete', 832: 'granite',
@@ -38,6 +40,7 @@ function materialTexture(path) {
   }
   return t;
 }
+const CELL_KIND = [null, 'grass', 'sand', 'brick', 'granite', 'concrete', 'corrodedmetal', 'metal', 'foil', 'woodplanks', 'wood', 'pebble', 'concrete', 'slate', 'concrete', 'plastic', 'plastic', 'plastic'];
 const R15_LIMBS = new Set(['Head', 'UpperTorso', 'LowerTorso', 'LeftUpperArm', 'LeftLowerArm', 'LeftHand', 'RightUpperArm', 'RightLowerArm', 'RightHand', 'LeftUpperLeg', 'LeftLowerLeg', 'LeftFoot', 'RightUpperLeg', 'RightLowerLeg', 'RightFoot']);
 const FACE_PROPS = ['RightSurface', 'LeftSurface', 'TopSurface', 'BottomSurface', 'BackSurface', 'FrontSurface'];
 const LIMB_REGION = { Torso: 'torso', 'Right Arm': 'right', 'Left Arm': 'left', 'Right Leg': 'right', 'Left Leg': 'left' };
@@ -95,13 +98,17 @@ function trisToGeometry(tris) {
   const pos = [], nrm = [], uv = [];
   const groups = new Map();
   tris.sort((x, y) => x[5] - y[5]);
+  const seen = new Map();
+  for (const t of tris) for (const v of [t[0], t[1], t[2]]) seen.set(v.join(','), v);
+  const mid = [0, 0, 0];
+  for (const v of seen.values()) for (let k = 0; k < 3; k++) mid[k] += v[k] / seen.size;
   let idx = 0;
   for (const t of tris) {
     let [p, q, r] = t;
     let uq = t[7], ur = t[8];
     let u = [q[0] - p[0], q[1] - p[1], q[2] - p[2]], v = [r[0] - p[0], r[1] - p[1], r[2] - p[2]];
     let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-    const cx = p[0] + q[0] + r[0], cy = p[1] + q[1] + r[1], cz = p[2] + q[2] + r[2];
+    const cx = p[0] + q[0] + r[0] - 3 * mid[0], cy = p[1] + q[1] + r[1] - 3 * mid[1], cz = p[2] + q[2] + r[2] - 3 * mid[2];
     if (n[0] * cx + n[1] * cy + n[2] * cz < 0) {
       [q, r] = [r, q];
       [uq, ur] = [ur, uq];
@@ -226,6 +233,31 @@ export class Renderer {
     this.dm.observe(this);
   }
 
+  setQuality(level) {
+    const q = level | 0;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const ratio = q === 0 ? dpr : Math.max(0.5, Math.min(dpr, 0.5 + q * 0.15));
+    if (Math.abs(this.r.getPixelRatio() - ratio) > 1e-3) {
+      this.r.setPixelRatio(ratio);
+      this.resize();
+    }
+    const shadows = q === 0 || q >= 4;
+    if (this.sun.castShadow !== shadows) {
+      this.sun.castShadow = shadows;
+      this.r.shadowMap.needsUpdate = true;
+    }
+    const size = q === 0 || q >= 8 ? 2048 : 1024;
+    if (this.sun.shadow.mapSize.x !== size) {
+      this.sun.shadow.mapSize.set(size, size);
+      if (this.sun.shadow.map) {
+        this.sun.shadow.map.dispose();
+        this.sun.shadow.map = null;
+      }
+    }
+    this.camera.far = q === 0 || q >= 6 ? 5000 : 900 + q * 300;
+    this.camera.updateProjectionMatrix();
+  }
+
   resize() {
     const w = this.canvas.clientWidth || window.innerWidth, h = this.canvas.clientHeight || window.innerHeight;
     this.r.setSize(w, h, false);
@@ -297,18 +329,21 @@ export class Renderer {
     const key = urls.join('|');
     if (key === this.skyKey) return;
     this.skyKey = key;
-    Promise.all(urls.map((u, i) => loadImage(u).then((img) => img || (u === DEFAULT_SKY[i] ? null : loadImage(DEFAULT_SKY[i]))))).then((imgs) => {
-      if (this.skyKey !== key || imgs.some((i) => !i)) return;
+    const load = (list) => Promise.all(list.map((u) => Promise.resolve(loadImage(u)).catch(() => null)));
+    load(urls).then((imgs) => (imgs.every((i) => i && i.width && i.height) || urls.every((u, i) => u === DEFAULT_SKY[i]) ? imgs : load(DEFAULT_SKY))).then((imgs) => {
+      if (this.skyKey !== key || imgs.some((i) => !i || !i.width || !i.height)) return;
+      const big = Math.max(...imgs.map((im) => Math.max(im.width, im.height)));
+      let size = 64;
+      while (size < big && size < 1024) size *= 2;
       const cube = new THREE.CubeTexture(imgs.map((im, i) => {
         const c = document.createElement('canvas');
-        const turn = i === 2 || i === 3;
-        c.width = turn ? im.height : im.width;
-        c.height = turn ? im.width : im.height;
+        c.width = size;
+        c.height = size;
         const g = c.getContext('2d');
-        if (i === 2) g.setTransform(0, -1, 1, 0, 0, im.width);
-        else if (i === 3) g.setTransform(0, 1, -1, 0, im.height, 0);
-        else g.setTransform(1, 0, 0, -1, 0, im.height);
-        g.drawImage(im, 0, 0);
+        if (i === 2) g.setTransform(0, -1, 1, 0, 0, size);
+        else if (i === 3) g.setTransform(0, 1, -1, 0, size, 0);
+        else g.setTransform(1, 0, 0, -1, 0, size);
+        g.drawImage(im, 0, 0, size, size);
         return c;
       }));
       cube.colorSpace = THREE.SRGBColorSpace;
@@ -340,6 +375,7 @@ export class Renderer {
   }
 
   partColor(part) {
+    if (part.ClassName === 'NegateOperation') return { r: 1, g: 0.35, b: 0.35 };
     if (this.world.era === 2018 && part.info.all.has('Color')) {
       const c = part.props.get('Color');
       if (Array.isArray(c)) return { r: c[0], g: c[1], b: c[2] };
@@ -349,6 +385,7 @@ export class Renderer {
 
   partTransparency(part) {
     if (this.localTransparency.has(part)) return this.localTransparency.get(part);
+    if (part.ClassName === 'NegateOperation') return Math.max(0.5, +part.props.get('Transparency') || 0);
     const t = part.props.get('Transparency');
     const ltm = this.world.era === 2018 && part.props.has('LocalTransparencyModifier') ? +part.props.get('LocalTransparencyModifier') || 0 : 0;
     return ltm > 0 ? 1 - (1 - t) * (1 - ltm) : t;
@@ -462,7 +499,10 @@ export class Renderer {
   add(inst) {
     if (this.visuals.has(inst)) return;
     if (inst.isA('BasePart')) {
-      if (inst.ClassName === 'Terrain') return;
+      if (inst.ClassName === 'Terrain') {
+        this.attachTerrain(inst);
+        return;
+      }
       const group = new THREE.Group();
       group.matrixAutoUpdate = true;
       const v = { part: inst, group, children: [], target: null, effects: [] };
@@ -599,7 +639,7 @@ export class Renderer {
     const name = part.props.get('Name');
     const clothes = clothingOf(part.parent);
     const faces = [];
-    if (!(clothes && clothes.shirt) && (name === 'Torso' || name === 'Left Arm' || name === 'Right Arm')) {
+    if (this.world.era !== 2018 && !(clothes && clothes.shirt) && (name === 'Torso' || name === 'Left Arm' || name === 'Right Arm')) {
       faces.push(['studs', size[1] / 2, -Math.PI / 2, false]);
       if (name !== 'Torso') faces.push(['inlet', -size[1] / 2, Math.PI / 2, true]);
     }
@@ -1019,6 +1059,28 @@ export class Renderer {
     this.rebuild(part);
   }
 
+  attachTerrain(inst) {
+    if (this.terrainView && this.terrainView.inst === inst) return;
+    if (this.terrainView) this.terrainView.dispose();
+    const era = this.world.era === 2018 ? 2018 : 2012;
+    const data = terrainOf(inst, era);
+    this.terrain = data;
+    this.terrainView = new TerrainView(this, inst, data, {
+      atlas: era === 2018 ? contentTexture('platform/terrain/diffuse.png', { placeholder: 'rgb(128,128,128)' }) : null,
+      cellMaterial: (m) => this.cellMaterial(m),
+    });
+  }
+
+  cellMaterial(m) {
+    const c = CELL_COLORS[m] || [127, 127, 127];
+    const kind = CELL_KIND[m] || 'plastic';
+    const def = MATERIALS[kind] || MATERIALS.plastic;
+    const water = m === CELL_WATER;
+    const mat = new Material2012({ color: rawColor(c[0] / 255, c[1] / 255, c[2] / 255), ks: water ? 0.8 : def.ks, exp: water ? 80 : def.exp, transparent: water, opacity: water ? 0.55 : 1, depthWrite: !water });
+    if (def.tex && !water) mat.setMaterialTexture(materialTexture(def.tex), def);
+    return mat;
+  }
+
   attach() {
     const ws = this.dm.services.get('Workspace');
     for (const d of ws.descendants()) this.add(d);
@@ -1051,6 +1113,7 @@ export class Renderer {
   }
 
   frame(dt) {
+    if (this.terrain) this.terrain.flush();
     const k = 1 - Math.exp(-dt * 18);
     for (const v of this.smooth) {
       if (!v.target) {

@@ -2,7 +2,10 @@ import zlib from 'zlib';
 import { DataModel } from '../shared/instance.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { GidMap, packPlace, unpack, encodeProp, decodeProp, canMove, MAX_XML } from '../shared/teamsync.js';
+import { writePlace } from '../shared/rbxlx.js';
 import { placeBytes } from './assets.js';
+import { defaultServices } from '../shared/services.js';
+import { terrainOf, storeTerrain } from '../shared/terrain.js';
 
 const IDLE_MS = 10 * 60 * 1000;
 const MAX_CHAT = 200;
@@ -23,8 +26,12 @@ function cleanText(s, n) {
 }
 
 export class TeamSession {
-  constructor(placeId, log) {
+  constructor(placeId, log, era = 2012, hooks = {}) {
     this.placeId = placeId;
+    this.hooks = hooks;
+    this.test = null;
+    this.editors = new Set();
+    this.era = era === 2018 ? 2018 : 2012;
     this.log = log;
     this.members = new Map();
     this.ready = null;
@@ -46,6 +53,8 @@ export class TeamSession {
       throw e;
     });
     if (bytes && bytes.length) dm.load(parsePlace(inflate(bytes)), dm.root, { track: true });
+    dm.era = this.era;
+    defaultServices(dm, this.era);
     const ws = dm.services.get('Workspace');
     if (!ws.descendants().some((d) => d.isA('BasePart'))) {
       const base = dm.create('Part', null);
@@ -58,6 +67,13 @@ export class TeamSession {
       base.props.set('TopSurface', 3);
       base.props.set('BottomSurface', 4);
       dm.setParent(base, ws);
+    }
+    if (!ws.findChildOfClass('Terrain')) {
+      const t = dm.create('Terrain', null);
+      t.props.set('Name', 'Terrain');
+      t.props.set('Anchored', true);
+      t.props.set('Locked', true);
+      dm.setParent(t, ws);
     }
     this.dm = dm;
     this.gids = new GidMap(dm, 's');
@@ -82,6 +98,7 @@ export class TeamSession {
     clearTimeout(this.idle);
     const m = { cid, user, send, close, color: COLORS[this.colorNext++ % COLORS.length], prefix: `c${cid}_` };
     this.members.set(cid, m);
+    this.editors.add(user.id | 0);
     try {
       await this.load();
     } catch (e) {
@@ -93,7 +110,7 @@ export class TeamSession {
     }
     if (!this.members.has(cid)) return;
     const snap = packPlace(this.dm, this.gids);
-    this.send(m, { t: 'snap', you: cid, prefix: m.prefix, role: user.role, users: this.users(), xml: snap.xml, refs: snap.refs, dirty: this.dirty });
+    this.send(m, { t: 'snap', you: cid, prefix: m.prefix, role: user.role, users: this.users(), xml: snap.xml, refs: snap.refs, dirty: this.dirty, test: this.testInfo() });
     this.broadcast({ t: 'users', users: this.users(), joined: { name: user.name, color: m.color } }, m);
     this.log(`[studio ${this.placeId}] ${user.name} (${user.id}) joined`);
   }
@@ -101,6 +118,7 @@ export class TeamSession {
   leave(cid) {
     const m = this.members.get(cid);
     if (!m) return;
+    if (m.solo && this.hooks.stopTest) this.hooks.stopTest(m.solo);
     this.members.delete(cid);
     this.broadcast({ t: 'users', users: this.users(), left: { name: m.user.name } });
     this.log(`[studio ${this.placeId}] ${m.user.name} left`);
@@ -191,6 +209,53 @@ export class TeamSession {
         this.broadcast({ t: 'sel', u: cid, g: list }, m);
         break;
       }
+      case 'teamtest': {
+        if (msg.on) {
+          if (this.test && this.hooks.testAlive && this.hooks.testAlive(this.test)) return this.send(m, { t: 'teamtest', ...this.testInfo() });
+          if (!this.hooks.startTest) return reject('Team Test is not available');
+          const xml = writePlace(dm);
+          this.test = this.hooks.startTest(this, xml, m.user);
+          if (!this.test) return reject('Team Test could not start');
+          this.broadcast({ t: 'teamtest', ...this.testInfo(), by: m.user.name });
+          this.log(`[studio ${this.placeId}] ${m.user.name} started Team Test`);
+        } else {
+          if (!this.test) return;
+          if (this.hooks.stopTest) this.hooks.stopTest(this.test, `${m.user.name} ended the Team Test`);
+          this.test = null;
+          this.broadcast({ t: 'teamtest', on: false, by: m.user.name });
+          this.log(`[studio ${this.placeId}] ${m.user.name} ended Team Test`);
+        }
+        break;
+      }
+      case 'dbg': {
+        if (m.solo && this.hooks.debug) this.hooks.debug(m.solo, msg);
+        break;
+      }
+      case 'playsolo': {
+        if (m.solo && this.hooks.stopTest) this.hooks.stopTest(m.solo);
+        m.solo = null;
+        if (!msg.on) return this.send(m, { t: 'playsolo', on: false });
+        if (!this.hooks.startSolo) return reject('Play Solo is not available');
+        const own = typeof msg.xml === 'string' && /^\s*<roblox[\s>]/.test(msg.xml) && msg.xml.length <= 64 * 1024 * 1024 ? msg.xml : null;
+        m.solo = this.hooks.startSolo(this, own || writePlace(dm), m.user.id, (o) => this.send(m, o), msg);
+        this.send(m, m.solo ? { t: 'playsolo', on: true, job: m.solo.id } : { t: 'playsolo', on: false, error: 'Play Solo could not start' });
+        break;
+      }
+      case 'terr': {
+        if (typeof msg.d !== 'string' || msg.d.length > 8 * 1024 * 1024) return reject('terrain change too large');
+        const t = dm.services.get('Workspace').findChildOfClass('Terrain');
+        if (!t) return reject('no terrain');
+        try {
+          terrainOf(t, this.era).decode(msg.d);
+        } catch {
+          return reject('bad terrain data');
+        }
+        terrainOf(t, this.era).takeDirty();
+        storeTerrain(t);
+        this.dirty = true;
+        this.broadcast({ t: 'terr', u: cid, d: msg.d }, m);
+        break;
+      }
       case 'saved': {
         this.dirty = false;
         this.broadcast({ t: 'saved', u: cid, name: m.user.name }, m);
@@ -199,6 +264,11 @@ export class TeamSession {
       default:
         break;
     }
+  }
+
+  testInfo() {
+    if (!this.test || (this.hooks.testAlive && !this.hooks.testAlive(this.test))) return { on: false };
+    return { on: true, job: this.test.id };
   }
 
   scheduleIdle(onIdle) {

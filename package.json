@@ -1,6 +1,6 @@
 {
   "name": "chocolate",
-  "version": "26.11.3-hotfix",
+  "version": "26.12-preview",
   "description": "Browser port of the 2012 game client: three.js rendering, Rapier physics and the original CoreScripts on a Lua 5.1 VM, with a Node game server.",
   "license": "MIT",
   "private": true,

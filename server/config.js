@@ -21,6 +21,7 @@ if (env.CHOCOLATE_PORT) cfg.port = +env.CHOCOLATE_PORT;
 if (env.CHOCOLATE_SITE) cfg.siteUrl = env.CHOCOLATE_SITE;
 if (env.CHOCOLATE_KEY) cfg.key = env.CHOCOLATE_KEY;
 if (env.CHOCOLATE_ASSET_DIR) cfg.assetDir = env.CHOCOLATE_ASSET_DIR;
+if (env.CHOCOLATE_DATA_DIR) cfg.dataStoreDir = env.CHOCOLATE_DATA_DIR;
 cfg.endpoints = cfg.endpoints || {};
 cfg.siteUrl = String(cfg.siteUrl || '').replace(/\/+$/, '');
 cfg.assetDir = cfg.assetDir ? String(cfg.assetDir).replace(/\/+$/, '') : '';

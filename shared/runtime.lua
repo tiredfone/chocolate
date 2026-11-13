@@ -18,7 +18,7 @@ package = nil
 require = nil
 dofile = nil
 loadfile = nil
-debug = nil
+__RTDEBUG = debug debug = nil
 os = { time = os_time, clock = os_clock, date = os_date, difftime = os_difftime }
 string.dump = nil
 collectgarbage = function(opt)
@@ -114,6 +114,10 @@ local function encInto(out, v)
       out[#out + 1] = "ray"
       local o, d = v.Origin, v.Direction
       out[#out + 1] = o.X; out[#out + 1] = o.Y; out[#out + 1] = o.Z; out[#out + 1] = d.X; out[#out + 1] = d.Y; out[#out + 1] = d.Z
+    elseif mt == R3MT then
+      out[#out + 1] = "r3"
+      local a, b = v.Min, v.Max
+      out[#out + 1] = a.X; out[#out + 1] = a.Y; out[#out + 1] = a.Z; out[#out + 1] = b.X; out[#out + 1] = b.Y; out[#out + 1] = b.Z
     elseif mt == EnumItemMT then out[#out + 1] = "e"; out[#out + 1] = v.EnumType; out[#out + 1] = v.Value
     elseif mt and LuaMethods.__ext.enc[mt] then LuaMethods.__ext.enc[mt](out, v)
     elseif mt == nil and LuaMethods.__ext.dict and next(v) ~= nil and v[1] == nil then LuaMethods.__ext.dict(out, v, encInto)
@@ -148,6 +152,7 @@ local function dec1(a, i)
   elseif tag == "ud" then return UDim.new(a[i + 1], a[i + 2]), i + 3
   elseif tag == "v2" then return Vector2.new(a[i + 1], a[i + 2]), i + 3
   elseif tag == "ray" then return Ray.new(Vector3.new(a[i + 1], a[i + 2], a[i + 3]), Vector3.new(a[i + 4], a[i + 5], a[i + 6])), i + 7
+  elseif tag == "r3" then return Region3.new(Vector3.new(a[i + 1], a[i + 2], a[i + 3]), Vector3.new(a[i + 4], a[i + 5], a[i + 6])), i + 7
   elseif tag == "e" then
     local e = Enum[a[i + 1]]
     return e and e:FromValue(a[i + 2]) or a[i + 2], i + 3

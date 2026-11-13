@@ -6,6 +6,8 @@ import { Physics } from '../shared/physics.js';
 import { Renderer } from '../client/render.js';
 import { Studio } from './studio.js';
 import { connectTeam, loadSnapshot, TeamSync } from './teamcreate.js';
+import { defaultServices } from '../shared/services.js';
+import { terrainOf } from '../shared/terrain.js';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent || '{}');
 configure(cfg);
@@ -46,6 +48,7 @@ async function boot() {
       dm.load(parsePlace(bytes), dm.root, { track: true });
     }
   }
+  if (!team) defaultServices(dm, cfg.clientVersion === 2018 ? 2018 : 2012);
   const ws = dm.services.get('Workspace');
   if (!team && !ws.children.some((c) => c.isA && c.isA('BasePart'))) {
     const base = dm.create('Part', null);
@@ -64,10 +67,19 @@ async function boot() {
   const era = cfg.clientVersion === 2018 ? 2018 : 2012;
   dm.era = era;
   if (era === 2018) await useContent2018();
+  if (!ws.findChildOfClass('Terrain')) {
+    const t = dm.create('Terrain', null);
+    t.props.set('Name', 'Terrain');
+    t.props.set('Anchored', true);
+    t.props.set('Locked', true);
+    dm.setParent(t, ws);
+  }
   const renderer = new Renderer(canvas, { dm, era });
   renderer.attach();
   const physics = new Physics(dm, RAPIER, { simulate: false, excluded: () => false });
   physics.attachWorkspace(ws);
+  const terr = ws.findChildOfClass('Terrain');
+  if (terr) physics.setTerrain(terr, terrainOf(terr, era));
   const root = document.getElementById('studio');
   root.replaceChildren();
   const app = new Studio({ root, dm, renderer, physics, cfg });

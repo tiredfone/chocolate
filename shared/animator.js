@@ -23,8 +23,11 @@ export function parseSequence(ks) {
       for (const c of p.children) {
         if (c.ClassName !== 'Pose') continue;
         const name = String(c.props.get('Name'));
-        if (!keys.has(name)) keys.set(name, []);
-        keys.get(name).push({ t, cf: c.props.get('CFrame') || IDENTITY });
+        const w = c.props.get('Weight');
+        if (!(typeof w === 'number' && w <= 0)) {
+          if (!keys.has(name)) keys.set(name, []);
+          keys.get(name).push({ t, cf: c.props.get('CFrame') || IDENTITY, style: c.props.get('EasingStyle') | 0, dir: c.props.get('EasingDirection') | 0 });
+        }
         walk(c);
       }
     };
@@ -32,7 +35,24 @@ export function parseSequence(ks) {
   }
   frames.sort((a, b) => a.t - b.t);
   for (const list of keys.values()) list.sort((a, b) => a.t - b.t);
-  return { loop: !!ks.props.get('Loop'), length: frames.length ? frames[frames.length - 1].t : 0, frames, keys };
+  const pr = ks.props.get('Priority');
+  return { loop: !!ks.props.get('Loop'), length: frames.length ? frames[frames.length - 1].t : 0, frames, keys, priority: typeof pr === 'number' ? pr : 1000 };
+}
+
+function bounceOut(x) {
+  if (x < 1 / 2.75) return 7.5625 * x * x;
+  if (x < 2 / 2.75) return 7.5625 * (x -= 1.5 / 2.75) * x + 0.75;
+  if (x < 2.5 / 2.75) return 7.5625 * (x -= 2.25 / 2.75) * x + 0.9375;
+  return 7.5625 * (x -= 2.625 / 2.75) * x + 0.984375;
+}
+
+function ease(style, dir, x) {
+  if (style === 1) return 0;
+  const f = style === 3 ? (v) => v * v * v : style === 4 ? (v) => 1 - bounceOut(1 - v) : style === 2 ? (v) => (v <= 0 || v >= 1 ? v : -Math.pow(2, 10 * (v - 1)) * Math.sin(((v - 1.075) * 2 * Math.PI) / 0.3)) : null;
+  if (!f) return x;
+  if (dir === 0) return f(x);
+  if (dir === 1) return 1 - f(1 - x);
+  return x < 0.5 ? f(x * 2) / 2 : 1 - f((1 - x) * 2) / 2;
 }
 
 function sampleKeys(list, t) {
@@ -44,10 +64,38 @@ function sampleKeys(list, t) {
     if (t <= b.t) {
       const a = list[i - 1];
       const span = b.t - a.t;
-      return span > 0 ? C.lerp(a.cf, b.cf, (t - a.t) / span) : b.cf;
+      if (span <= 0) return b.cf;
+      const k = ease(a.style, a.dir, (t - a.t) / span);
+      return k <= 0 ? a.cf : C.lerp(a.cf, b.cf, k);
     }
   }
   return last.cf;
+}
+
+function accumulate(levels, prio, seq, t, w) {
+  let lv = levels.get(prio);
+  if (!lv) levels.set(prio, (lv = new Map()));
+  for (const [name, list] of seq.keys) {
+    const cf = sampleKeys(list, t);
+    const e = lv.get(name);
+    if (!e) lv.set(name, { cf, acc: w });
+    else {
+      e.acc += w;
+      e.cf = C.lerp(e.cf, cf, w / e.acc);
+    }
+  }
+}
+
+function resolve(levels) {
+  const out = new Map();
+  for (const prio of [...levels.keys()].sort((a, b) => a - b)) {
+    for (const [name, e] of levels.get(prio)) {
+      const k = Math.min(1, e.acc);
+      const base = out.get(name);
+      out.set(name, k >= 1 ? e.cf : C.lerp(base || IDENTITY, e.cf, k));
+    }
+  }
+  return out;
 }
 
 const num = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -99,6 +147,13 @@ export class Animations {
     return an ? an.tracks.find((t) => t.inst === inst) || null : null;
   }
 
+  priorityOf(tr) {
+    const inst = tr.inst;
+    const p = inst && !inst.destroyed ? inst.props.get('Priority') : undefined;
+    if (typeof p === 'number' && (p !== 0 || !tr.seq)) return p;
+    return tr.seq ? tr.seq.priority : 1000;
+  }
+
   static validOp(op) {
     return OPS.has(op);
   }
@@ -119,7 +174,10 @@ export class Animations {
         tr = { key, id, inst, seq: null, t: 0, w: 0, target: 1, fade: 0.1, speed: 1, weight: 1, wait: 0 };
         const load = (n) => this.sequence(id).then((seq) => {
           tr.seq = seq;
-          if (tr.inst && !tr.inst.destroyed) tr.inst.props.set('Length', seq.length);
+          if (tr.inst && !tr.inst.destroyed) {
+            tr.inst.props.set('Length', seq.length);
+            if (!tr.inst.props.get('Priority')) tr.inst.props.set('Priority', seq.priority);
+          }
         }).catch(() => {
           if (n >= 4 || tr.target === 0 || !an.tracks.includes(tr)) {
             tr.failed = true;
@@ -177,7 +235,7 @@ export class Animations {
         this.byHum.delete(hum);
         continue;
       }
-      const blend = new Map();
+      const levels = new Map();
       let pending = false;
       for (const tr of an.tracks) {
         if (tr.seq || tr.failed || tr.target === 0) continue;
@@ -191,11 +249,7 @@ export class Animations {
         }
         if (pending && tr.seq && tr.target === 0 && tr.w > 0) {
           const w = Math.min(1, tr.w * tr.weight);
-          for (const [name, list] of tr.seq.keys) {
-            const cf = sampleKeys(list, tr.t);
-            const base = blend.get(name) || IDENTITY;
-            blend.set(name, w >= 1 ? cf : C.lerp(base, cf, w));
-          }
+          if (w > 0) accumulate(levels, this.priorityOf(tr), tr.seq, tr.t, w);
           continue;
         }
         if (!tr.seq && tr.target > 0) continue;
@@ -235,12 +289,9 @@ export class Animations {
         if (tr.inst && emit) for (const n of reached) if (n !== 'Keyframe' && !tr.inst.destroyed) emit(tr.inst, 'KeyframeReached', n);
         const w = Math.min(1, tr.w * tr.weight);
         if (w <= 0) continue;
-        for (const [name, list] of seq.keys) {
-          const cf = sampleKeys(list, tr.t);
-          const base = blend.get(name) || IDENTITY;
-          blend.set(name, w >= 1 ? cf : C.lerp(base, cf, w));
-        }
+        accumulate(levels, this.priorityOf(tr), seq, tr.t, w);
       }
+      const blend = resolve(levels);
       const used = new Set();
       if (blend.size) {
         for (const d of model.descendants()) {

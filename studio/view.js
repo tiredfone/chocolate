@@ -181,7 +181,7 @@ export class StudioView {
 
   updateCamera(dt) {
     const k = this.keys;
-    const speed = (k.has('shift') ? 80 : 30) * dt;
+    const speed = (k.has('shift') ? 80 : 30) * dt * (this.speedScale || 1);
     const fwd = new THREE.Vector3(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const mv = new THREE.Vector3();
@@ -333,6 +333,14 @@ export class StudioView {
       this.drag = { kind: 'pan' };
       return;
     }
+    if (e.button === 0 && this.app.lua && this.app.lua.pointer('Button1Down', e, this)) {
+      this.drag = { kind: 'plugin', end: (ev) => this.app.lua.pointer('Button1Up', ev, this), move: (ev) => this.app.lua.pointer('Move', ev, this) };
+      return;
+    }
+    if (e.button === 0 && this.app.terrainTools && this.app.terrainTools.active()) {
+      this.drag = this.app.terrainTools.down(e, this);
+      return;
+    }
     const h = this.pickHandle(e);
     if (h) {
       this.drag = this.beginHandle(h, e);
@@ -344,7 +352,7 @@ export class StudioView {
   move(e) {
     const p = this.pointers.get(e.pointerId);
     if (!p) {
-      if (e.pointerType === 'mouse') this.hover(e);
+      if (e.pointerType === 'mouse' && !(this.app.lua && this.app.lua.pointer('Move', e, this))) this.hover(e);
       return;
     }
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
@@ -397,9 +405,22 @@ export class StudioView {
     }
     if (d.end) d.end(e, moved);
     else if ((d.kind === 'tap' || d.kind === 'orbit-or-tap') && !moved) this.app.toolTap(e, this);
+    else if ((d.kind === 'look' || d.kind === 'orbit') && p.button === 2 && !moved && performance.now() - p.t < 600) this.contextMenu(e);
+  }
+
+  contextMenu(e) {
+    const hit = this.pick(e, {});
+    const target = hit.part ? this.selectable(hit.part, e.altKey) : null;
+    if (target && !this.app.selection.has(target)) this.app.select([target]);
+    if (!target && this.app.selection.size) this.app.select([]);
+    this.app.ui.contextMenu(this.app.selectionMenu(target), e.clientX, e.clientY);
   }
 
   hover(e) {
+    if (this.app.terrainTools && this.app.terrainTools.active()) {
+      this.setHover(null);
+      return this.app.terrainTools.hover(e, this);
+    }
     if (this.app.tool.startsWith('surface') || ['paint', 'dropper', 'material', 'lock', 'anchor'].includes(this.app.tool) || this.app.tool === 'drag') {
       const hit = this.pick(e, { locked: this.app.tool === 'lock' });
       this.setHover(hit.part ? (this.app.tool === 'drag' ? this.selectable(hit.part, e.altKey) : hit.part) : null);

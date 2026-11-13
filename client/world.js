@@ -6,15 +6,19 @@ import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
 import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES, rootOf } from '../shared/humanoid.js';
-import { loadAudio, assetId, builtin, loadCoreSources, assetBytes, animationBytes, publicPath, endpointUrl, useContent2018 } from './assets.js';
+import { loadAudio, assetId, builtin, loadCoreSources, assetBytes, animationBytes, publicPath, endpointUrl, useContent2018, unionMeshData } from './assets.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { Animations, animAssetId } from '../shared/animator.js';
+import { DEBUG_LUA, DebugAgent } from '../shared/debugger.js';
+import { terrainOf } from '../shared/terrain.js';
+
+const HUM_STATE = [8, 8, 3, 5, 13, 12, 15, 14];
 
 export const STARTER_SCRIPT = 37801172;
 export const SETTINGS_SCRIPT = 46295863;
 export const TOUCH_CONTROLS_SCRIPT = 153556783;
 
-const SEND_HZ = 20;
+const SEND_HZ = 30;
 
 export class ClientWorld {
   constructor(net, hooks = {}) {
@@ -86,8 +90,21 @@ export class ClientWorld {
     for (const o of dm.observers) if (o.created) o.created(this.camera);
     dm.setParent(this.camera, ws);
     ws.props.set('CurrentCamera', this.camera);
-    this.physics = new Physics(dm, RAPIER, { simulate: false, excluded: (p) => !!liveCharacterOf(p) });
+    this.physics = new Physics(dm, RAPIER, { simulate: false, excluded: (p) => !!liveCharacterOf(p), unionMesh: unionMeshData });
     this.physics.attachWorkspace(ws);
+    const terr = ws.findChildOfClass('Terrain');
+    if (terr) {
+      this.terrain = terrainOf(terr, this.era);
+      if (msg.terrain) {
+        try {
+          this.terrain.decode(msg.terrain);
+        } catch (e) {
+          console.warn('terrain', e);
+        }
+      }
+      this.terrain.takeDirty();
+      this.physics.setTerrain(terr, this.terrain);
+    }
     dm.observe({
       reparented: (inst, old, opts) => this.onReparent(inst, old, opts),
       destroyed: (inst) => {
@@ -126,7 +143,21 @@ export class ClientWorld {
       return model;
     });
     if (pack) this.host.flags = FLAGS_2018;
-    await this.host.init(luaFactory, runtimeSrc, pack && pack.runtime ? [{ source: pack.runtime, name: 'runtime2018' }] : []);
+    const embedded = typeof window !== 'undefined' && window.parent && window.parent !== window;
+    await this.host.init(luaFactory, runtimeSrc, [...(pack && pack.runtime ? [{ source: pack.runtime, name: 'runtime2018' }] : []), ...(embedded ? [{ source: DEBUG_LUA, name: 'debug' }] : [])]);
+    if (embedded) {
+      const post = (o) => {
+        try {
+          window.parent.postMessage(o, location.origin);
+        } catch {}
+      };
+      this.debugger = new DebugAgent(this.host, (info) => post({ chocolateDbg: { side: 'client', pause: info } }));
+      window.addEventListener('message', (e) => {
+        if (e.origin !== location.origin || e.source !== window.parent || !e.data || !e.data.chocolateDbgCmd) return;
+        this.debugger.handle(e.data.chocolateDbgCmd);
+      });
+      post({ chocolateDbg: { side: 'client', ready: true } });
+    }
     if (pack) {
       dm.root.props.set('PlaceId', msg.place | 0);
       this.core.coreScript('LoadingScript', this.robloxGui);
@@ -524,6 +555,15 @@ export class ClientWorld {
     if (held && this.hooks.backpackChanged) this.hooks.backpackChanged();
   }
 
+  applyTerrain(m) {
+    if (!this.terrain || typeof m.d !== 'string') return;
+    try {
+      this.terrain.decode(m.d);
+    } catch (e) {
+      console.warn('terrain', e);
+    }
+  }
+
   applyRep(msg) {
     const dm = this.dm;
     for (const op of msg.o || []) {
@@ -835,12 +875,20 @@ export class ClientWorld {
             dm.emit(own.hum, 'MoveToFinished', true);
           } else move = d;
         } else if (move && Math.hypot(move[0], move[2]) > 1e-3) own.moveTo = null;
-        const r = own.ctrl.update(dt, { move: move || [0, 0, 0], jump: input.jump, face: input.face });
+        let face = input.face;
+        if (this.era === 2018) {
+          const gs = this.gameSettings();
+          face = null;
+          if (gs && (gs.props.get('RotationType') | 0) === 1) {
+            const cf = this.camera && this.camera.props.get('CFrame');
+            if (cf && Math.hypot(cf[5], cf[11]) > 1e-3) face = [-cf[5], 0, -cf[11]];
+          }
+        }
+        const r = own.ctrl.update(dt, { move: move || [0, 0, 0], jump: input.jump, face });
         rec.cf = r.cf;
         rec.vel = r.vel;
         if (this.era === 2018) {
-          const map = [8, 8, 3, 5, 13, 12, 15, 8];
-          own.hum.data = Object.assign(own.hum.data || {}, { state: map[r.state] ?? 8 });
+          own.hum.data = Object.assign(own.hum.data || {}, { state: HUM_STATE[r.state] ?? 8 });
           const md = Math.hypot(move ? move[0] : 0, move ? move[2] : 0) > 1e-3 ? move : [0, 0, 0];
           const prevMD = own.hum.props.get('MoveDirection');
           if (!prevMD || Math.abs(prevMD[0] - md[0]) + Math.abs(prevMD[2] - md[2]) > 1e-3) dm.setProp(own.hum, 'MoveDirection', [md[0], 0, md[2]]);
@@ -851,6 +899,7 @@ export class ClientWorld {
           if (r.state === STATES.jump && prev !== STATES.jump) dm.emit(own.hum, 'Jumping', true);
           if (r.state === STATES.fall) dm.emit(own.hum, 'FreeFalling', true);
           if (r.state === STATES.climb) dm.emit(own.hum, 'Climbing', own.hum.props.get('WalkSpeed'));
+          if (this.era === 2018) dm.emit(own.hum, 'StateChanged', T.e('HumanoidStateType', HUM_STATE[prev] ?? 8), T.e('HumanoidStateType', HUM_STATE[r.state] ?? 8));
         }
         if (r.state === STATES.walk || r.state === STATES.idle) {
           const raw = Math.hypot(r.vel[0], r.vel[2]);
@@ -884,7 +933,8 @@ export class ClientWorld {
       }
       rec.t += dt;
       const speed = Math.hypot(rec.vel[0], rec.vel[2]);
-      const scripted = own && rec === own.rec && rec.model.children.some((c) => c.ClassName === 'LocalScript' && c.props.get('Name') === 'Animate' && this.host.running.has(c.id));
+      const scripted = (own && rec === own.rec && rec.model.children.some((c) => c.ClassName === 'LocalScript' && c.props.get('Name') === 'Animate' && this.host.running.has(c.id)))
+        || (this.era === 2018 && rec.model.children.some((c) => c.props.get('Name') === 'Animate' && (c.ClassName === 'LocalScript' || c.ClassName === 'Script')));
       if (!scripted) animate(rec.model, rec.state, speed, rec.t, holdsTool(rec.model));
       stepMotors(rec.model, dt);
       const poses = rec.rig.pose(rec.cf);
@@ -913,6 +963,50 @@ export class ClientWorld {
     const args = unwireArgs(dm, m.a);
     if (m.t === 're' && r.ClassName === 'RemoteEvent') dm.emit(r, 'OnClientEvent', ...args);
     else if (m.t === 'rfc' && r.ClassName === 'RemoteFunction') dm.emit(r, '__Invoke', m.k | 0, ...args);
+  }
+
+  gameSettings() {
+    if (this._gs && !this._gs.destroyed) return this._gs;
+    const us = this.host && this.host._userSettings;
+    this._gs = us ? us.findChild('GameSettings') : null;
+    return this._gs;
+  }
+
+  bindSettings(renderer) {
+    if (this.era !== 2018 || !this.host) return;
+    const gs = this.host.userSettings().findChild('GameSettings');
+    if (!gs) return;
+    const KEY = 'chocolate-settings-2018';
+    const SAVED = ['ControlMode', 'ComputerCameraMovementMode', 'ComputerMovementMode', 'TouchCameraMovementMode', 'TouchMovementMode', 'MouseSensitivity', 'MouseSensitivityFirstPerson', 'MouseSensitivityThirdPerson', 'MasterVolume', 'SavedQualityLevel', 'CameraYInverted', 'PerformanceStatsVisible', 'GamepadCameraSensitivity'];
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+      for (const k of SAVED) {
+        const v = saved[k];
+        if (v === undefined || !gs.info.all.has(k)) continue;
+        const cur = gs.props.get(k);
+        if (Array.isArray(cur) ? Array.isArray(v) && v.length === cur.length && v.every(Number.isFinite) : typeof v === typeof cur) gs.props.set(k, v);
+      }
+    } catch {}
+    const apply = (k) => {
+      if (k === 'MasterVolume') this.setVolume(Math.max(0, Math.min(1, +gs.props.get('MasterVolume') || 0)));
+      if (k === 'SavedQualityLevel' && renderer && renderer.setQuality) renderer.setQuality(gs.props.get('SavedQualityLevel') | 0);
+    };
+    apply('MasterVolume');
+    apply('SavedQualityLevel');
+    let timer = null;
+    this.dm.observe({
+      changed: (inst, name) => {
+        if (inst !== gs) return;
+        apply(name);
+        if (!SAVED.includes(name) || timer) return;
+        timer = setTimeout(() => {
+          timer = null;
+          const out = {};
+          for (const k of SAVED) if (gs.info.all.has(k)) out[k] = gs.props.get(k);
+          try { localStorage.setItem(KEY, JSON.stringify(out)); } catch {}
+        }, 400);
+      },
+    });
   }
 
   remoteAnim(m) {

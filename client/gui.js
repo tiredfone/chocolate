@@ -301,7 +301,7 @@ export class Gui {
     let [l, t, r, b] = this.world.guiInset || [0, 0, 0, 0];
     const era = contentEra();
     let top18 = 0;
-    if (era === 2018) {
+    if (era === 2018 && !this.world.noTopbar) {
       top18 = t || 36;
       t = 0;
     }
@@ -354,6 +354,40 @@ export class Gui {
     if (hintText && this.hint.textContent !== hintText) this.hint.textContent = hintText;
     this.message.hidden = !msgText;
     if (msgText && this.message.textContent !== msgText) this.message.textContent = msgText;
+  }
+
+  guiObjectsAt(x, y) {
+    const out = [];
+    const seen = new Set();
+    if (!this.elInst) return out;
+    for (const e of document.elementsFromPoint(x, y)) {
+      for (let el = e; el && el !== this.overlay; el = el.parentElement) {
+        const inst = this.elInst.get(el);
+        if (!inst || seen.has(inst) || inst.destroyed || !inst.isA('GuiObject')) continue;
+        const r = el.getBoundingClientRect();
+        if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+        seen.add(inst);
+        out.push(inst);
+      }
+    }
+    return out;
+  }
+
+  guiInput(kind, io, x, y) {
+    const ev = kind === 'b' ? 'InputBegan' : kind === 'e' ? 'InputEnded' : 'InputChanged';
+    const list = this.guiObjectsAt(x, y);
+    if (kind === 'b') this.inputDown = new Set(list);
+    if (kind === 'e' && this.inputDown) {
+      for (const inst of this.inputDown) if (!list.includes(inst)) list.push(inst);
+      this.inputDown = null;
+    }
+    const targets = [];
+    for (const inst of list) {
+      targets.push(inst);
+      if (kind !== 'c' && (inst.props.get('Active') || inst.isA('GuiButton'))) break;
+    }
+    if (kind === 'b') this.inputDown = new Set(targets);
+    for (const inst of targets) if (!inst.destroyed && this.dm.hasListener(inst, ev)) this.dm.emit(inst, ev, io);
   }
 
   nodeFor(inst, parentEl) {
@@ -443,6 +477,8 @@ export class Gui {
         if (inst.id > 0 && inst.isA('GuiButton')) this.opts.send({ t: 'gui', id: inst.id, ev: 'MouseLeave' });
       });
     }
+    if (!this.elInst) this.elInst = new WeakMap();
+    this.elInst.set(node.el, inst);
     this.nodes.set(inst, node);
     return node;
   }
@@ -662,6 +698,7 @@ export class Gui {
         st.overflow = '';
         st.overflowX = on && cw > w + 1 ? 'auto' : 'hidden';
         st.overflowY = on && chh > h + 1 ? 'auto' : 'hidden';
+        node.el.classList.toggle('ch-g-pass', !(on && (cw > w + 1 || chh > h + 1)) && !P.get('Active'));
         node.el.classList.add('ch-g-scroll');
         node.el.classList.toggle('ch-g-nobar', P.has('ScrollBarThickness') && (P.get('ScrollBarThickness') | 0) <= 0);
       } else st.overflow = P.get('ClipsDescendants') ? 'hidden' : 'visible';
@@ -671,7 +708,8 @@ export class Gui {
       node.el.dataset.style = '';
       if (c.ClassName === 'Frame' && style > 0) node.el.dataset.style = 'frame' + style;
       else if (c.isA('GuiButton') && style > 0) node.el.dataset.style = 'button' + style;
-      st.background = node.el.dataset.style ? '' : rgba(bc, bt);
+      const shade = c.isA('GuiButton') && P.get('AutoButtonColor') && !node.el.dataset.style ? (node.pressed ? 0.7 : node.hover ? 0.85 : 1) : 1;
+      st.background = node.el.dataset.style ? '' : rgba(shade < 1 && Array.isArray(bc) ? bc.map((x) => x * shade) : bc, bt);
       const bs = P.get('BorderSizePixel');
       st.boxShadow = bs > 0 && bt < 1 && !node.el.dataset.style ? `0 0 0 ${bs}px ${rgba(P.get('BorderColor3'), bt)}` : 'none';
       if (c.isA('GuiButton')) node.el.classList.toggle('auto', !!P.get('AutoButtonColor'));
@@ -875,7 +913,12 @@ export class Gui {
       const rec = model;
       const cf = head.props.get('CFrame');
       const d = Math.hypot(cf[0] - camPos.x, cf[1] - camPos.y, cf[2] - camPos.z);
-      if (d > 60) continue;
+      const e18 = this.world.era === 2018;
+      if (e18) {
+        if (hum.info.all.has('DisplayDistanceType') && (hum.props.get('DisplayDistanceType') | 0) === 2) continue;
+        const nd = hum.info.all.has('NameDisplayDistance') ? +hum.props.get('NameDisplayDistance') : 100;
+        if (d > (Number.isFinite(nd) ? nd : 100)) continue;
+      } else if (d > 60) continue;
       const p = this.project([cf[0], cf[1] + 2.2, cf[2]]);
       if (!p) continue;
       if (!this.tagSight) this.tagSight = new Map();
@@ -890,7 +933,7 @@ export class Gui {
       seen.add(rec);
       let t = this.tagEls.get(rec);
       if (!t) {
-        const box = el('div', 'ch-tag', this.tags);
+        const box = el('div', e18 ? 'ch-tag ch-tag18' : 'ch-tag', this.tags);
         const n = el('div', 'ch-tag-name', box);
         const bar = el('div', 'ch-tag-bar', box);
         const fill = el('div', 'ch-tag-fill', bar);
@@ -911,7 +954,12 @@ export class Gui {
         if (v) color = `rgb(${Math.round(v[0] * 255)},${Math.round(v[1] * 255)},${Math.round(v[2] * 255)})`;
       }
       const key = name + '|' + color;
-      if (t.key !== key) {
+      if (t.key !== key && e18) {
+        t.key = key;
+        t.n.style.fontFamily = fontCss(4).family;
+        t.n.style.color = color;
+        t.n.textContent = name;
+      } else if (t.key !== key) {
         t.key = key;
         loadFont('ArialBold-18pt').then((font) => {
           if (t.key !== key) return;
@@ -926,9 +974,10 @@ export class Gui {
           t.n.replaceChildren(c);
         });
       }
-      const sc = Math.max(0.6, Math.min(1, 40 / Math.max(1, d)));
+      const sc = e18 ? Math.max(0.55, Math.min(1, 30 / Math.max(1, d))) : Math.max(0.6, Math.min(1, 40 / Math.max(1, d)));
       const h = hum.props.get('Health'), mh = hum.props.get('MaxHealth');
-      t.bar.hidden = !(mh > 0);
+      const hdt = e18 && hum.info.all.has('HealthDisplayType') ? hum.props.get('HealthDisplayType') | 0 : -1;
+      t.bar.hidden = !(mh > 0) || (e18 && (hdt === 2 || (hdt !== 1 && h >= mh)));
       t.fill.style.width = (mh > 0 ? Math.max(0, Math.min(100, (h / mh) * 100)) : 0) + '%';
       t.box.style.transformOrigin = '0 0';
       t.box.style.transform = `translate(${p[0]}px, ${p[1]}px) scale(${sc}) translate(-50%, -100%)`;

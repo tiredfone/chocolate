@@ -40,10 +40,10 @@ function jobId() {
   return `${Date.now().toString(36)}${(nextJob++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function startInstance(placeId, kind, privateId, max, allowGear, era = 2012) {
+function startInstance(placeId, kind, privateId, max, allowGear, era = 2012, extra = {}) {
   const id = jobId();
-  const worker = new Worker(path.join(HERE, 'worker.js'), { workerData: { placeId, jobId: id, kind, privateId, allowGear, era }, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
-  const p = { id, placeId, kind, privateId, max, era, worker, members: new Map(), ready: false, dead: false, idleTimer: null, failed: null, started: Date.now() };
+  const worker = new Worker(path.join(HERE, 'worker.js'), { workerData: { placeId, jobId: id, kind, privateId, allowGear, era, placeData: extra.placeData || null, debug: extra.debug || null }, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
+  const p = { id, placeId, kind, privateId, max, era, worker, members: new Map(), ready: false, dead: false, idleTimer: null, failed: null, started: Date.now(), allowed: extra.allowed || null };
   places.set(id, p);
   const tag = `[place ${placeId} ${kind === 'public' ? id : kind + ' ' + privateId}]`;
   p.tag = tag;
@@ -59,8 +59,12 @@ function startInstance(placeId, kind, privateId, max, allowGear, era = 2012) {
         } catch {}
         s.ws.close(4000, 'kicked');
       }
-    } else if (m.t === 'log') log(m.line);
-    else if (m.t === 'ready') {
+    } else if (m.t === 'log') {
+      log(m.line);
+      if (p.debugSend && /\[(error|warn|print)\]/.test(m.line)) p.debugSend({ t: 'dbg', out: String(m.line).replace(/^\[place [^\]]+\] /, '').slice(0, 2000) });
+    } else if (m.t === 'dbg') {
+      if (p.debugSend) p.debugSend({ t: 'dbg', side: 'server', pause: m.data });
+    } else if (m.t === 'ready') {
       p.ready = true;
       log(`${tag} ready`);
     } else if (m.t === 'failed') {
@@ -132,12 +136,54 @@ function chooseInstance(info) {
   const live = [...places.values()].filter((x) => !x.dead && !x.failed && x.placeId === placeId && x.kind === 'public' && x.era === era);
   const job = /^job:([a-z0-9]+)$/.exec(key);
   if (job) {
+    const test = places.get(job[1]);
+    if (test && test.kind === 'test' && !test.dead && !test.failed && test.placeId === placeId) {
+      if (!test.allowed || !test.allowed.has(info.userId | 0)) return { denied: true };
+      return test.members.size >= test.max ? { full: true } : { p: test };
+    }
     const want = live.find((x) => x.id === job[1]);
     if (want && want.members.size < want.max) return { p: want };
   }
   const open = live.filter((x) => x.members.size < x.max).sort((a, b) => b.members.size - a.members.size || a.started - b.started);
   if (open.length) return { p: open[0] };
   return { p: startInstance(placeId, 'public', 0, max, allowGear, era) };
+}
+
+function debugInit(msg) {
+  if (!msg || typeof msg !== 'object') return null;
+  const bps = msg.bps && typeof msg.bps === 'object' ? msg.bps : null;
+  const watches = Array.isArray(msg.watches) ? msg.watches.slice(0, 50).map((w) => String(w).slice(0, 200)) : [];
+  return bps || watches.length ? { bps: bps || {}, watches } : null;
+}
+
+function soloMessage(s, str) {
+  let msg;
+  try {
+    msg = JSON.parse(str);
+  } catch {
+    return;
+  }
+  if (!msg) return;
+  if (msg.t === 'dbg') {
+    if (s.solo.test && !s.solo.test.dead) s.solo.test.worker.postMessage({ t: 'dbg', data: msg });
+    return;
+  }
+  if (msg.t !== 'playsolo') return;
+  const send = (o) => {
+    if (s.ws.readyState === 1) s.ws.send(JSON.stringify(o));
+  };
+  if (s.solo.test) {
+    shutdown(s.solo.test);
+    s.solo.test = null;
+  }
+  if (!msg.on) return send({ t: 'playsolo', on: false });
+  const xml = typeof msg.xml === 'string' ? msg.xml : '';
+  if (!/^\s*<roblox[\s>]/.test(xml) || xml.length > MAX_STUDIO_MSG) return send({ t: 'playsolo', on: false, error: 'The place could not be sent to the game server' });
+  const p = startInstance(s.solo.placeId, 'test', 0, 1, true, s.solo.era, { placeData: xml, allowed: new Set([s.solo.userId]), debug: debugInit(msg) });
+  scheduleIdle(p);
+  s.solo.test = p;
+  p.debugSend = send;
+  send({ t: 'playsolo', on: true, job: p.id });
 }
 
 function shutdown(p, reason) {
@@ -173,7 +219,7 @@ function scheduleIdle(p) {
 function statusJson() {
   return {
     ok: true,
-    places: [...places.values()].filter((p) => !p.dead).map((p) => ({
+    places: [...places.values()].filter((p) => !p.dead && p.kind !== 'test').map((p) => ({
       id: p.placeId,
       job: p.id,
       kind: p.kind,
@@ -215,7 +261,7 @@ async function sendPresence() {
     await fetch(PRESENCE, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix', 'Content-Type': 'application/json', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.12-preview', 'Content-Type': 'application/json', 'X-Chocolate-Key': KEY },
       body: JSON.stringify({ users }),
     });
   } catch {
@@ -231,7 +277,7 @@ async function redeem(ticket) {
     const r = await fetch(REDEEM, {
       method: 'POST',
       signal: ctl.signal,
-      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.11.3-hotfix', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
+      headers: { 'User-Agent': config.userAgent || 'Chocolate/26.12-preview', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Chocolate-Key': KEY },
       body: new URLSearchParams({ ticket }).toString(),
     });
     if (!r.ok) return null;
@@ -344,23 +390,28 @@ wss.on('connection', async (ws, req, url) => {
   const early = [];
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
-    if (!s.studio && data.length > MAX_MSG) return;
+    if (!s.studio && !s.solo && data.length > MAX_MSG) return;
     const now = Date.now();
     if (now - s.window > 1000) {
       s.window = now;
       s.count = 0;
     }
-    if (++s.count > (s.studio ? MAX_STUDIO_RATE : MAX_RATE)) return;
+    if (++s.count > (s.studio || s.solo ? MAX_STUDIO_RATE : MAX_RATE)) return;
     const str = data.toString();
     if (!s.joined) {
       if (early.length < 50 && str.length <= MAX_MSG) early.push(str);
       return;
     }
     if (s.studio) s.studio.message(cid, str);
+    else if (s.solo) soloMessage(s, str);
     else s.place.worker.postMessage({ t: 'msg', cid, data: str });
   });
   ws.on('close', () => {
     sockets.delete(cid);
+    if (s.solo) {
+      if (s.solo.test) shutdown(s.solo.test);
+      return;
+    }
     if (s.studio) {
       const st = s.studio;
       st.leave(cid);
@@ -392,11 +443,35 @@ wss.on('connection', async (ws, req, url) => {
     ws.close(4003, 'bad ticket');
     return;
   }
+  if (info.mode === 'studio' && info.teamCreate === false) {
+    s.solo = { placeId: info.placeId | 0, era: info.clientVersion === 2018 ? 2018 : 2012, userId: info.userId | 0, test: null };
+    s.joined = true;
+    ws.send(JSON.stringify({ t: 'solo' }));
+    for (const str of early.splice(0)) soloMessage(s, str);
+    return;
+  }
   if (info.mode === 'studio') {
     const placeId = info.placeId | 0;
     let st = studios.get(placeId);
     if (!st) {
-      st = new TeamSession(placeId, log);
+      st = new TeamSession(placeId, log, info.clientVersion === 2018 ? 2018 : 2012, {
+        startTest: (session, xml) => {
+          const p = startInstance(placeId, 'test', 0, 50, true, session.era, { placeData: xml, allowed: session.editors });
+          scheduleIdle(p);
+          return p;
+        },
+        startSolo: (session, xml, userId, send, msg) => {
+          const p = startInstance(placeId, 'test', 0, 1, true, session.era, { placeData: xml, allowed: new Set([userId | 0]), debug: debugInit(msg) });
+          scheduleIdle(p);
+          p.debugSend = send;
+          return p;
+        },
+        debug: (p, msg) => {
+          if (p && !p.dead) p.worker.postMessage({ t: 'dbg', data: msg });
+        },
+        stopTest: (p, why) => shutdown(p, why),
+        testAlive: (p) => !p.dead && !p.failed,
+      });
       studios.set(placeId, st);
     }
     s.studio = st;
@@ -414,6 +489,11 @@ wss.on('connection', async (ws, req, url) => {
     return;
   }
   const pick = chooseInstance(info);
+  if (pick.denied) {
+    ws.send(JSON.stringify({ t: 'kick', m: 'This Team Test is only for the place\'s editors.' }));
+    ws.close(4003, 'denied');
+    return;
+  }
   if (pick.full) {
     ws.send(JSON.stringify({ t: 'kick', m: 'This server is full. Try again in a moment.' }));
     ws.close(4004, 'full');

@@ -6,25 +6,32 @@ const SMALL = '16x16/images/Studio 2.0 icons/16x16/';
 
 const MATERIALS = { Plastic: 256, Wood: 512, WoodPlanks: 528, Slate: 800, Concrete: 816, Metal: 1088, CorrodedMetal: 1040, DiamondPlate: 1056, Foil: 1072, Grass: 1280, Ice: 1536, Brick: 848, Sand: 1296, Fabric: 1312, Granite: 832, Marble: 784, Pebble: 864, Cobblestone: 880, SmoothPlastic: 272, Neon: 288 };
 
+const FFLAGS_ON = new Set(['StudioEnableHomeTerrainButtons']);
+
 const ACTIONS = {
-  fileNewAction: [null, 'New', SMALL + 'new_document_16_h.png'],
+  fileNewAction: ['new', 'New', SMALL + 'new_document_16_h.png'],
+  Generate: ['terrain:generate', 'Generate'], Add: ['terrain:add', 'Add'], Subtract: ['terrain:subtract', 'Subtract'], Paint: ['terrain:paint', 'Paint'],
+  Grow: ['terrain:grow', 'Grow'], Erode: ['terrain:erode', 'Erode'], Smooth: ['terrain:smooth', 'Smooth'], Regions: ['terrain:flatten', 'Flatten'],
+  'Generate.Smooth Terrain.Terrain.': ['terrain:generate', 'Generate'], 'Add.Smooth Terrain.Terrain.': ['terrain:add', 'Add'], 'Paint.Smooth Terrain.Terrain.': ['terrain:paint', 'Paint'],
+  'Grow.Smooth Terrain.Terrain.': ['terrain:grow', 'Grow'], 'Erode.Smooth Terrain.Terrain.': ['terrain:erode', 'Erode'], 'Smooth.Smooth Terrain.Terrain.': ['terrain:smooth', 'Smooth'],
+
   fileOpenAction: ['open', 'Open from File...', SMALL + 'open_document_16_h.png'],
-  filePublishedProjectsAction: [null, 'Open from Roblox...'],
+  filePublishedProjectsAction: ['insert:model', 'Open from Roblox...'],
   fileCloseAction: ['close', 'Close Place'],
   fileSaveAction: ['publish', 'Save', SMALL + 'save_16_h.png'],
   fileSaveAsAction: ['saveas', 'Save to File As...', SMALL + 'save_green_16_h.png'],
   publishToRobloxAction: ['publish', 'Publish to Roblox', SMALL + 'publish.png'],
-  publishToRobloxAsAction: [null, 'Publish to Roblox As...', SMALL + 'publish_as.png'],
+  publishToRobloxAsAction: ['publish', 'Publish to Roblox As...', SMALL + 'publish_as.png'],
   publishSelectionToRobloxAction: ['savemodel', 'Save Selection to File...', SMALL + 'publish_selection.png'],
   downloadPlaceCopyAction: ['saveas', 'Download a Copy', SMALL + 'download_copy.png'],
-  fileOpenRecentSavesAction: [null, 'Open Auto-Saves'],
-  publishGameAction: [null, 'Publish as Game...'],
-  exportPlaceAction: [null, 'Export Place...'],
-  shortcutHelpAction: [null, 'Shortcuts', SMALL + 'help_shortcuts.png'],
-  fastLogDumpAction: [null, 'Dump Logs'],
+  fileOpenRecentSavesAction: ['autosaves', 'Open Auto-Saves'],
+  publishGameAction: ['gamesettings', 'Publish as Game...'],
+  exportPlaceAction: ['saveas', 'Export Place...'],
+  shortcutHelpAction: ['shortcuts', 'Shortcuts', SMALL + 'help_shortcuts.png'],
+  fastLogDumpAction: ['logdump', 'Dump Logs'],
   aboutRobloxAction: ['about', 'About Roblox Studio'],
-  onlineHelpAction: [null, 'Online Help', SMALL + 'help_online.png'],
-  settingsAction: [null, 'Studio Settings...', SMALL + 'settings.png'],
+  onlineHelpAction: ['objectbrowser', 'Online Help', SMALL + 'help_online.png'],
+  settingsAction: ['studiosettings', 'Studio Settings...', SMALL + 'settings.png'],
   undoAction: ['undo', 'Undo', SMALL + 'undo_16_h.png'],
   redoAction: ['redo', 'Redo', SMALL + 'redo_16_h.png'],
   pasteAction: ['paste', 'Paste'],
@@ -35,11 +42,11 @@ const ACTIONS = {
   advTranslateAction: ['tool:move', 'Move'],
   resizeAction: ['tool:size', 'Scale'],
   advRotateAction: ['tool:rotate', 'Rotate'],
-  Transform: [null, 'Transform'],
-  toggleCollisionCheckAction: [null, 'Collisions'],
+  Transform: ['tool:move', 'Transform'],
+  toggleCollisionCheckAction: ['collisions', 'Collisions'],
   viewToolboxAction: ['view:objects', 'Toolbox', ICON_DIR + 'View/Toolbox.png'],
-  materialActionAsTool: [null, 'Material Action as Tool'],
-  colorFillActionAsTool: [null, 'Color Action as Tool'],
+  materialActionAsTool: ['tool:material', 'Material Action as Tool'],
+  colorFillActionAsTool: ['tool:paint', 'Color Action as Tool'],
   groupSelectionAction: ['group', 'Group', ICON_DIR + 'Home/Group.png'],
   ungroupSelectionAction: ['ungroup', 'Ungroup', ICON_DIR + 'Home/Ungroup.png'],
   anchorAction: ['anchor', 'Anchor'],
@@ -48,24 +55,24 @@ const ACTIONS = {
   simulationPlayAction: ['playsolo', 'Play', ICON_DIR + 'Test/Play-Solo.png'],
   simulationPlayFromCameraAction: ['playsolo', 'Play Here', ICON_DIR + 'Test/Play-Solo-Camera.png'],
   simulationRunAction: ['run', 'Run', ICON_DIR + 'Test/Run.png'],
-  simulationResetAction: [null, 'Stop', ICON_DIR + 'Test/Stop.png'],
-  simulationStopAction: [null, 'Pause', ICON_DIR + 'Test/Pause.png'],
+  simulationResetAction: ['stop', 'Stop', ICON_DIR + 'Test/Stop.png'],
+  simulationStopAction: ['dbg:pause', 'Pause', ICON_DIR + 'Test/Pause.png'],
   gameSettingsAction: ['gamesettings', 'Game Settings'],
-  RobloxUIEditor: [null, 'UI Editor'],
+  RobloxUIEditor: ['uieditor', 'UI Editor'],
   glueSurfaceAction: ['tool:surface1', 'Glue', SMALL + 'glue-surface.png'],
   smoothSurfaceAction: ['tool:surface0', 'Smooth', SMALL + 'smooth-surface.png'],
-  smoothNoOutlinesAction: [null, 'Smooth, No Outline', SMALL + 'smooth-no-outlines-surface.png'],
+  smoothNoOutlinesAction: ['tool:surface10', 'Smooth, No Outline', SMALL + 'smooth-no-outlines-surface.png'],
   studsAction: ['tool:surface3', 'Studs', SMALL + 'connectors-surface.png'],
   inletAction: ['tool:surface4', 'Inlets', SMALL + 'indents-surface.png'],
   universalsAction: ['tool:surface5', 'Universal', SMALL + 'universals-surface.png'],
   weldSurfaceAction: ['tool:surface2', 'Add Weld', SMALL + 'weld-surface.png'],
   hingeAction: ['tool:surface6', 'Hinge', SMALL + 'hinge-surface.png'],
   motorRightAction: ['tool:surface7', 'Motor', SMALL + 'motor-surface.png'],
-  unionSelectionAction: [null, 'Union', ICON_DIR + 'Home/Join.png'],
-  negateSelectionAction: [null, 'Negate', ICON_DIR + 'Home/Negate.png'],
-  separateSelectionAction: [null, 'Separate', ICON_DIR + 'Home/Separate.png'],
+  unionSelectionAction: ['union', 'Union', ICON_DIR + 'Home/Join.png'],
+  negateSelectionAction: ['negate', 'Negate', ICON_DIR + 'Home/Negate.png'],
+  separateSelectionAction: ['separate', 'Separate', ICON_DIR + 'Home/Separate.png'],
   createAttachmentAction: ['insert:cls:Attachment', 'Attachment'],
-  drawConstraintDetailsVerb: [null, 'Show Details'],
+  drawConstraintDetailsVerb: ['constraintdetails', 'Show Details'],
   startLocationAction: ['insert:cls:SpawnLocation', 'Spawn', ICON_DIR + 'Insert/Spawn-Location.png'],
   actionInsertAdvancedObject: ['insert:object', 'Advanced Objects', ICON_DIR + 'Insert/Advanced-Objects.png'],
   insertModelAction: ['insert:model', 'Model', ICON_DIR + 'Insert/Model.png'],
@@ -73,57 +80,57 @@ const ACTIONS = {
   ScriptLargeAction: ['insert:cls:Script', 'Script', ICON_DIR + 'Insert/Script.png'],
   LocalScriptLargeAction: ['insert:cls:LocalScript', 'LocalScript', ICON_DIR + 'Insert/LocalScript.png'],
   ModuleScriptLargeAction: ['insert:cls:ModuleScript', 'ModuleScript', ICON_DIR + 'Insert/ModuleScript.png'],
-  executeScriptAction: [null, 'Run Script', ICON_DIR + 'Test/Run-Script.png'],
-  simulationDiabolicalModeAction: [null, 'Network Simulator', ICON_DIR + 'Test/Diabolical-Mode.png'],
-  startServerAndPlayersAction: [null, 'Start', ICON_DIR + 'Test/Start-Server.png'],
-  cleanupServersAndPlayersAction: [null, 'Cleanup', ICON_DIR + 'Test/Exit-Team-Test.png'],
-  startTeamTestAction: [null, 'Team Test', ICON_DIR + 'Test/Team-Test.png'],
-  cleanupTeamTestAction: [null, 'Exit Game', ICON_DIR + 'Test/Exit-Team-Test.png'],
-  deviceEmulatorToggleAction: [null, 'Emulator', ICON_DIR + 'Test/emulator_32.png'],
-  audioToggleAction: [null, 'Mute', ICON_DIR + 'Test/Audio-Enabled.png'],
-  analyzePhysicsToggleAction: [null, 'Physics', ICON_DIR + 'Test/Physics-Test.png'],
+  executeScriptAction: ['runscript', 'Run Script', ICON_DIR + 'Test/Run-Script.png'],
+  simulationDiabolicalModeAction: ['netsim', 'Network Simulator', ICON_DIR + 'Test/Diabolical-Mode.png'],
+  startServerAndPlayersAction: ['playsolo', 'Start', ICON_DIR + 'Test/Start-Server.png'],
+  cleanupServersAndPlayersAction: ['stop', 'Cleanup', ICON_DIR + 'Test/Exit-Team-Test.png'],
+  startTeamTestAction: ['teamtest', 'Team Test', ICON_DIR + 'Test/Team-Test.png'],
+  cleanupTeamTestAction: ['teamtest:stop', 'Exit Game', ICON_DIR + 'Test/Exit-Team-Test.png'],
+  deviceEmulatorToggleAction: ['emulator', 'Emulator', ICON_DIR + 'Test/emulator_32.png'],
+  audioToggleAction: ['mute', 'Mute', ICON_DIR + 'Test/Audio-Enabled.png'],
+  analyzePhysicsToggleAction: ['stats:physics', 'Physics', ICON_DIR + 'Test/Physics-Test.png'],
   viewObjectExplorerAction: ['view:explorer', 'Explorer', ICON_DIR + 'View/Explorer.png'],
   viewPropertiesAction: ['view:properties', 'Properties', ICON_DIR + 'View/Properties.png'],
-  actionStartPage: [null, 'Start Page', ICON_DIR + 'View/Start-Page.png'],
-  gameExplorerAction: [null, 'Game Explorer', SMALL + 'ge_placefolder.png'],
-  viewContextualHelpAction: [null, 'Context Help', ICON_DIR + 'View/Help-Wiki.png'],
-  viewTutorialsAction: [null, 'Tutorials', ICON_DIR + 'View/Tutorials.png'],
+  actionStartPage: ['startpage', 'Start Page', ICON_DIR + 'View/Start-Page.png'],
+  gameExplorerAction: ['gameexplorer', 'Game Explorer', SMALL + 'ge_placefolder.png'],
+  viewContextualHelpAction: ['objectbrowser', 'Context Help', ICON_DIR + 'View/Help-Wiki.png'],
+  viewTutorialsAction: ['shortcuts', 'Tutorials', ICON_DIR + 'View/Tutorials.png'],
   objectBrowserAction: ['objectbrowser', 'Object Browser', ICON_DIR + 'View/Object-Browser.png'],
   viewOutputWindowAction: ['view:output', 'Output', ICON_DIR + 'View/Output.png'],
-  viewScriptAnalysisAction: [null, 'Script Analysis', SMALL + 'bug_error.png'],
+  viewScriptAnalysisAction: ['analysis', 'Script Analysis', SMALL + 'bug_error.png'],
   viewCommandBarAction: ['view:commandbar', 'Command Bar', SMALL + 'console_16.png'],
-  breakpointsDockWidgetAction: [null, 'Breakpoints', ICON_DIR + 'View/Breakpoint.png'],
-  callStackDockWidgetAction: [null, 'Call Stack', ICON_DIR + 'View/Call-Stack.png'],
-  watchDockWidgetAction: [null, 'Watch', SMALL + 'watch.png'],
-  viewDiagnosticsAction: [null, 'Diagnostics', ICON_DIR + 'View/Diagnostics.png'],
-  viewTaskSchedulerAction: [null, 'Task Scheduler', ICON_DIR + 'View/Task-Scheduler.png'],
-  viewScriptPerformanceAction: [null, 'Script Performance', ICON_DIR + 'View/Script-Performance.png'],
-  viewFindResultsWindowAction: [null, 'Find Results', ICON_DIR + 'View/Find-Results.png'],
-  viewTeamCreateAction: [null, 'Team Create', ICON_DIR + 'View/TeamCreate.png'],
-  viewScriptRecoveryAction: [null, 'Script Recovery', SMALL + 'report.png'],
-  toggleAxisWidgetAction: [null, 'Display Axis', ICON_DIR + 'View/Display-Axis.png'],
+  breakpointsDockWidgetAction: ['view:breakpoints', 'Breakpoints', ICON_DIR + 'View/Breakpoint.png'],
+  callStackDockWidgetAction: ['view:callstack', 'Call Stack', ICON_DIR + 'View/Call-Stack.png'],
+  watchDockWidgetAction: ['view:watch', 'Watch', SMALL + 'watch.png'],
+  viewDiagnosticsAction: ['stats:summary', 'Diagnostics', ICON_DIR + 'View/Diagnostics.png'],
+  viewTaskSchedulerAction: ['stats:render', 'Task Scheduler', ICON_DIR + 'View/Task-Scheduler.png'],
+  viewScriptPerformanceAction: ['stats:summary', 'Script Performance', ICON_DIR + 'View/Script-Performance.png'],
+  viewFindResultsWindowAction: ['findall', 'Find Results', ICON_DIR + 'View/Find-Results.png'],
+  viewTeamCreateAction: ['view:team', 'Team Create', ICON_DIR + 'View/TeamCreate.png'],
+  viewScriptRecoveryAction: ['autosaves', 'Script Recovery', SMALL + 'report.png'],
+  toggleAxisWidgetAction: ['axis', 'Display Axis', ICON_DIR + 'View/Display-Axis.png'],
   actionFullScreen: ['fullscreen', 'Full Screen', ICON_DIR + 'View/Fullscreen.png'],
   screenShotAction: ['screenshot', 'Screen Shot', ICON_DIR + 'View/Screen-Capture.png'],
-  toggleVideoRecordAction: [null, 'Video Record', ICON_DIR + 'View/Record-Video.png'],
+  toggleVideoRecordAction: ['record', 'Video Record', ICON_DIR + 'View/Record-Video.png'],
   gridSizeToTwoAction: ['grid:2', '2 Studs', SMALL + 'grid.png'],
   gridSizeToFourAction: ['grid:4', '4 Studs', SMALL + 'grid.png'],
   gridSizeToSixteenAction: ['grid:16', '16 Studs', SMALL + 'grid_sixteen.png'],
-  toggle3DGridAction: [null, 'Show Grid', ICON_DIR + 'View/Show-Grid.png'],
-  testStatsAction: [null, 'Stats'], testRenderStatsAction: [null, 'Render'], testPhysicsStatsAction: [null, 'Physics'],
-  testNetworkStatsAction: [null, 'Network'], testSummaryStatsAction: [null, 'Summary'], testClearStatsAction: [null, 'Clear'],
-  managePluginsAction: [null, 'Manage Plugins', 'RibbonBar/images/Studio 2.0 icons/32x32/managePlugins.png'],
-  openPluginsFolderAction: [null, 'Plugins Folder', 'RibbonBar/images/Studio 2.0 icons/32x32/open_plugins.png'],
-  findAction: [null, 'Find', SMALL + 'find.png'], findNextAction: [null, 'Find Next', SMALL + 'find_next.png'],
-  findPreviousAction: [null, 'Find Previous', SMALL + 'find_previous.png'], findInScriptsAction: [null, 'Find All'], goToLineAction: [null, 'Go To Line', SMALL + 'goToLine.png'],
-  replaceAction: [null, 'Replace', ICON_DIR + 'Home/Replace.png'],
+  toggle3DGridAction: ['showgrid', 'Show Grid', ICON_DIR + 'View/Show-Grid.png'],
+  testStatsAction: ['stats:summary', 'Stats'], testRenderStatsAction: ['stats:render', 'Render'], testPhysicsStatsAction: ['stats:physics', 'Physics'],
+  testNetworkStatsAction: ['stats:network', 'Network'], testSummaryStatsAction: ['stats:summary', 'Summary'], testClearStatsAction: ['stats:clear', 'Clear'],
+  managePluginsAction: ['plugins', 'Manage Plugins', 'RibbonBar/images/Studio 2.0 icons/32x32/managePlugins.png'],
+  openPluginsFolderAction: ['plugins', 'Plugins Folder', 'RibbonBar/images/Studio 2.0 icons/32x32/open_plugins.png'],
+  findAction: ['find', 'Find', SMALL + 'find.png'], findNextAction: ['findnext', 'Find Next', SMALL + 'find_next.png'],
+  findPreviousAction: ['findprev', 'Find Previous', SMALL + 'find_previous.png'], findInScriptsAction: ['findall', 'Find All'], goToLineAction: ['gotoline', 'Go To Line', SMALL + 'goToLine.png'],
+  replaceAction: ['replace', 'Replace', ICON_DIR + 'Home/Replace.png'],
   selectAllAction: ['selectall', 'Select All', SMALL + 'select_all.png'], selectChildrenAction: ['selectchildren', 'Select Children', SMALL + 'select_children.png'],
-  stepIntoAction: [null, 'Step Into', ICON_DIR + 'Test/Step-In.png'], stepOverAction: [null, 'Step Over', ICON_DIR + 'Test/Step-Over.png'],
-  stepOutAction: [null, 'Step Out', ICON_DIR + 'Test/Step-Out.png'], addWatchAction: [null, 'Add Watch', ICON_DIR + 'Test/Add-Watch.png'],
-  neverBreakOnScriptErrorsAction: [null, 'Never'], breakOnAllScriptErrorsAction: [null, 'On All Exceptions'], breakOnUnhandledScriptErrorsAction: [null, 'On Unhandled Exceptions'],
-  goToScriptErrorAction: [null, 'Go To Error', SMALL + 'bug_go_to.png'], reloadScriptAction: [null, 'Reload Script', SMALL + 'reset.png'],
-  commentSelectionAction: [null, 'Comment', SMALL + 'text_comment.png'], uncommentSelectionAction: [null, 'Uncomment', SMALL + 'text_uncomment.png'],
-  toggleCommentAction: [null, 'Toggle Comment', SMALL + 'text_toggle_comment.png'], expandAllFoldsAction: [null, 'Expand All', SMALL + 'expand_all.png'],
-  collapseAllFoldsAction: [null, 'Collapse All', SMALL + 'collapse_all.png'],
+  stepIntoAction: ['dbg:into', 'Step Into', ICON_DIR + 'Test/Step-In.png'], stepOverAction: ['dbg:over', 'Step Over', ICON_DIR + 'Test/Step-Over.png'],
+  stepOutAction: ['dbg:out', 'Step Out', ICON_DIR + 'Test/Step-Out.png'], addWatchAction: ['addwatch', 'Add Watch', ICON_DIR + 'Test/Add-Watch.png'],
+  neverBreakOnScriptErrorsAction: ['break:never', 'Never'], breakOnAllScriptErrorsAction: ['break:all', 'On All Exceptions'], breakOnUnhandledScriptErrorsAction: ['break:unhandled', 'On Unhandled Exceptions'],
+  goToScriptErrorAction: ['gotoerror', 'Go To Error', SMALL + 'bug_go_to.png'], reloadScriptAction: ['reloadscript', 'Reload Script', SMALL + 'reset.png'],
+  commentSelectionAction: ['comment', 'Comment', SMALL + 'text_comment.png'], uncommentSelectionAction: ['uncomment', 'Uncomment', SMALL + 'text_uncomment.png'],
+  toggleCommentAction: ['togglecomment', 'Toggle Comment', SMALL + 'text_toggle_comment.png'], expandAllFoldsAction: ['expandfolds', 'Expand All', SMALL + 'expand_all.png'],
+  collapseAllFoldsAction: ['collapsefolds', 'Collapse All', SMALL + 'collapse_all.png'],
 };
 
 const GROUPS = {
@@ -189,13 +196,41 @@ export class UI2018 extends UI {
 
   buildBody() {
     super.buildBody();
-    const cmd = el('div', 'st18-command', this.root);
-    const input = el('input', null, cmd);
-    input.type = 'text';
-    input.placeholder = 'Run a command';
-    input.disabled = true;
-    input.title = 'This Studio does not run scripts';
-    this.commandBar = cmd;
+    this.commandBar.classList.add('st18-command');
+  }
+
+  pluginGroups() {
+    const lua = this.app.lua;
+    if (!lua || !lua.toolbars.length) {
+      const box = el('div', 'st18-group', this.ribbonBody);
+      const items = el('div', 'st18-items', box);
+      const col = el('div', 'st18-col st18-col-big', items);
+      this.bigButton(col, 'Manage Plugins', 'RibbonBar/images/Studio 2.0 icons/32x32/managePlugins.png', 'plugins', 'managePluginsAction', null);
+      el('div', 'st18-caption', box, 'Plugins');
+      return;
+    }
+    for (const tb of lua.toolbars) {
+      if (tb.destroyed) continue;
+      const box = el('div', 'st18-group', this.ribbonBody);
+      const items = el('div', 'st18-items', box);
+      for (const b of tb.children.filter((c) => c.ClassName === 'PluginToolbarButton')) {
+        const col = el('div', 'st18-col st18-col-big', items);
+        const btn = el('div', 'st18-big st18-plugin-btn' + (b.active ? ' active' : '') + (b.props.get('Enabled') === false ? ' disabled' : ''), col);
+        btn.title = b.tooltip || b.text;
+        const i = el('i', null, btn);
+        if (b.icon) i.dataset.icon = b.icon;
+        el('span', null, btn, b.text || b.props.get('Name'));
+        btn.addEventListener('click', () => lua.clickButton(b));
+        if (b.icon) this.app.pluginIcon(b.icon).then((url) => {
+          if (url) i.style.backgroundImage = `url("${url}")`;
+        });
+      }
+      el('div', 'st18-caption', box, tb.props.get('Name'));
+    }
+  }
+
+  refreshPlugins() {
+    if (this.page && /plugin/i.test(this.page)) this.showPage(this.page);
   }
 
   async loadRibbon(qab) {
@@ -262,6 +297,7 @@ export class UI2018 extends UI {
     this.ribbonButtons = this.ribbonButtons.filter((b) => b.persistent);
     this.ribbonBody.replaceChildren();
     for (const g of page.kids) if (g.tag === 'Group') this.group(g);
+    if (/plugin/i.test(name)) this.pluginGroups();
     this.refresh();
     this.app.resized();
   }
@@ -307,7 +343,7 @@ export class UI2018 extends UI {
       if (k.tag === 'addseparator') {
         if (items.length && items[items.length - 1]) items.push(null);
       } else if (k.tag === 'addaction') {
-        if (k.attrs.fflag) continue;
+        if (k.attrs.fflag && !FFLAGS_ON.has(k.attrs.fflag)) continue;
         const [cmd, label] = this.actionDef(k);
         items.push([cmd || 'na:' + k.attrs.name, label]);
       } else if (k.tag === 'submenu') {
@@ -385,7 +421,7 @@ export class UI2018 extends UI {
       }
       if (k.tag === 'groupoptionsmenu') continue;
       if (k.tag === 'addaction') {
-        if (a.fflag) continue;
+        if (a.fflag && !FFLAGS_ON.has(a.fflag)) continue;
         const [cmd, label, iconPath] = this.actionDef(k);
         const large = a.style === 'textundericon' || (+a.width || 0) >= 32;
         if (large) this.bigButton(big(), label, iconPath, cmd, a.name, null);

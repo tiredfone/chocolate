@@ -110,6 +110,10 @@ async function boot() {
     if (world && world.ready) world.remoteAnim(m);
     else pending.push(m);
   });
+  net.on('terrain', (m) => {
+    if (world && world.ready) world.applyTerrain(m);
+    else pending.push(m);
+  });
   net.on('rep', (m) => {
     if (world && world.ready) world.applyRep(m);
     else pending.push(m);
@@ -219,6 +223,11 @@ async function boot() {
         log: (k, msg, where) => {
           const line = where ? `${where}: ${msg}` : msg;
           devConsole.add('client', k, line);
+          if (window.parent !== window) {
+            try {
+              window.parent.postMessage({ chocolateDbg: { side: 'client', out: `[${k}] ${line}`.slice(0, 2000) } }, location.origin);
+            } catch {}
+          }
           if (k === 'error') console.error(line);
           else console.log(line);
         },
@@ -260,8 +269,14 @@ async function boot() {
         camera.luaDriven = true;
       }
       world.input2018 = input2018;
+      world.bindSettings(renderer);
+      window.addEventListener('message', (e) => {
+        if (e.origin !== location.origin || !e.data || e.data.chocolate !== 'mute') return;
+        world.muted = !!e.data.on;
+        world.setVolume(world.muted ? 0 : 1);
+      });
       world.ready = true;
-      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else if (p.t === 're' || p.t === 'rfc' || p.t === 'rfr') world.onRemote(p); else world.applyRep(p);
+      for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else if (p.t === 're' || p.t === 'rfc' || p.t === 'rfr') world.onRemote(p); else if (p.t === 'terrain') world.applyTerrain(p); else world.applyRep(p);
       const animsReady = world.era === 2018 && Array.isArray(m.anims) && m.anims.length
         ? Promise.race([
           world.anims.preload(m.anims, (done, total) => setStatus(`Loading animations (${done}/${total})`)),
@@ -351,7 +366,7 @@ function start(world, renderer, camera, gui, net) {
       jumpQueued = true;
       e.preventDefault();
     }
-    if (k === 'shift') camera.toggleShiftLock();
+    if (k === 'shift' && world.era !== 2018) camera.toggleShiftLock();
     if (k === 'arrowleft') camera.keyYaw = 1;
     if (k === 'arrowright') camera.keyYaw = -1;
     if (k === 'i') camera.stepZoom(1);
@@ -392,20 +407,37 @@ function start(world, renderer, camera, gui, net) {
     ms.ndc = [(ms.x / r.width) * 2 - 1, -(ms.y / r.height) * 2 + 1];
     world.emitMouse('Move');
   });
+  const overGuiTarget = (e) => e.target !== canvas && root.contains(e.target);
   window.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch' || !world.input2018) return;
-    if (document.pointerLockElement === canvas || e.target === canvas) world.input2018.mouseMove(e.movementX || 0, e.movementY || 0, false);
+    const locked = document.pointerLockElement === canvas;
+    if (!locked && overGuiTarget(e)) {
+      const r = canvas.getBoundingClientRect();
+      ms.x = e.clientX - r.left;
+      ms.y = e.clientY - r.top;
+    }
+    const at = locked ? null : [e.clientX, e.clientY];
+    if (locked || e.target === canvas) world.input2018.mouseMove(e.movementX || 0, e.movementY || 0, false, at);
+    else if (overGuiTarget(e)) world.input2018.mouseMove(e.movementX || 0, e.movementY || 0, true, at);
   });
   canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'touch') return;
     world.ensureAudio();
     if (gui.isTyping()) document.activeElement.blur();
-    if (world.input2018) world.input2018.buttonDown(e.button, false);
+    if (world.input2018) world.input2018.buttonDown(e.button, false, document.pointerLockElement === canvas ? null : [e.clientX, e.clientY]);
     if (e.button === 0) world.mouseDown(0);
   });
+  root.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch' || !world.input2018 || !overGuiTarget(e)) return;
+    world.ensureAudio();
+    const r = canvas.getBoundingClientRect();
+    ms.x = e.clientX - r.left;
+    ms.y = e.clientY - r.top;
+    world.input2018.buttonDown(e.button, true, [e.clientX, e.clientY]);
+  }, true);
   window.addEventListener('pointerup', (e) => {
     if (e.pointerType === 'touch') return;
-    if (world.input2018) world.input2018.buttonUp(e.button, false);
+    if (world.input2018) world.input2018.buttonUp(e.button, overGuiTarget(e), document.pointerLockElement === canvas ? null : [e.clientX, e.clientY]);
     if (e.button === 0 && ms.down) world.mouseUp(0);
   });
   canvas.addEventListener('wheel', (e) => {

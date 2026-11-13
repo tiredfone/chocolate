@@ -7,9 +7,12 @@ const game = new Game(workerData.placeId, {
   privateId: workerData.privateId,
   allowGear: workerData.allowGear !== false,
   era: workerData.era === 2018 ? 2018 : 2012,
+  placeData: workerData.placeData || null,
+  debugInit: workerData.debug || null,
   send: (cid, data) => parentPort.postMessage({ t: 'send', cid, data }),
   kick: (cid, reason) => parentPort.postMessage({ t: 'kick', cid, reason }),
   log: (line) => parentPort.postMessage({ t: 'log', line }),
+  debug: (data) => parentPort.postMessage({ t: 'dbg', data }),
 });
 
 const queue = [];
@@ -30,6 +33,9 @@ function dispatch(m) {
   });
   else if (m.t === 'msg') game.message(m.cid, m.data);
   else if (m.t === 'leave') game.leave(m.cid);
+  else if (m.t === 'dbg') {
+    if (game.debugger) game.debugger.handle(m.data);
+  }
   else if (m.t === 'stop') {
     game.close().catch(() => {}).finally(() => process.exit(0));
   }

@@ -1,6 +1,6 @@
 import { completions } from './reference.js';
 import { endpointUrl } from '../client/assets.js';
-import { el, classIconStyle } from './ui.js';
+import { el, classIconStyle, setClassIcons } from './ui.js';
 import { brick, brickPalette, brickList } from '../shared/brickcolor.js';
 import { ENUMS, isCreatable, CLASSES, propEra, classEra } from '../shared/classes.js';
 
@@ -17,11 +17,34 @@ const CLASS_ICON = {
   Dialog: 62, DialogChoice: 63, BillboardGui: 64, BodyColors: 26, Pose: 60, Keyframe: 60,
 };
 
-const VISIBLE_SERVICES = ['Workspace', 'Players', 'Lighting', 'ReplicatedStorage', 'ServerScriptService', 'ServerStorage', 'StarterGui', 'StarterPack', 'StarterPlayer', 'Teams', 'SoundService', 'Chat', 'Debris'];
+const VISIBLE_SERVICES = ['Workspace', 'Players', 'Lighting', 'ReplicatedFirst', 'ReplicatedStorage', 'ServerScriptService', 'ServerStorage', 'StarterGui', 'StarterPack', 'StarterPlayer', 'Teams', 'SoundService', 'Chat', 'LocalizationService', 'TestService', 'Debris'];
+
+const CLASS_ICON_2018 = {
+  ReplicatedFirst: 70, ReplicatedStorage: 70, ServerStorage: 69, ServerScriptService: 71, StarterPlayer: 79, StarterPlayerScripts: 78, StarterCharacterScripts: 78,
+  Chat: 33, LocalizationService: 92, LocalizationTable: 92, TestService: 68, Teams: 23, ModuleScript: 76, Folder: 77,
+  RemoteEvent: 75, RemoteFunction: 74, BindableEvent: 67, BindableFunction: 66, MeshPart: 73, UnionOperation: 73, NegateOperation: 72, PartOperation: 73,
+  Terrain: 65, Accessory: 32, Attachment: 81, ParticleEmitter: 80, Trail: 93, Beam: 94, PointLight: 13, SpotLight: 13, SurfaceLight: 13,
+  SoundGroup: 85, EchoSoundEffect: 84, ReverbSoundEffect: 84, ChorusSoundEffect: 84, CompressorSoundEffect: 84, DistortionSoundEffect: 84, EqualizerSoundEffect: 84, FlangeSoundEffect: 84, PitchShiftSoundEffect: 84, TremoloSoundEffect: 84,
+  BlurEffect: 83, BloomEffect: 83, ColorCorrectionEffect: 83, SunRaysEffect: 83, SurfaceGui: 64, ScrollingFrame: 48, ViewportFrame: 48, TextBox: 51,
+  UIListLayout: 26, UIGridLayout: 26, UITableLayout: 26, UIPageLayout: 26, UIPadding: 26, UIScale: 26, UISizeConstraint: 26, UITextSizeConstraint: 26, UIAspectRatioConstraint: 26,
+  BallSocketConstraint: 86, HingeConstraint: 87, PrismaticConstraint: 88, CylindricalConstraint: 88, RopeConstraint: 89, RodConstraint: 90, SpringConstraint: 91, WeldConstraint: 95, NoCollisionConstraint: 95,
+  AlignPosition: 95, AlignOrientation: 95, VectorForce: 94, LineForce: 94, Torque: 94, AngularVelocity: 94, BodyForce: 14,
+  Animator: 60, AnimationController: 60, KeyframeSequence: 60, Keyframe: 60, Pose: 60, HumanoidDescription: 9, WrapTarget: 0,
+  Players: 21, Workspace: 19, Lighting: 13, StarterGui: 46, StarterPack: 20, SoundService: 31, Debris: 30, InsertService: 72, CollectionService: 77, PhysicsService: 1,
+  TweenService: 60, HttpService: 92, RunService: 67, MarketplaceService: 20, BadgeService: 68, DataStoreService: 69, TeleportService: 19, UserInputService: 5,
+  ContextActionService: 5, PathfindingService: 9, TextService: 50, GroupService: 21, VRService: 5, HapticService: 5, GamePassService: 20, PointsService: 68,
+  NetworkServer: 15, NetworkClient: 16, Camera: 5,
+};
+let iconEra = 2012;
+export function setIconEra(era) {
+  iconEra = era === 2018 ? 2018 : 2012;
+}
 
 export function classIcon(cls) {
+  if (iconEra === 2018) return CLASS_ICON_2018[cls] ?? CLASS_ICON[cls] ?? 0;
   return CLASS_ICON[cls] ?? 0;
 }
+setClassIcons(classIcon);
 
 const CATEGORY = {
   BrickColor: 'Appearance', Material: 'Appearance', Reflectance: 'Appearance', Transparency: 'Appearance', Color: 'Appearance', TextureId: 'Appearance', Texture: 'Appearance',
@@ -76,9 +99,58 @@ export class Explorer {
     this.app = app;
     this.body = body;
     this.open = new Set();
+    this.query = '';
+    const bar = el('div', 'st-explorer-search', body);
+    this.search = el('input', null, bar);
+    this.search.type = 'search';
+    this.search.placeholder = app.era === 2018 ? 'Filter workspace (Ctrl+Shift+X)' : 'Search (Ctrl+Shift+X)';
+    this.search.spellcheck = false;
+    this.search.addEventListener('input', () => {
+      this.query = this.search.value.trim().toLowerCase();
+      this.dirty = true;
+      this.render();
+    });
+    this.search.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        this.search.value = '';
+        this.query = '';
+        this.dirty = true;
+        this.render();
+        this.search.blur();
+      } else if (e.key === 'Enter') {
+        const first = this.tree.querySelector('.st-node.match');
+        if (first) {
+          this.app.select([first._inst]);
+          this.app.activate(first._inst);
+        }
+      }
+    });
     this.tree = el('div', 'st-tree', body);
     this.dirty = true;
     body.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  focusSearch() {
+    this.search.focus();
+    this.search.select();
+  }
+
+  filtered() {
+    const q = this.query;
+    const shown = new Set(), hits = new Set();
+    let seen = 0;
+    const visit = (inst) => {
+      if (++seen > 200000) return;
+      const name = String(inst.props.get('Name') ?? '').toLowerCase();
+      if (name.includes(q) || inst.ClassName.toLowerCase() === q) {
+        hits.add(inst);
+        for (let p = inst; p && p !== this.app.dm.root; p = p.parent) shown.add(p);
+      }
+      for (const c of inst.children) if (!c.studioHidden) visit(c);
+    };
+    for (const r of this.roots()) visit(r);
+    return { shown, hits };
   }
 
   expandTo(inst) {
@@ -88,7 +160,11 @@ export class Explorer {
 
   roots() {
     const dm = this.app.dm;
-    return dm.root.children.filter((c) => VISIBLE_SERVICES.includes(c.ClassName) && !c.studioHidden).sort((a, b) => VISIBLE_SERVICES.indexOf(a.ClassName) - VISIBLE_SERVICES.indexOf(b.ClassName));
+    const rank = (c) => {
+      const i = VISIBLE_SERVICES.indexOf(c.ClassName);
+      return i < 0 ? VISIBLE_SERVICES.length : i;
+    };
+    return dm.root.children.filter((c) => (VISIBLE_SERVICES.includes(c.ClassName) || c.studioHidden === false) && !c.studioHidden).sort((a, b) => rank(a) - rank(b) || a.ClassName.localeCompare(b.ClassName));
   }
 
   render() {
@@ -97,28 +173,39 @@ export class Explorer {
     const sel = this.app.selection;
     const frag = document.createDocumentFragment();
     let count = 0;
+    const filter = this.query ? this.filtered() : null;
+    const isOpen = (inst) => (filter ? filter.shown.has(inst) && inst.children.some((c) => filter.shown.has(c)) : this.open.has(inst));
     const row = (inst, depth) => {
       if (++count > 20000) return;
       const n = document.createElement('div');
-      n.className = 'st-node' + (sel.has(inst) ? ' selected' : '');
+      n.className = 'st-node' + (sel.has(inst) ? ' selected' : '') + (filter && filter.hits.has(inst) ? ' match' : '');
       n.style.paddingLeft = depth * 16 + 'px';
-      const kids = inst.children.filter((c) => !c.studioHidden);
-      const tw = el('div', 'st-twisty' + (kids.length ? ' has' : '') + (this.open.has(inst) ? ' open' : ''), n);
+      const kids = inst.children.filter((c) => !c.studioHidden && (!filter || filter.shown.has(c)));
+      const tw = el('div', 'st-twisty' + (kids.length ? ' has' : '') + (isOpen(inst) ? ' open' : ''), n);
       const ic = el('div', 'st-cicon', n);
       ic.style.cssText = classIconStyle(classIcon(inst.ClassName));
       el('span', 'st-label', n, inst.props.get('Name'));
+      const add = el('div', 'st-add', n, '+');
+      add.title = 'Insert object';
+      add.addEventListener('pointerdown', (e) => e.stopPropagation());
+      add.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.app.insertMenu(inst, add.getBoundingClientRect());
+      });
       n._inst = inst;
       tw.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (filter) return;
         if (this.open.has(inst)) this.open.delete(inst);
         else this.open.add(inst);
         this.dirty = true;
         this.render();
       });
       frag.appendChild(n);
-      if (this.open.has(inst)) for (const c of kids) row(c, depth + 1);
+      if (isOpen(inst)) for (const c of kids) row(c, depth + 1);
     };
-    for (const r of this.roots()) row(r, 0);
+    for (const r of this.roots()) if (!filter || filter.shown.has(r)) row(r, 0);
+    if (filter && !filter.hits.size) el('div', 'st-tree-empty', frag, 'No matches');
     this.tree.replaceChildren(frag);
     this.bind();
   }
@@ -133,7 +220,7 @@ export class Explorer {
       const inst = n._inst;
       if (e.button === 2) {
         if (!this.app.selection.has(inst)) this.app.select([inst]);
-        this.app.ui.contextMenu(this.app.selectionMenu(), e.clientX, e.clientY);
+        this.app.ui.contextMenu(this.app.selectionMenu(inst), e.clientX, e.clientY);
         return;
       }
       press = { inst, x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, dragging: false, long: null };
@@ -141,7 +228,7 @@ export class Explorer {
         press.long = setTimeout(() => {
           if (!press) return;
           if (!this.app.selection.has(inst)) this.app.select([inst]);
-          this.app.ui.contextMenu(this.app.selectionMenu(), press.x, press.y);
+          this.app.ui.contextMenu(this.app.selectionMenu(inst), press.x, press.y);
           press = null;
         }, 550);
       }
@@ -244,7 +331,8 @@ export class Properties {
     const tr = el('tr', null, this.table);
     el('td', null, tr, name);
     const td = el('td', null, tr);
-    const same = (get) => sel.every((s) => JSON.stringify(get(s)) === JSON.stringify(get(first)));
+    const key = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : JSON.stringify(v));
+    const same = (get) => sel.length < 2 || sel.every((s) => key(get(s)) === key(get(first)));
     if (info.type === 'readonly') {
       el('span', 'st-readonly', td, same((s) => s.ClassName) ? first.ClassName : '');
       return;
@@ -529,7 +617,8 @@ export class ScriptEditor {
     const sync = () => {
       this.pre.innerHTML = highlight(this.ta.value);
       const n = this.ta.value.split('\n').length;
-      this.gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n');
+      this.lineCount = n;
+      this.renderGutter();
       this.ta.style.height = this.pre.scrollHeight + 'px';
       this.ta.style.width = this.pre.scrollWidth + 'px';
     };
@@ -552,7 +641,15 @@ export class ScriptEditor {
     this.ta.addEventListener('blur', () => {
       clearTimeout(timer);
       this.closeAc();
-      onChange(this.ta.value);
+      onChange(this.text());
+    });
+    this.marks = { bps: new Set(), current: 0 };
+    this.curEl = el('div', 'st-curline', code);
+    this.curEl.hidden = true;
+    this.gutter.addEventListener('click', (e) => {
+      const r = this.gutter.getBoundingClientRect();
+      const line = Math.floor((e.clientY - r.top + this.gutter.scrollTop - 2) / 17) + 1;
+      if (line >= 1 && line <= (this.lineCount || 1) && this.onGutter && !this.folded) this.onGutter(line);
     });
     this.ta.addEventListener('click', () => this.closeAc());
     this.ta.addEventListener('keydown', (e) => {
@@ -590,7 +687,12 @@ export class ScriptEditor {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        onChange(this.ta.value, true);
+        onChange(this.text(), true);
+      }
+      const keyCmd = (e.ctrlKey || e.metaKey) && !e.altKey ? { f: e.shiftKey ? 'findall' : 'find', h: 'replace', g: 'gotoline' }[e.key.toLowerCase()] : e.key === 'F3' ? (e.shiftKey ? 'findprev' : 'findnext') : null;
+      if (keyCmd && this.onCommand) {
+        e.preventDefault();
+        this.onCommand(keyCmd);
       }
     });
     code.addEventListener('scroll', () => (this.gutter.scrollTop = code.scrollTop));
@@ -727,8 +829,65 @@ export class ScriptEditor {
     this.acBox.hidden = true;
   }
 
+  text() {
+    return this.folded != null ? this.folded : this.ta.value;
+  }
+
+  renderGutter() {
+    const n = this.lineCount || 1;
+    const bps = this.marks.bps, cur = this.marks.current;
+    const out = [];
+    for (let i = 1; i <= n; i++) out.push(bps.has(i) || i === cur ? `<span class="${bps.has(i) ? 'bp' : ''}${i === cur ? ' cur' : ''}">${i}</span>` : String(i));
+    this.gutter.innerHTML = out.join('\n');
+  }
+
+  setMarks(bps, current) {
+    this.marks = { bps: new Set(bps), current: current | 0 };
+    this.renderGutter();
+    this.curEl.hidden = !current;
+    if (current) this.curEl.style.top = 2 + (current - 1) * 17 + 'px';
+  }
+
+  fold() {
+    if (this.folded != null) return;
+    const lines = this.ta.value.split('\n');
+    const out = [];
+    let depth = 0, start = -1;
+    const opens = (l) => (l.match(/\b(function|do|then|repeat)\b/g) || []).length - (l.match(/\belseif\b/g) || []).length;
+    const closes = (l) => (l.match(/\b(end|until)\b/g) || []).length;
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].replace(/--.*$/, '').replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""');
+      const before = depth;
+      depth = Math.max(0, depth + opens(code) - closes(code));
+      if (before === 0 && depth > 0) {
+        start = i;
+        out.push(lines[i]);
+      } else if (before > 0 && depth === 0 && start >= 0) {
+        const hidden = i - start - 1;
+        if (hidden > 0) out.push(`\t--[[ ${hidden} line${hidden === 1 ? '' : 's'} folded ]]`);
+        out.push(lines[i]);
+        start = -1;
+      } else if (depth === 0) out.push(lines[i]);
+    }
+    if (depth > 0 && start >= 0) out.push(...lines.slice(start + 1));
+    this.folded = this.ta.value;
+    this.ta.value = out.join('\n');
+    this.ta.readOnly = true;
+    this.el.classList.add('folded');
+    this.sync();
+  }
+
+  unfold() {
+    if (this.folded == null) return;
+    this.ta.value = this.folded;
+    this.folded = null;
+    this.ta.readOnly = false;
+    this.el.classList.remove('folded');
+    this.sync();
+  }
+
   reload() {
-    if (document.activeElement === this.ta) return;
+    if (document.activeElement === this.ta || this.folded != null) return;
     const v = this.script.props.get('Source') || '';
     if (v !== this.ta.value) {
       this.ta.value = v;

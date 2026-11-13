@@ -374,8 +374,8 @@ html, body {
   height: 100%;
 }
 
-.st-gui,
-.st-gui * {
+.st-gui:not(.st-widget-gui),
+.st-gui:not(.st-widget-gui) * {
   pointer-events: none !important;
 }
 
@@ -510,6 +510,104 @@ html, body {
 
 .st-node.drop .st-label {
   border-color: var(--st-select);
+}
+
+.st-explorer-search {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 3px;
+  background: var(--st-pane);
+  border-bottom: 1px solid var(--st-border-light);
+}
+
+.st-explorer-search input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 20px;
+  padding: 1px 4px;
+  font: inherit;
+  border: 1px solid var(--st-border);
+  background: #fff;
+  color: #000;
+}
+
+.st-node {
+  position: relative;
+}
+
+.st-node .st-add {
+  display: none;
+  position: sticky;
+  right: 2px;
+  margin-left: auto;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  line-height: 13px;
+  text-align: center;
+  font: bold 12px/13px Arial, sans-serif;
+  color: #3a3a3a;
+  border: 1px solid #9a9a9a;
+  border-radius: 50%;
+  background: #fff;
+  cursor: pointer;
+}
+
+.st-node:hover .st-add {
+  display: block;
+}
+
+.st-node .st-add:hover {
+  background: var(--st-hover);
+  border-color: var(--st-hover-border);
+}
+
+.st-node.match .st-label {
+  font-weight: bold;
+}
+
+.st-tree-empty, .st-classlist-empty {
+  padding: 6px 8px;
+  color: var(--st-muted);
+}
+
+.st-classpicker {
+  width: 240px;
+  padding: 4px;
+}
+
+.st-classpicker input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 22px;
+  margin-bottom: 4px;
+  padding: 1px 4px;
+  font: inherit;
+  border: 1px solid var(--st-border);
+}
+
+.st-classlist {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.st-classpicker .st-item.hot {
+  background: var(--st-hover);
+  border-color: var(--st-hover-border);
+}
+
+@media (pointer: coarse) {
+  .st-node .st-add {
+    display: block;
+    width: 20px;
+    height: 20px;
+    line-height: 19px;
+  }
+  .st-explorer-search input, .st-classpicker input {
+    font-size: 16px;
+    height: 28px;
+  }
 }
 
 .st-props {
@@ -1721,3 +1819,350 @@ html, body {
 .st-2018 .st-tabs {
   background: #e9e9e9;
 }
+
+.st-dialog .st-dlg-body.st-gs {
+  display: flex;
+  gap: 10px;
+  min-width: min(84vw, 470px);
+  min-height: 260px;
+}
+
+.st-gs-nav {
+  flex: none;
+  width: 110px;
+  border-right: 1px solid var(--st-border);
+}
+
+.st-gs-tab {
+  padding: 5px 8px;
+  cursor: default;
+}
+
+.st-gs-tab.active {
+  background: var(--st-select);
+  color: #fff;
+}
+
+.st-gs-pages {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-gs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 9px;
+}
+
+.st-gs-field input, .st-gs-field textarea, .st-gs-field select {
+  font: inherit;
+  padding: 2px 4px;
+  border: 1px solid var(--st-border);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.st-gs-field textarea {
+  resize: vertical;
+}
+
+.st-gs-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.st-gs-note {
+  color: var(--st-muted);
+  margin-top: 4px;
+}
+
+.st-gs-ro {
+  align-self: flex-end;
+}
+
+@media (pointer: coarse) {
+  .st-gs-field input, .st-gs-field textarea, .st-gs-field select {
+    font-size: 16px;
+  }
+  .st-dialog .st-dlg-body.st-gs {
+    flex-direction: column;
+  }
+  .st-gs-nav {
+    width: auto;
+    display: flex;
+    border-right: 0;
+    border-bottom: 1px solid var(--st-border);
+    overflow-x: auto;
+  }
+}
+
+.st-playdoc {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: #000;
+}
+
+.st-playdoc iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.st-stats {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 4;
+  margin: 0;
+  padding: 6px 8px;
+  font: 12px/1.35 Consolas, Menlo, monospace;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  white-space: pre;
+}
+
+.st-viewport canvas.st-axis {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  z-index: 4;
+  width: 80px;
+  height: 80px;
+  pointer-events: none;
+}
+
+.st-playdoc.st-emulated {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2b2b2b;
+}
+
+.st-playdoc.st-emulated iframe {
+  width: 667px;
+  height: 375px;
+  max-width: 100%;
+  max-height: 100%;
+  border: 12px solid #111;
+  border-radius: 18px;
+  box-sizing: content-box;
+}
+
+.st-findresults {
+  font: 12px/1.4 Consolas, Menlo, monospace;
+}
+
+.st-findhit {
+  padding: 1px 6px;
+  cursor: pointer;
+  white-space: pre;
+}
+
+.st-findhit:hover {
+  background: var(--st-hover);
+}
+
+.st-shortcuts td {
+  padding: 2px 10px 2px 0;
+}
+
+.st-shortcuts td:first-child {
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.st-startpage {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: auto;
+  padding: 24px 32px;
+  background: var(--st-pane);
+  color: var(--st-text);
+}
+
+.st-sp-actions button, .st-gameexplorer button {
+  margin: 0 8px 8px 0;
+  padding: 6px 14px;
+  font: inherit;
+}
+
+.st-gameexplorer {
+  padding: 6px;
+}
+
+.st-ge-head {
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.st-ge-group {
+  margin: 4px 0;
+  color: var(--st-muted);
+}
+
+.st-ge-row {
+  padding-left: 12px;
+  color: var(--st-text);
+}
+
+.st-command {
+  flex: none;
+  padding: 2px 4px;
+  border-top: 1px solid var(--st-border);
+  background: var(--st-bar-bottom);
+}
+
+.st-command input {
+  width: 100%;
+  box-sizing: border-box;
+  font: 12px Consolas, Menlo, monospace;
+  padding: 2px 4px;
+  border: 1px solid var(--st-border);
+}
+
+.st-plugin-list {
+  max-height: 220px;
+  overflow: auto;
+  margin-bottom: 8px;
+}
+
+.st-plugin-row, .st-plugin-add {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 3px 0;
+}
+
+.st-plugin-row span {
+  flex: 1;
+}
+
+.st-plugin-add input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 4px;
+}
+
+.st-plugin-btn i {
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.st-plugin-btn.active {
+  background: var(--st-press);
+}
+
+.st-widget-body {
+  position: relative;
+  min-height: 160px;
+}
+
+.st-findhit.err {
+  color: #c62828;
+}
+
+.st-findhit.warn {
+  color: #a66a00;
+}
+
+.st-editor .st-gutter {
+  cursor: pointer;
+}
+
+.st-editor .st-gutter .bp {
+  color: #fff;
+  background: #c62828;
+  border-radius: 7px;
+  padding: 0 3px;
+}
+
+.st-editor .st-gutter .cur {
+  outline: 1px solid #e0b000;
+  background: #fff3b0;
+}
+
+.st-editor .st-gutter .bp.cur {
+  background: #c62828;
+}
+
+.st-editor .st-curline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 17px;
+  background: rgba(255, 220, 0, 0.35);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.st-editor.folded textarea {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.st-dbg-x {
+  color: #c62828;
+  cursor: pointer;
+}
+
+.st-watch-bar {
+  padding: 3px 6px;
+}
+
+.st-watch-row {
+  padding: 1px 6px;
+  white-space: pre;
+}
+
+.st-watch-expr {
+  color: #1d5fb4;
+}
+
+.st-gui.st-uiedit .ch-g {
+  pointer-events: auto !important;
+  cursor: move;
+}
+
+.st-gui.st-uiedit .ch-g:hover {
+  outline: 1px dashed rgba(0, 120, 255, 0.7);
+}
+
+.st-gui.st-uiedit .ch-g.st-uisel {
+  outline: 2px solid #0a84ff;
+}
+
+.st-gui.st-uiedit .ch-g.st-uisel::after {
+  content: "";
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  background: #0a84ff;
+  cursor: nwse-resize;
+}
+.st-terrain { padding: 6px; font-size: 12px; overflow-y: auto; }
+.st-terrain-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 4px; margin-bottom: 8px; }
+.st-terrain-tool { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; border: 1px solid #b9b9b9; background: #f4f4f4; cursor: pointer; font: inherit; color: #222; }
+.st-terrain-tool i { width: 32px; height: 32px; background: center / contain no-repeat; }
+.st-terrain-tool.active, .st-terrain-shape.active, .st-terrain-mat.active { border-color: #2a7fff; background: #d8e8ff; }
+.st-terrain-head { font-weight: bold; margin: 8px 0 4px; border-bottom: 1px solid #ccc; }
+.st-terrain-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.st-terrain-row > span { width: 72px; flex: none; }
+.st-terrain-row input[type=range] { flex: 1; min-width: 0; }
+.st-terrain-row em { width: 64px; font-style: normal; text-align: right; color: #555; }
+.st-terrain-shape { width: 30px; height: 30px; padding: 2px; border: 1px solid #b9b9b9; background: #f4f4f4; cursor: pointer; }
+.st-terrain-shape i { display: block; width: 100%; height: 100%; background: center / contain no-repeat; }
+.st-terrain-mats { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 3px; }
+.st-terrain-mat { position: relative; height: 52px; border: 1px solid #999; background: center / cover no-repeat; cursor: pointer; padding: 0; }
+.st-terrain-mat span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 9px; background: rgba(0, 0, 0, 0.55); color: #fff; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.st-terrain-hint { margin-top: 8px; color: #666; line-height: 1.35; }
+.st-dlg-body .st-terrain-row > span { width: 90px; }

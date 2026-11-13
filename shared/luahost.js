@@ -4,6 +4,7 @@ import { BRICK, brickByName, nearestBrick, brickPalette, brick } from './brickco
 import * as C from './cframe.js';
 import { EVENTS2018, METHODS2018 } from './classes2018.js';
 import { installMethods2018, installComputed2018, installSetters2018, LUA_CLASS } from './api2018.js';
+import { installTerrain } from './terrainapi.js';
 
 const EVENTS = {
   Instance: ['Changed', 'ChildAdded', 'ChildRemoved', 'DescendantAdded', 'DescendantRemoving', 'AncestryChanged'],
@@ -28,6 +29,8 @@ const EVENTS = {
   DataModel: ['ItemChanged', 'Close', 'Loaded', 'GraphicsQualityChangeRequest'],
   ReplicatedFirst: ['RemoveDefaultLoadingGuiSignal', 'FinishedReplicating'],
   Workspace: [],
+  PluginToolbarButton: ['Click'],
+  Plugin: ['Deactivation', 'Unloading'],
   UserInputService: ['InputBegan', 'InputEnded', 'InputChanged', 'TouchStarted', 'TouchMoved', 'TouchEnded', 'ProcessedEvent'],
   ContextActionService: ['BoundActionAdded', 'BoundActionRemoved', 'BoundActionChanged', 'GetActionButtonEvent'],
   Debris: [],
@@ -220,7 +223,7 @@ function encodeProp(out, p, v) {
   }
 }
 
-const ARITY = { nil: 0, b: 1, n: 1, s: 1, sx: 1, i: 1, v3: 3, cf: 12, c3: 3, bc: 1, ud2: 4, ud: 2, v2: 2, ray: 6, e: 2, nr: 2, rect: 4, ti: 6 };
+const ARITY = { nil: 0, b: 1, n: 1, s: 1, sx: 1, i: 1, v3: 3, cf: 12, c3: 3, bc: 1, ud2: 4, ud: 2, v2: 2, ray: 6, r3: 6, e: 2, nr: 2, rect: 4, ti: 6 };
 
 function decodeArgs(dm, a, start = 0) {
   const out = [];
@@ -264,7 +267,7 @@ function decodeArgs(dm, a, start = 0) {
   return out;
 }
 
-const TYPE_NAME = { v3: 'Vector3', cf: 'CFrame', c3: 'Color3', bc: 'BrickColor', ud2: 'UDim2', v2: 'Vector2', s: 'string', n: 'number', b: 'bool', i: 'Object', nil: 'nil', e: 'EnumItem', l: 'table', d: 'table', ray: 'Ray', ud: 'UDim', nr: 'NumberRange', rect: 'Rect', ns: 'NumberSequence', cs: 'ColorSequence', ti: 'TweenInfo' };
+const TYPE_NAME = { v3: 'Vector3', cf: 'CFrame', c3: 'Color3', bc: 'BrickColor', ud2: 'UDim2', v2: 'Vector2', s: 'string', n: 'number', b: 'bool', i: 'Object', nil: 'nil', e: 'EnumItem', l: 'table', d: 'table', ray: 'Ray', r3: 'Region3', ud: 'UDim', nr: 'NumberRange', rect: 'Rect', ns: 'NumberSequence', cs: 'ColorSequence', ti: 'TweenInfo' };
 const WANT = { V3: 'Vector3', CF: 'CFrame', C3: 'Color3', BC: 'BrickColor', UD2: 'UDim2', V2: 'Vector2', string: 'string', Content: 'Content', number: 'number', int: 'int', bool: 'bool', Ref: 'Object', enum: 'token', UD: 'UDim', NR: 'NumberRange', Rect: 'Rect', NS: 'NumberSequence', CS: 'ColorSequence' };
 
 function coerceTo(p, a) {
@@ -454,7 +457,7 @@ export class ScriptHost {
       if (r && r.renderStep) this.extRenderSteps.push(r.renderStep);
       this.lua.doStringSync('__EXT = nil');
     }
-    this.lua.doStringSync('__RT = nil');
+    this.lua.doStringSync('__RT = nil __RTDEBUG = nil');
     this.ready = true;
     for (const d of this.dm.root.descendants()) this.scanOne(d);
   }
@@ -466,6 +469,9 @@ export class ScriptHost {
       us.props.set('Name', 'UserSettings');
       const gs = dm.create('UserGameSettings', us);
       gs.props.set('Name', 'GameSettings');
+      if (dm.era === 2018) {
+        for (const [k, v] of [['ControlMode', 1], ['MouseSensitivity', 1], ['MouseSensitivityFirstPerson', [1, 1]], ['MouseSensitivityThirdPerson', [1, 1]], ['GamepadCameraSensitivity', 0.2], ['MasterVolume', 1]]) if (gs.info.all.has(k)) gs.props.set(k, v);
+      }
       this._userSettings = us;
     }
     return this._userSettings;
@@ -1103,15 +1109,15 @@ function buildMethods(host) {
   def('GetRoleInGroup', 'Player', (pl, [g]) => (env.groupRole ? env.groupRole(pl, +g).then((v) => [String(v)]) : Promise.resolve(['Guest'])));
   def('IsFriendsWith isFriendsWith', 'Player', (pl, [u]) => (env.areFriends ? env.areFriends(pl, +u).then((v) => [!!v]) : Promise.resolve([false])));
   def('GetFriendsOnline', 'Player', (pl, [max]) => (env.friendsOnline ? env.friendsOnline(pl, max == null ? 200 : +max) : Promise.resolve([])).then((list) => [T.list((list || []).map((f) => T.dict(f)))]));
-  def('WaitForDataReady waitForDataReady', 'Player', () => Promise.resolve([true]));
+  def('WaitForDataReady waitForDataReady', 'Player', (pl) => (env.waitForData ? env.waitForData(pl).then(() => [true]) : Promise.resolve([true])));
   for (const [m, kind] of [['SaveNumber', 'n'], ['SaveString', 's'], ['SaveBoolean', 'b']]) {
     def(m, 'Player', (pl, [k, v]) => (env.saveData ? env.saveData(pl, String(k), kind, v).then(() => []) : Promise.resolve([])));
   }
   for (const [m, kind, d] of [['LoadNumber', 'n', 0], ['LoadString', 's', ''], ['LoadBoolean', 'b', false]]) {
     def(m, 'Player', (pl, [k]) => (env.loadData ? env.loadData(pl, String(k), kind).then((v) => [v ?? d]) : Promise.resolve([d])));
   }
-  def('SaveInstance', 'Player', () => Promise.resolve([]));
-  def('LoadInstance', 'Player', () => Promise.resolve([null]));
+  def('SaveInstance', 'Player', (pl, [k, inst]) => (env.saveInstance ? env.saveInstance(pl, String(k), inst || null).then(() => []) : Promise.resolve([])));
+  def('LoadInstance', 'Player', (pl, [k]) => (env.loadInstance ? env.loadInstance(pl, String(k)).then((v) => [v || null]) : Promise.resolve([null])));
   def('Move', 'Player', (pl, [dir, rel]) => { if (env.playerMove) env.playerMove(pl, dir, !!rel); return null; });
   def('GetUnder13', 'Player', () => false);
   def('DistanceFromCharacter', 'Player', (pl, [p]) => {
@@ -1280,6 +1286,7 @@ function buildMethods(host) {
   def('TeleportCancel', 'TeleportService', () => null);
   def('HttpGetAsync HttpPostAsync', 'DataModel', () => Promise.reject(new Error('Http requests are not enabled')));
   installMethods2018(def, host, { T, multi, Instance });
+  installTerrain(def, host, { T, multi });
   return M;
 }
 

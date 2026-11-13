@@ -1,5 +1,7 @@
 import * as C from './cframe.js';
 import { parseGroups, rapierGroups, groupsCollide } from './collisiongroups.js';
+import { parseCSG, base64Bytes, unionValue, unionBounds } from './csg.js';
+import { meshChunk } from './terrain.js';
 
 export const GRAVITY = 196.2;
 const STEP = 1 / 60;
@@ -79,7 +81,53 @@ export class Physics {
     this.ws = null;
     this.pendingJoin = new Set();
     this.loaded = false;
+    this.unionLoader = opts.unionMesh || null;
+    this.unionMeshes = new Map();
+    this.unionWaiting = new Map();
+    this.unionInline = new WeakMap();
     dm.observe(this);
+  }
+
+  setTerrain(inst, data) {
+    if (this.terrainData === data) return;
+    if (this.terrainData) {
+      this.terrainData.listeners.delete(this.terrainListener);
+      for (const c of this.terrainColliders.values()) {
+        this.byHandle.delete(c.handle);
+        this.world.removeCollider(c, false);
+      }
+    }
+    this.terrainInst = inst;
+    this.terrainData = data;
+    this.terrainColliders = new Map();
+    if (!data) return;
+    this.terrainListener = (keys) => this.terrainKeys(keys);
+    data.listeners.add(this.terrainListener);
+    this.terrainKeys(data.allKeys());
+  }
+
+  terrainKeys(keys) {
+    const R = this.R;
+    for (const k of keys) {
+      const old = this.terrainColliders.get(k);
+      if (old) {
+        this.byHandle.delete(old.handle);
+        this.world.removeCollider(old, false);
+        this.terrainColliders.delete(k);
+      }
+      const { solid } = meshChunk(this.terrainData, k);
+      if (solid.length < 9) continue;
+      const verts = new Float32Array(solid);
+      const idx = new Uint32Array(verts.length / 3);
+      for (let i = 0; i < idx.length; i++) idx[i] = i;
+      const F = R.TriMeshFlags;
+      const desc = F ? R.ColliderDesc.trimesh(verts, idx, F.FIX_INTERNAL_EDGES | F.DELETE_DEGENERATE_TRIANGLES | F.DELETE_DUPLICATE_TRIANGLES) : R.ColliderDesc.trimesh(verts, idx);
+      desc.setFriction(0.5);
+      desc.setActiveCollisionTypes(R.ActiveCollisionTypes.DEFAULT | R.ActiveCollisionTypes.KINEMATIC_FIXED);
+      const c = this.world.createCollider(desc);
+      this.terrainColliders.set(k, c);
+      this.byHandle.set(c.handle, { part: this.terrainInst, terrain: true, collider: c });
+    }
   }
 
   attachWorkspace(ws) {
@@ -146,6 +194,7 @@ export class Physics {
       if (name === 'CFrame') this.moved(inst, rec, opts);
       else if (name === 'Size' || name === 'Shape' || name === 'CanCollide') this.rebuildPart(inst);
       else if (name === 'Anchored') {
+        if (inst.isA('PartOperation')) this.rebuildPart(inst);
         this.markDirty(inst);
       } else if (name === 'Velocity' && rec.asm && rec.asm.body && !rec.asm.anchored) {
         const v = inst.props.get('Velocity');
@@ -222,7 +271,9 @@ export class Physics {
     const cls = part.ClassName;
     let d;
     let rot = null;
-    if (cls === 'WedgePart') d = R.ColliderDesc.convexHull(wedgeHull(hx, hy, hz));
+    const union = part.isA('PartOperation') ? this.unionShape(part, s) : null;
+    if (union) d = union;
+    else if (cls === 'WedgePart') d = R.ColliderDesc.convexHull(wedgeHull(hx, hy, hz));
     else if (cls === 'CornerWedgePart') d = R.ColliderDesc.convexHull(cornerHull(hx, hy, hz));
     else if (part.info.all.has('Shape') && part.props.get('Shape') === 0) d = R.ColliderDesc.ball(Math.min(hx, hy, hz));
     else if (part.info.all.has('Shape') && part.props.get('Shape') === 2) {
@@ -231,6 +282,59 @@ export class Physics {
     } else d = R.ColliderDesc.cuboid(hx, hy, hz);
     if (!d) d = R.ColliderDesc.cuboid(hx, hy, hz);
     return { desc: d, rot, volume: s[0] * s[1] * s[2] };
+  }
+
+  unionMesh(part) {
+    const inline = unionValue(part, 'MeshData');
+    if (typeof inline === 'string' && inline.replace(/<[^>]*>/g, '').trim().length > 8) {
+      const hit = this.unionInline.get(part);
+      if (hit && hit.src === inline) return hit.mesh;
+      let mesh = null;
+      try { mesh = parseCSG(base64Bytes(inline)); } catch {}
+      this.unionInline.set(part, { src: inline, mesh });
+      if (mesh) return mesh;
+    }
+    const url = unionValue(part, 'AssetId');
+    if (typeof url !== 'string' || !url || !this.unionLoader) return null;
+    if (this.unionMeshes.has(url)) return this.unionMeshes.get(url);
+    let waiting = this.unionWaiting.get(url);
+    if (!waiting) {
+      waiting = new Set();
+      this.unionWaiting.set(url, waiting);
+      Promise.resolve().then(() => this.unionLoader(url)).catch(() => null).then((mesh) => {
+        this.unionMeshes.set(url, mesh || null);
+        this.unionWaiting.delete(url);
+        if (!mesh) return;
+        for (const p of waiting) if (this.parts.has(p)) this.rebuildPart(p);
+      });
+    }
+    waiting.add(part);
+    return null;
+  }
+
+  unionShape(part, size) {
+    const fid = part.info.all.has('CollisionFidelity') ? part.props.get('CollisionFidelity') | 0 : 0;
+    if (fid === 2) return null;
+    const m = this.unionMesh(part);
+    if (!m || m.pos.length < 9) return null;
+    const init = unionValue(part, 'InitialSize');
+    if (!m.bounds) m.bounds = unionBounds(m);
+    const base = Array.isArray(init) && init.every((v) => v > 0) ? init : m.bounds;
+    const sx = size[0] / (base[0] || 1), sy = size[1] / (base[1] || 1), sz = size[2] / (base[2] || 1);
+    const pts = new Float32Array(m.pos.length);
+    for (let i = 0; i < pts.length; i += 3) {
+      pts[i] = m.pos[i] * sx;
+      pts[i + 1] = m.pos[i + 1] * sy;
+      pts[i + 2] = m.pos[i + 2] * sz;
+    }
+    const R = this.R;
+    if (fid === 1 || !part.props.get('Anchored')) return R.ColliderDesc.convexHull(pts);
+    const flags = R.TriMeshFlags ? R.TriMeshFlags.FIX_INTERNAL_EDGES | R.TriMeshFlags.MERGE_DUPLICATE_VERTICES | R.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES : undefined;
+    try {
+      return flags === undefined ? R.ColliderDesc.trimesh(pts, m.idx) : R.ColliderDesc.trimesh(pts, m.idx, flags);
+    } catch {
+      return R.ColliderDesc.convexHull(pts);
+    }
   }
 
   makeCollider(rec, body = null, offset = null) {
@@ -931,7 +1035,7 @@ export class Physics {
   drainEvents() {
     this.events.drainCollisionEvents((h1, h2, started) => {
       const a = this.byHandle.get(h1), b = this.byHandle.get(h2);
-      if (!a || !b) return;
+      if (!a || !b || a.terrain || b.terrain) return;
       this.touchPair(a.part, b.part, started);
     });
   }
@@ -1042,7 +1146,7 @@ export class Physics {
     const hits = [];
     this.world.collidersWithAabbIntersectingAabb({ x: center[0], y: center[1], z: center[2] }, { x: radius, y: radius, z: radius }, (c) => {
       const rec = this.byHandle.get(c.handle);
-      if (rec) hits.push(rec.part);
+      if (rec && !rec.terrain) hits.push(rec.part);
       return true;
     });
     const touched = [];

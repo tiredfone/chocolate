@@ -247,10 +247,12 @@ export class Controller {
     const model = this.model;
     const root = model && (model.findChild('HumanoidRootPart') || model.findChild('Torso'));
     const own = root ? root.props.get('CollisionGroupId') | 0 : 0;
+    const skip = this.passThrough;
     return (c) => {
       if (c.handle === this.collider.handle) return false;
+      if (skip && skip.has(c.handle)) return false;
       const rec = this.ph.byHandle.get(c.handle);
-      if (!rec) return true;
+      if (!rec || rec.terrain) return true;
       if (rec.character === model) return false;
       if (rec.part && (rec.part === model || rec.part.isDescendantOf(model))) return false;
       if (rec.sensorOnly) return false;
@@ -265,20 +267,35 @@ export class Controller {
     const origin = [this.pos[0], this.pos[1] - 1.5, this.pos[2]];
     for (const dy of [-0.8, 0, 1.5, 3]) {
       const o = [origin[0], origin[1] + dy, origin[2]];
-      const r = this.ph.raycast(o, [dir[0] * 1.6, 0, dir[2] * 1.6], [this.model]);
-      if (r.part && (r.part.ClassName === 'TrussPart' || this.ladderish(r.part))) return true;
+      const r = this.ph.raycast(o, [dir[0] * 1.6, 0, dir[2] * 1.6], [this.model], (q) => !liveCharacterOf(q));
+      if (r.part && r.part.ClassName === 'TrussPart') return true;
     }
-    return false;
+    return this.ledgeAhead(dir);
   }
 
-  ladderish(part) {
+  ledgeAhead(dir) {
+    const reach = 1.7;
+    const foot = this.pos[1] - 2.5;
+    let prev = Infinity;
+    for (let k = 0; k <= 22; k++) {
+      const y = foot + k * 0.25;
+      const r = this.ph.raycast([this.pos[0], y, this.pos[2]], [dir[0] * reach, 0, dir[2] * reach], [this.model], (q) => q.ClassName !== 'Terrain' && q.props.get('CanCollide') && !liveCharacterOf(q));
+      const facing = r.part && Math.abs(r.normal[1]) < 0.35 && r.normal[0] * dir[0] + r.normal[2] * dir[2] < -0.5;
+      const d = facing ? Math.hypot(r.point[0] - this.pos[0], r.point[2] - this.pos[2]) : Infinity;
+      if (k * 0.25 >= 2.6 && prev <= reach && d > prev + 0.8) return true;
+      prev = d;
+    }
     return false;
   }
 
   unstick() {
     const R = this.R;
     const world = this.ph.world;
-    const filter = this.filter();
+    const base = this.filter();
+    const filter = (c) => {
+      const r = this.ph.byHandle.get(c.handle);
+      return r && r.solidProxy ? false : base(c);
+    };
     if (!this.probe) this.probe = { inner: new R.Cuboid(0.95, 2.4, 0.45), outer: new R.Cuboid(1, 2.45, 0.5) };
     const rot = { x: 0, y: 0, z: 0, w: 1 };
     let inside = false;
@@ -297,6 +314,43 @@ export class Controller {
     this.body.setTranslation({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, true);
     if (this.vel[1] < 0) this.vel[1] = 0;
     return true;
+  }
+
+  separate(dt) {
+    const R = this.R;
+    if (!this.probe) this.probe = { inner: new R.Cuboid(0.95, 2.4, 0.45), outer: new R.Cuboid(1, 2.45, 0.5) };
+    const skip = new Set();
+    const push = [0, 0];
+    this.ph.world.intersectionsWithShape({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, { x: 0, y: 0, z: 0, w: 1 }, this.probe.inner, (c) => {
+      const rec = this.ph.byHandle.get(c.handle);
+      if (!rec || !rec.solidProxy || rec.character === this.model) return true;
+      skip.add(c.handle);
+      const t = c.translation();
+      let dx = this.pos[0] - t.x, dz = this.pos[2] - t.z;
+      let l = Math.hypot(dx, dz);
+      if (l < 1e-3) {
+        dx = 1;
+        dz = 0;
+        l = 1;
+      }
+      const k = Math.max(0, 2.2 - l) / 2.2;
+      push[0] += (dx / l) * k;
+      push[1] += (dz / l) * k;
+      return true;
+    }, R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body);
+    this.passThrough = skip.size ? skip : null;
+    if (!skip.size) return [0, 0];
+    return [push[0] * 10 * dt, push[1] * 10 * dt];
+  }
+
+  feetOnGround() {
+    const p = this.pos;
+    const from = p[1] - 2.3;
+    for (const [dx, dz] of [[0, 0], [0.9, 0.4], [-0.9, 0.4], [0.9, -0.4], [-0.9, -0.4]]) {
+      const r = this.ph.raycast([p[0] + dx, from, p[2] + dz], [0, -0.55, 0], [this.model], (q) => q.props.get('CanCollide'));
+      if (r.part && r.normal[1] > 0.5) return true;
+    }
+    return false;
   }
 
   groundClamp() {
@@ -325,7 +379,7 @@ export class Controller {
     const speed = platform ? 0 : ws;
     this.vel[0] = dir[0] * speed;
     this.vel[2] = dir[2] * speed;
-    if ((input.jump || hum.props.get('Jump')) && !platform) this.jumpHeldFor = 0.3;
+    if ((input.jump || hum.props.get('Jump')) && !platform) this.jumpHeldFor = hum.dm && hum.dm.era === 2018 ? 0.05 : 0.3;
     else this.jumpHeldFor = Math.max(0, (this.jumpHeldFor || 0) - dt);
     const wantJump = this.jumpHeldFor > 0 && !platform;
     if (hum.props.get('Jump')) hum.dm.setProp(hum, 'Jump', false, { local: true });
@@ -342,7 +396,7 @@ export class Controller {
       fell = true;
       this.jumpCooldown = Math.max(0, this.jumpCooldown - dt);
       const e18 = hum.dm && hum.dm.era === 2018;
-      const footing = this.grounded || (e18 && !this.jumped && (this.sinceGround || 0) < 0.12);
+      const footing = e18 ? (this.grounded && this.feetOnGround()) || (!this.jumped && (this.sinceGround || 0) < 0.12) : this.grounded;
       if (footing && wantJump && (e18 || this.landedFor > LANDED_DELAY) && this.jumpCooldown <= 0 && this.vel[1] <= 0) {
         this.vel[1] = (hum.props.get('JumpPower') || 50) - GRAVITY * dt;
         this.grounded = false;
@@ -353,7 +407,8 @@ export class Controller {
       }
     }
     const settle = this.grounded && this.vel[1] <= 0 && !climbing;
-    const desired = { x: this.vel[0] * dt, y: settle ? 0 : (this.vel[1] + (fell ? 0.5 * GRAVITY * dt : 0)) * dt, z: this.vel[2] * dt };
+    const sep = this.separate(dt);
+    const desired = { x: this.vel[0] * dt + sep[0], y: settle ? 0 : (this.vel[1] + (fell ? 0.5 * GRAVITY * dt : 0)) * dt, z: this.vel[2] * dt + sep[1] };
     this.kcc.computeColliderMovement(this.collider, desired, this.R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.filter());
     const mvd = this.kcc.computedMovement();
     let grounded = this.kcc.computedGrounded();
@@ -364,7 +419,7 @@ export class Controller {
     if (!grounded && mvd.y > desired.y + 1e-4 && this.vel[1] < 0) this.vel[1] = Math.max(this.vel[1], mvd.y / dt);
     if (this.vel[1] > 0 && mvd.y < desired.y - 1e-4) this.vel[1] = 0;
     this.grounded = grounded;
-    if (grounded && this.vel[1] <= 0) {
+    if (grounded && this.vel[1] <= 0 && (!this.jumped || !(hum.dm && hum.dm.era === 2018) || this.feetOnGround())) {
       this.sinceGround = 0;
       this.jumped = false;
     } else this.sinceGround = (this.sinceGround || 0) + dt;
@@ -417,7 +472,7 @@ export class CharacterProxy {
     const torso = rootOf(this.model);
     if (!torso) return;
     if (this.blocking) {
-      this.solid = w.createCollider(this.R.ColliderDesc.cuboid(1, 2.45, 0.5).setTranslation(0, -0.5, 0).setEnabled(!this.seated).setActiveHooks(this.R.ActiveHooks.FILTER_CONTACT_PAIRS), this.body);
+      this.solid = w.createCollider(this.R.ColliderDesc.cylinder(2.45, 0.9).setTranslation(0, -0.5, 0).setEnabled(!this.seated).setActiveHooks(this.R.ActiveHooks.FILTER_CONTACT_PAIRS), this.body);
       this.ph.byHandle.set(this.solid.handle, { part: torso, noRay: true, character: this.model, solidProxy: true });
     }
     const bt = this.body.translation(), br = this.body.rotation();
@@ -543,11 +598,70 @@ function scaleRig(dm, model, hum, sc) {
   rigScales.set(model, sc);
 }
 
-export function buildR15(dm, template, name, at, scale) {
+export function applyR15Package(dm, model, parts) {
+  let changed = false;
+  for (const src of parts || []) {
+    const name = src.props.get('Name');
+    const tgt = model.findChild(name);
+    if (!tgt || !tgt.isA('BasePart') || name === 'HumanoidRootPart' || name === 'Head' || !src.isA('BasePart')) continue;
+    for (const k of ['MeshId', 'TextureID']) if (tgt.info.all.has(k)) tgt.props.set(k, src.props.get(k) || '');
+    const size = src.props.get('Size');
+    if (Array.isArray(size)) tgt.props.set('Size', size.slice());
+    const init = src.info.all.has('InitialSize') ? src.props.get('InitialSize') : null;
+    if (tgt.info.all.has('InitialSize')) tgt.props.set('InitialSize', (Array.isArray(init) ? init : size).slice());
+    for (const a of src.children) {
+      if (a.ClassName !== 'Attachment') continue;
+      const an = a.props.get('Name');
+      let t = tgt.children.find((c) => c.ClassName === 'Attachment' && c.props.get('Name') === an);
+      if (!t) {
+        t = dm.create('Attachment', tgt);
+        t.props.set('Name', an);
+      }
+      t.props.set('CFrame', a.props.get('CFrame').slice());
+    }
+    changed = true;
+  }
+  if (!changed) return false;
+  const att = (p, n) => p && p.children.find((c) => c.ClassName === 'Attachment' && c.props.get('Name') === n);
+  for (const j of model.descendants()) {
+    if (j.ClassName !== 'Motor6D') continue;
+    const n = j.props.get('Name') + 'RigAttachment';
+    const a0 = att(j.props.get('Part0'), n), a1 = att(j.props.get('Part1'), n);
+    if (a0 && a1) {
+      j.props.set('C0', a0.props.get('CFrame').slice());
+      j.props.set('C1', a1.props.get('CFrame').slice());
+    }
+  }
+  const hum = model.findChildOfClass('Humanoid');
+  const root = model.findChild('HumanoidRootPart');
+  if (hum && root) {
+    const joint = (p1) => model.descendants().find((d) => d.ClassName === 'Motor6D' && d.props.get('Part1') === p1);
+    let lowest = Infinity;
+    for (const foot of ['LeftFoot', 'RightFoot']) {
+      const chain = [];
+      for (let p = model.findChild(foot); p && p !== root; ) {
+        const j = joint(p);
+        if (!j) break;
+        chain.unshift(j);
+        p = j.props.get('Part0');
+      }
+      if (!chain.length || chain[0].props.get('Part0') !== root) continue;
+      let cf = C.cf(0, 0, 0);
+      for (const j of chain) cf = C.mul(C.mul(cf, j.props.get('C0')), C.inv(j.props.get('C1')));
+      const fp = model.findChild(foot);
+      lowest = Math.min(lowest, cf[1] - fp.props.get('Size')[1] / 2);
+    }
+    if (Number.isFinite(lowest)) hum.props.set('HipHeight', Math.max(0.5, -lowest - root.props.get('Size')[1] / 2));
+  }
+  return true;
+}
+
+export function buildR15(dm, template, name, at, scale, pkg = null) {
   const [model] = dm.load([template], null);
   model.props.set('Name', name);
   const root = model.findChild('HumanoidRootPart');
   const hum = model.findChildOfClass('Humanoid');
+  if (pkg && pkg.length) applyR15Package(dm, model, pkg);
   if (scale && ['height', 'width', 'depth', 'head'].some((k) => Number.isFinite(scale[k]) && Math.abs(scale[k] - 1) > 1e-4)) scaleRig(dm, model, hum, { height: 1, width: 1, depth: 1, head: 1, ...scale });
   const hip = hum ? +hum.props.get('HipHeight') || 1.35 : 1.35;
   const rc = root.props.get('CFrame');

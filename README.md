@@ -1,6 +1,6 @@
 # Chocolate
 
-Version 26.11.3-hotfix.
+Version 26.12-preview.
 
 Chocolate is a browser port of the 2012 game client. It runs places in the browser with three.js for rendering, Rapier for physics and a Lua 5.1 VM compiled to WebAssembly, and it runs the client's real CoreScripts unmodified. A Node server simulates each place and replicates it to players over a WebSocket.
 
@@ -8,7 +8,9 @@ It works on desktop and on touch devices. Mobile controls come from the CoreScri
 
 It renders like the 2012 OGRE client: the client's own material scripts are ported to WebGL, with gamma-space lighting, studs and other surfaces from `surfacesAlpha.png`, the medium-quality material textures, modulative shadows tinted by `Lighting.ShadowColor`, and the original particle systems for fire, smoke, sparkles, explosions and the ForceField. The mouse uses the 2012 cursors (`ArrowFarCursor`, `ArrowCursor`, the `DragCursor` hand over ClickDetectors, and any `Mouse.Icon` a tool sets), and stays visible while you hold the right button to turn the camera.
 
-It also includes a browser Studio in the style of the 2012 Studio, with Team Create, a Toolbox of the site's models, script autocomplete and an Object Browser.
+It also includes a browser Studio in the style of the 2012 Studio (and the 2018 Studio for 2018 places), with Team Create, Team Test, Play Solo with a debugger, terrain tools, a Toolbox of the site's models, script autocomplete and an Object Browser.
+
+Places can have terrain: 2012 cell terrain (4-stud blocks and wedges, `SetCell`, `AutowedgeCell` and the rest of the 2012 API) and 2018 smooth terrain (`FillBlock`, `FillBall`, `ReadVoxels`, `WriteVoxels` and the rest), drawn with the 2018 client's own terrain textures, collided with, replicated to players and saved in the place as `ChocolateTerrain`.
 
 Chocolate is independent of any one website. Everything it needs from the host site goes through the endpoints in `config.php`, overridden by `config.local.php`.
 
@@ -18,13 +20,13 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
 
 | Path | Contents |
 | --- | --- |
-| `client/` | Browser client: `main.js` boot, `world.js` client DataModel and engine-built GUI, `render.js`, `shade2012.js` 2012 materials and lighting, `particles2012.js` 2012 particle systems, `gui.js`, `camera.js`, `cursor.js` 2012 mouse cursors, `touch.js`, `assets.js`, `net.js`, `avatarview.js` standalone character viewer |
+| `client/` | Browser client: `main.js` boot, `world.js` client DataModel and engine-built GUI, `render.js`, `shade2012.js` 2012 materials and lighting, `particles2012.js` 2012 particle systems, `gui.js`, `camera.js`, `cursor.js` 2012 mouse cursors, `touch.js`, `assets.js`, `net.js`, `terrainview.js` terrain meshes and materials, `input2018.js` 2018 input, `devconsole.js` F9 console, `avatarview.js` standalone character viewer |
 | `client/vendor/` | Bundled three.js, Rapier, wasmoon and the Lua wasm |
 | `client/ui/` | Touch images the desktop content lacks, built from the iOS app by `tools/ipa-ui.mjs`. Gitignored |
-| `shared/` | Code used by both sides: `instance.js` DataModel, `classes.js` classes and enums, `luahost.js` engine API, `runtime.lua` Lua scheduler and datatypes, `physics.js`, `humanoid.js`, `animator.js` KeyframeSequence animation, `rbxl.js` place parser, `rbxlx.js` place writer, `teamsync.js` Team Create sync |
-| `studio/` | Browser Studio: `main.js` boot, `studio.js` commands, selection and undo, `view.js` camera, picking, tools and tool cursors, `panes.js` Explorer, Properties, Toolbox, Output and script editor, `reference.js` class and Lua reference behind autocomplete, `browser.js` Object Browser, `teamcreate.js` Team Create client, `ui.js` 2012 menus, toolbars and docking, `studio.css` |
+| `shared/` | Code used by both sides: `instance.js` DataModel, `classes.js` classes and enums, `luahost.js` engine API, `runtime.lua` Lua scheduler and datatypes, `physics.js`, `humanoid.js`, `animator.js` KeyframeSequence animation, `rbxl.js` place parser, `rbxlx.js` place writer, `teamsync.js` Team Create sync, `terrain.js` voxel terrain storage and meshing, `terrainapi.js` Terrain Lua methods, `csg.js` union meshes, `services.js` default 2018 services, `debugger.js` script debugger, `runtime2018.lua` and `api2018.js` the 2018 engine |
+| `studio/` | Browser Studio: `main.js` boot, `studio.js` commands, selection and undo, `view.js` camera, picking, tools and tool cursors, `panes.js` Explorer, Properties, Toolbox, Output and script editor, `reference.js` class and Lua reference behind autocomplete, `browser.js` Object Browser, `teamcreate.js` Team Create client, `ui.js` 2012 menus, toolbars and docking, `ui2018.js` 2018 ribbon, `terrain.js` terrain tools, `csgops.js` Union, Negate and Separate, `extras.js` 2018 ribbon actions, `lua.js` command bar and plugins, `debug.js` debugger, `studio.css` |
 | `studio/ui/` | 2012 Studio icons extracted from `RobloxApp.exe` by `tools/studio-ui.mjs`. Gitignored |
-| `server/` | Game server: `main.js` WebSocket front end, `worker.js` one thread per place, `game.js` simulation, `replicator.js`, `teamcreate.js` Team Create sessions, `assets.js`, `config.js` |
+| `server/` | Game server: `main.js` WebSocket front end, `worker.js` one thread per place, `game.js` simulation, `replicator.js`, `teamcreate.js` Team Create sessions, `persistence.js` 2012 Data Persistence, `social.js` badges and friends, `assets.js`, `config.js` |
 | `content/` | The `content/` folder from the matching 2012 client build (textures, sky, sounds, fonts). Gitignored |
 | `tools/` | Headless test harnesses and asset extractors, described under Setup and Testing |
 | `docs/` | `STUDIO.md`: the full Studio guide and API reference |
@@ -65,6 +67,7 @@ Chocolate does not include any Roblox files. You supply the 2012 client's `conte
 | `siteUrl` | Base URL the game server uses for server-side endpoints |
 | `key` | Shared secret sent as `X-Chocolate-Key` when redeeming tickets |
 | `assetDir` | Optional folder of asset files named by ID, with `{id}.lua` for scripts. When empty, assets come from the endpoints |
+| `dataStoreDir` | Folder where saved game data is kept: 2018 DataStores in `{placeId}.json` and 2012 Data Persistence (`SaveNumber`, `LoadString`, `SaveInstance` and the rest) in `players/{placeId}/{userId}.json`. Keep it outside the web root. When empty, saved data lasts only as long as the server |
 | `userAgent` | User agent for server-side requests |
 
 Endpoints use `{id}` as a placeholder. Paths are relative to `siteUrl` on the server and to the page origin in the browser.
@@ -102,7 +105,7 @@ The host page provides the import map, the `#chocolate-config` JSON and the DOM 
 <script type="module" src="/chocolate/client/main.js"></script>
 ```
 
-Only pass the browser endpoints listed above. Never send `key`, `siteUrl` or `assetDir` to the page.
+Only pass the browser endpoints listed above. Never send `key`, `siteUrl`, `assetDir` or `dataStoreDir` to the page.
 
 Give every module under `client/` and `shared/` a version in the import map, for example `"/chocolate/client/world.js": "/chocolate/client/world.js?v=<mtime>"`, and load `main.js` with the same versioned URL. Modules import each other by relative path, so without these entries browsers and service workers keep serving old copies after an update. Put the same version in `#chocolate-config` as `version`; the client adds it to `runtime.lua` and `content-index.json`.
 
@@ -114,7 +117,7 @@ Package body parts (`CharacterMesh`) replace the limb mesh with the package's me
 
 ## Studio
 
-`studio/` is a place editor in the style of the 2012 Studio: the 2012 menus, toolbars, Explorer icons and tool cursors, the Drag, Move, Resize, Rotate, Lock, Anchor, Paint, Material and surface tools with grid snapping, Explorer, Properties, Output, script tabs, undo and redo, and lossless saving in the 2012 XML format. The Toolbox lists the site's free models and your own models with thumbnails, plus Basic Objects. The script editor completes Lua keywords, globals, libraries and the members of whatever an expression points at in the place (`game.Workspace.`, `script.Parent:`). The Object Browser (View > Object Browser or Help > Object Reference) lists every class with its properties, functions and events. It works on phones and tablets with a bottom sheet, a camera thumbstick and a camera-only mode. It runs no scripts; Play Solo saves and opens the game.
+`studio/` is a place editor in the style of the 2012 Studio: the 2012 menus, toolbars, Explorer icons and tool cursors, the Drag, Move, Resize, Rotate, Lock, Anchor, Paint, Material and surface tools with grid snapping, Explorer, Properties, Output, script tabs, undo and redo, and lossless saving in the 2012 XML format. The Toolbox lists the site's free models and your own models with thumbnails, plus Basic Objects. The script editor completes Lua keywords, globals, libraries and the members of whatever an expression points at in the place (`game.Workspace.`, `script.Parent:`). The Object Browser (View > Object Browser or Help > Object Reference) lists every class with its properties, functions and events. It works on phones and tablets with a bottom sheet, a camera thumbstick and a camera-only mode. It runs no place scripts; the command bar, Run Script and plugins run in Studio's own Lua host, and Play Solo starts the place on a test server with a debugger. Terrain tools (Generate, Add, Subtract, Paint, Grow, Erode, Smooth and Flatten for 2018 smooth terrain; Generate, Add, Remove, Paint, Elevation, Crater and Smoother for 2012 cell terrain) edit the place's terrain, with undo and Team Create sync.
 
 Team Create lets the owner and the collaborators they add edit a place together. Each Studio joins a session on the game server, which holds the authoritative copy of the place and passes every change on to the other editors.
 
@@ -175,7 +178,7 @@ To check Team Create's sync, load a place into one DataModel, send it to a secon
 
 `e2e2018.mjs` runs a 2018 server and client together in one process, including chat. Environment variables: `SECONDS` for how long to run, `ALL=1` to print all server output, `DUMP=Workspace,ReplicatedStorage` to list those services' children on the server, and `LUA='...'` to run a LocalScript probe on the client. `corescripts2018.mjs` takes `LUA`, `PRINT=1`, `KEYS` and `DUMP` the same way. Set `CHOCOLATE_ASSET_DIR` to a folder of copied place files to test without touching the host's asset storage.
 
-`corescripts.mjs` runs the LoadingScript and StarterScript chain and prints the GUI it built and any script errors. `touch.mjs` drives TouchControls and ContextActionTouch with simulated touches. `movement.mjs` walks and jumps the character controller over seams, plates, bricks and walls and prints where it ended up. `character.mjs` starts a place in-process, joins one player and prints the character and backpack. It makes the same read-only requests a real join makes, except it skips the ticket.
+`corescripts.mjs` runs the LoadingScript and StarterScript chain and prints the GUI it built and any script errors. `touch.mjs` drives TouchControls and ContextActionTouch with simulated touches. `movement.mjs` walks and jumps the character controller over seams, plates, bricks, walls, ledges and ladders, and into, inside and past another player, and prints where it ended up. `character.mjs` starts a place in-process, joins one player and prints the character and backpack. It makes the same read-only requests a real join makes, except it skips the ticket.
 
 ## Licenses
 

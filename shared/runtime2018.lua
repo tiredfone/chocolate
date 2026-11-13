@@ -286,6 +286,17 @@ TYPES[R.V3MT] = "Vector3"; TYPES[R.V2MT] = "Vector2"; TYPES[R.CFMT] = "CFrame"; 
 TYPES[R.BCMT] = "BrickColor"; TYPES[R.UD2MT] = "UDim2"; TYPES[R.UDMT] = "UDim"; TYPES[R.RayMT] = "Ray"
 TYPES[R.R3MT] = "Region3"; TYPES[R.EnumItemMT] = "EnumItem"; TYPES[R.Signal] = "RBXScriptSignal"
 export("typeof", typeName)
+do
+  local rawtype = type
+  sandbox.type = function(v)
+    local t = rawtype(v)
+    if t == "table" then
+      local m = getmetatable(v)
+      if m ~= nil and (TYPES[m] or (rawtype(m) == "table" and rawget(m, "__type"))) then return "userdata" end
+    end
+    return t
+  end
+end
 local baseLoadstring = base.loadstring
 export("loadstring", function(src, name)
   if R.SIDE == "client" then error("loadstring() is not available", 2) end
@@ -960,6 +971,49 @@ LM.GetSortedAsync = function(self, id, asc, size)
 end
 
 LM.GetAssetThumbnailAsync = function(self, id, ...) return callAsync(id, "GetAssetThumbnailAsync", ...) end
+LM.ReadVoxels = function(self, id, region, res)
+  local mats, occs, size = call(id, "__ReadVoxels", region, res)
+  local sx, sy, sz = size.X, size.Y, size.Z
+  local M, O = { Size = size }, { Size = size }
+  local enumOf = {}
+  local i = 1
+  for x = 1, sx do
+    local mx, ox = {}, {}
+    M[x], O[x] = mx, ox
+    for y = 1, sy do
+      local my, oy = {}, {}
+      mx[y], ox[y] = my, oy
+      for z = 1, sz do
+        local m = mats[i]
+        local e = enumOf[m]
+        if not e then e = call(id, "__MaterialEnum", m) enumOf[m] = e end
+        my[z], oy[z] = e, occs[i]
+        i = i + 1
+      end
+    end
+  end
+  return M, O
+end
+LM.WriteVoxels = function(self, id, region, res, M, O)
+  if type(M) ~= "table" or type(O) ~= "table" then error("WriteVoxels: materials and occupancies expected", 2) end
+  local mats, occs = {}, {}
+  local idxOf = {}
+  local n = 0
+  for x = 1, #M do
+    local mx, ox = M[x], O[x] or {}
+    for y = 1, #mx do
+      local my, oy = mx[y], ox[y] or {}
+      for z = 1, #my do
+        n = n + 1
+        local m = my[z]
+        local k = idxOf[m]
+        if not k then k = call(id, "__MaterialIndex", m) idxOf[m] = k end
+        mats[n], occs[n] = k, tonumber(oy[z]) or 0
+      end
+    end
+  end
+  call(id, "__WriteVoxels", region, res, mats, occs)
+end
 LM.BindToClose = function(self, id, fn)
   if type(fn) ~= "function" then error("BindToClose: function expected", 2) end
   call(id, "__CloseBound")

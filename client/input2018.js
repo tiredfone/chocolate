@@ -103,7 +103,7 @@ export class Input2018 {
     }
   }
 
-  buttonDown(button, overGui) {
+  buttonDown(button, overGui, at) {
     const type = BUTTON_TYPE[button];
     if (type === undefined) return;
     this.buttons.add(type);
@@ -112,10 +112,11 @@ export class Input2018 {
     io.props.set('Position', this.pos());
     this['btn' + button] = io;
     this.setLast(UIT.MouseButton1);
+    if (at && this.gui.guiInput) this.gui.guiInput('b', io, at[0], at[1]);
     this.send(io, overGui, 'b');
   }
 
-  buttonUp(button, overGui) {
+  buttonUp(button, overGui, at) {
     const type = BUTTON_TYPE[button];
     const io = this['btn' + button];
     this.buttons.delete(type);
@@ -123,12 +124,15 @@ export class Input2018 {
     this['btn' + button] = null;
     io.props.set('UserInputState', 2);
     io.props.set('Position', this.pos());
+    if (at && this.gui.guiInput) this.gui.guiInput('e', io, at[0], at[1]);
     this.send(io, overGui, 'e');
     setTimeout(() => { if (!io.destroyed) this.dm.destroy(io); }, 1000);
   }
 
-  mouseMove(dx, dy, overGui) {
-    const k = this.world.guiScale();
+  mouseMove(dx, dy, overGui, at) {
+    const gs = this.world.gameSettings && this.world.gameSettings();
+    const sens = gs ? Math.max(0.1, Math.min(10, +gs.props.get('MouseSensitivity') || 1)) : 1;
+    const k = this.world.guiScale() * (this.behavior === 1 || document.pointerLockElement === this.canvas ? sens : 1);
     this.delta[0] += dx * k;
     this.delta[1] += dy * k;
     const io = this.moveIO;
@@ -136,6 +140,7 @@ export class Input2018 {
     io.props.set('Position', this.pos());
     io.props.set('Delta', [dx * k, dy * k, 0]);
     this.setLast(UIT.MouseMovement);
+    if (at && this.gui.guiInput) this.gui.guiInput('c', io, at[0], at[1]);
     this.send(io, overGui, 'c');
   }
 

@@ -50,10 +50,20 @@ export const MENUS = [
   ]],
   ['Tools', [
     ['joints', 'Manual Joints'], null,
-    ['objectbrowser', 'Object Browser'],
+    ['objectbrowser', 'Object Browser'], ['analysis', 'Script Analysis'], null,
+    ['runscript', 'Run Script...'], ['view:commandbar', 'Command Bar'], null,
+    ['plugins', 'Manage Plugins...'], null,
+    ['gamesettings', 'Game Settings...'],
+  ]],
+  ['Terrain', [
+    ['terrain:editor', 'Terrain Tools'], null,
+    ['terrain:generate', 'Generate...'], ['terrain:add', 'Add'], ['terrain:subtract', 'Remove'], ['terrain:paint', 'Paint'],
+    ['terrain:elevate', 'Elevation'], ['terrain:crater', 'Crater'], ['terrain:smooth', 'Smoother'], null,
+    ['terrain:clear', 'Clear Terrain'],
   ]],
   ['Test', [
-    ['playsolo', 'Play Solo'],
+    ['playsolo', 'Play Solo'], null,
+    ['teamtest', 'Team Test'], ['teamtest:stop', 'End Team Test'],
   ]],
   ['Help', [
     ['objectbrowser', 'Object Reference'], null,
@@ -106,8 +116,18 @@ export function iconStyle(id) {
   return `background-image:url("${publicPath('/studio/ui/' + ic.strip + '.png')}");background-position:${-ic.i * ic.w}px 0`;
 }
 
+let classIconOf = () => 0;
+export function setClassIcons(fn) {
+  classIconOf = fn;
+}
+
+let iconSheet = '/studio/ui/class-images.png';
+export function setClassIconSheet(path) {
+  iconSheet = path;
+}
+
 export function classIconStyle(index) {
-  return `background-image:url("${publicPath('/studio/ui/class-images.png')}");background-position:${-index * 16}px 0`;
+  return `background-image:url("${publicPath(iconSheet)}");background-position:${-index * 16}px 0`;
 }
 
 export class UI {
@@ -189,12 +209,66 @@ export class UI {
     this.sheet = el('div', 'st-sheet collapsed', r);
     this.sheetTabs = el('div', 'st-sheet-tabs', this.sheet);
     this.sheetBody = el('div', 'st-sheet-body', this.sheet);
+    const cmd = el('div', 'st-command', r);
+    const input = el('input', null, cmd);
+    input.type = 'text';
+    input.placeholder = 'Run a command';
+    input.spellcheck = false;
+    const history = [];
+    let at = 0;
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter' && input.value.trim()) {
+        const code = input.value;
+        history.push(code);
+        at = history.length;
+        input.value = '';
+        this.app.runCommand(code);
+      } else if (e.key === 'ArrowUp' && at > 0) {
+        e.preventDefault();
+        input.value = history[--at];
+      } else if (e.key === 'ArrowDown' && at < history.length) {
+        e.preventDefault();
+        at++;
+        input.value = history[at] || '';
+      }
+    });
+    cmd.hidden = !this.commandBarDefault();
+    this.commandBar = cmd;
     const status = el('div', 'st-statusbar', r);
     this.statusLeft = el('span', null, status, 'Ready');
     this.statusRight = el('span', null, status, '');
     this.splitter(this.splitLeft, this.left, 'x', 1);
     this.splitter(this.splitRight, this.right, 'x', -1);
     this.splitter(this.splitBottom, this.bottom, 'y', -1);
+  }
+
+  commandBarDefault() {
+    return true;
+  }
+
+  refreshPlugins() {
+    const lua = this.app.lua;
+    if (!this.pluginBar) {
+      const tbs = this.root.querySelector('.st-toolbars');
+      if (!tbs) return;
+      this.pluginBar = el('div', 'st-toolbar st-plugin-toolbar', tbs);
+    }
+    this.pluginBar.replaceChildren();
+    const list = lua ? lua.toolbars.filter((t) => !t.destroyed) : [];
+    this.pluginBar.hidden = !list.length;
+    for (const tb of list) {
+      for (const b of tb.children.filter((c) => c.ClassName === 'PluginToolbarButton')) {
+        const btn = el('div', 'st-btn st-plugin-btn' + (b.active ? ' active' : ''), this.pluginBar);
+        btn.title = `${tb.props.get('Name')}: ${b.tooltip || b.text}`;
+        const i = el('i', null, btn);
+        el('span', null, btn, b.text || b.props.get('Name'));
+        btn.addEventListener('click', () => lua.clickButton(b));
+        if (b.icon) this.app.pluginIcon(b.icon).then((url) => {
+          if (url) i.style.backgroundImage = `url("${url}")`;
+        });
+      }
+    }
   }
 
   splitter(handle, target, axis, sign) {
@@ -355,6 +429,64 @@ export class UI {
     if (y + h > window.innerHeight) y = Math.max(0, window.innerHeight - h);
     pop.style.left = x + 'px';
     pop.style.top = y + 'px';
+    return pop;
+  }
+
+  classPicker(rect, classes, onPick) {
+    this.closePopups();
+    const pop = el('div', 'st-popup st-classpicker', document.body);
+    this.popups.push({ el: pop });
+    const input = el('input', null, pop);
+    input.type = 'search';
+    input.placeholder = 'Search object';
+    input.spellcheck = false;
+    const list = el('div', 'st-classlist', pop);
+    let rows = [];
+    let active = 0;
+    const pick = (c) => {
+      this.closePopups();
+      onPick(c);
+    };
+    const draw = () => {
+      const q = input.value.trim().toLowerCase();
+      const hits = q ? classes.filter((c) => c.toLowerCase().includes(q)).sort((a, b) => a.toLowerCase().indexOf(q) - b.toLowerCase().indexOf(q)) : classes;
+      list.replaceChildren();
+      rows = hits.slice(0, 300).map((c, i) => {
+        const r = el('div', 'st-item' + (i === active ? ' hot' : ''), list);
+        const ic = el('div', 'st-icon', r);
+        ic.style.cssText = classIconStyle(classIconOf(c));
+        el('span', null, r, c);
+        r.addEventListener('click', () => pick(c));
+        r._cls = c;
+        return r;
+      });
+      if (!rows.length) el('div', 'st-classlist-empty', list, 'No objects found');
+    };
+    input.addEventListener('input', () => {
+      active = 0;
+      draw();
+    });
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') this.closePopups();
+      else if (e.key === 'Enter' && rows[active]) pick(rows[active]._cls);
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!rows.length) return;
+        rows[active].classList.remove('hot');
+        active = (active + (e.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length;
+        rows[active].classList.add('hot');
+        rows[active].scrollIntoView({ block: 'nearest' });
+      }
+    });
+    draw();
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    let x = rect.right + 4, y = rect.top;
+    if (x + w > window.innerWidth) x = Math.max(0, rect.left - w - 4);
+    if (y + h > window.innerHeight) y = Math.max(0, window.innerHeight - h);
+    pop.style.left = x + 'px';
+    pop.style.top = y + 'px';
+    input.focus();
     return pop;
   }
 

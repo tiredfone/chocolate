@@ -16,6 +16,13 @@ import { Animations, animAssetId } from '../shared/animator.js';
 import { placeBytes, assetNodes, appearance, luaSource, assetBytes, assetIdOf } from './assets.js';
 import { endpoint, config } from './config.js';
 import { social } from './social.js';
+import { meshDataFromAsset } from '../shared/csg.js';
+import { PlayerData } from './persistence.js';
+import { DEBUG_LUA, DebugAgent } from '../shared/debugger.js';
+import { writeModel } from '../shared/rbxlx.js';
+import { terrainOf } from '../shared/terrain.js';
+
+const HUM_STATE = [8, 8, 3, 5, 13, 12, 15, 14];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME = fs.readFileSync(path.join(HERE, '../shared/runtime.lua'), 'utf8');
@@ -57,7 +64,7 @@ function luaAsset(id) {
   return luaCache.get(id | 0) || null;
 }
 
-const CHARACTER_SCRIPTS = [['humanoidAnimateLocal', null], ['humanoidSound', null], ['humanoidHealth', 'Health']];
+const CHARACTER_SCRIPTS = [['humanoidAnimateLocal', null], ['humanoidSound', null], ['humanoidHealth', null]];
 let characterScripts = null;
 
 function loadCharacterScripts() {
@@ -68,6 +75,10 @@ function loadCharacterScripts() {
       const nodes = parsePlace(fs.readFileSync(path.join(HERE, '../content/fonts', file + '.rbxm')));
       for (const n of nodes) {
         if (only && n.props.get('Name')?.v !== only) continue;
+        for (const g of n.children) {
+          if (g.props.get('Name')?.v !== 'HealthGUI') continue;
+          for (const t of g.children) if (t.props.get('Name')?.v === 'Tray') t.props.set('Visible', { t: 'bool', v: false, tag: 'bool' });
+        }
         characterScripts.push(n);
       }
     } catch {}
@@ -103,6 +114,7 @@ export class Game {
     this.placeId = placeId;
     this.jobId = io.jobId || '';
     this.kind = io.kind || 'public';
+    this.placeData = io.placeData || null;
     this.privateId = io.privateId || 0;
     this.allowGear = io.allowGear !== false;
     this.era = io.era === 2018 ? 2018 : 2012;
@@ -116,6 +128,8 @@ export class Game {
     this.mice = new Map();
     this.toolMice = new Map();
     this.store = new Map();
+    this.playerData = new PlayerData(config.dataStoreDir, placeId, (k, m) => this.log(k, m));
+    this.playerData.keep = (uid) => [...this.clients.values()].some((c) => c.user.id === uid);
     this.t = 0;
     this.frame = 0;
     this.running = false;
@@ -139,7 +153,7 @@ export class Game {
     await Promise.all([rapierReady, preloadLibraries()]);
     const dm = this.dm;
     for (const s of ['Workspace', 'Players', 'Lighting', 'StarterGui', 'StarterPack', 'Teams', 'SoundService', 'Debris', 'ReplicatedStorage', 'ServerStorage', 'ServerScriptService', 'InsertService', 'RunService', 'BadgeService', 'Chat']) dm.service(s);
-    const bytes = await placeBytes(this.placeId);
+    const bytes = this.placeData ? this.placeData : await placeBytes(this.placeId);
     const nodes = parsePlace(bytes);
     for (const n of nodes) {
       const wrap = n.children.filter((c) => c.cls === 'Model' && c.props.get('Name')?.v === n.cls);
@@ -163,6 +177,10 @@ export class Game {
       excluded: (p) => !!liveCharacterOf(p),
       onTouch: (a, b, started) => this.pendingTouches.push([a, b, started]),
       onFallen: (parts) => this.fallen(parts),
+      unionMesh: (url) => {
+        const id = assetIdOf(url);
+        return id ? assetBytes(id).then(meshDataFromAsset).catch(() => null) : null;
+      },
     });
     this.physics.attachWorkspace(ws);
     this.replicator = new Replicator(dm);
@@ -174,11 +192,20 @@ export class Game {
       },
     });
     if (this.era === 2018) this.prepare2018();
+    this.setupTerrain();
     this.host = new ScriptHost(dm, this.env());
     this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
     for (const [name, id] of Object.entries(SERVER_LIBRARIES)) this.host.libraries.set(name, String(id));
     if (this.era === 2018) this.host.flags = FLAGS_2018;
-    await this.host.init(() => Lua.create(), RUNTIME, this.era === 2018 ? [{ source: load2018().runtime, name: 'runtime2018' }] : []);
+    await this.host.init(() => Lua.create(), RUNTIME, [...(this.era === 2018 ? [{ source: load2018().runtime, name: 'runtime2018' }] : []), ...(this.kind === 'test' ? [{ source: DEBUG_LUA, name: 'debug' }] : [])]);
+    if (this.kind === 'test' && this.io.debug) {
+      this.debugger = new DebugAgent(this.host, (info) => this.io.debug(info));
+      const init = this.io.debugInit;
+      if (init) {
+        this.debugger.handle({ cmd: 'bps', bps: init.bps });
+        this.debugger.handle({ cmd: 'watches', watches: init.watches });
+      }
+    }
     if (this.era === 2018) this.core.starterScript(dm.service('ScriptContext'), true);
     for (const d of ws.descendants()) if (d.ClassName === 'Model' && d.findChildOfClass('Humanoid')) this.trackChar(d);
     for (let i = 0; i < 3; i++) this.host.tick(this.t);
@@ -188,9 +215,26 @@ export class Game {
     const begin = performance.now();
     while (performance.now() - begin < 15000) {
       const quiet = performance.now() - Math.max(begin, this.lastLoadChange || 0);
-      if (!(this.pendingLoads > 0) && quiet >= 500) break;
+      if (!(this.pendingLoads > 0) && !(this.physics && this.physics.unionWaiting.size) && quiet >= 500) break;
       await new Promise((r) => setTimeout(r, 50));
     }
+  }
+
+  setupTerrain() {
+    const dm = this.dm;
+    const ws = dm.services.get('Workspace');
+    let t = ws.findChildOfClass('Terrain');
+    if (!t) {
+      t = dm.create('Terrain', null);
+      t.props.set('Name', 'Terrain');
+      t.props.set('Anchored', true);
+      t.props.set('Locked', true);
+      dm.setParent(t, ws);
+    }
+    this.terrain = terrainOf(t, this.era);
+    this.terrain.takeDirty();
+    this.physics.setTerrain(t, this.terrain);
+    this.terrain.listeners.add((keys) => this.broadcast({ t: 'terrain', d: this.terrain.encode(keys) }));
   }
 
   prepare2018() {
@@ -247,6 +291,23 @@ export class Game {
     };
   }
 
+  applyStarterPlayer(player) {
+    const sp = this.dm.services.get('StarterPlayer');
+    if (!sp) return;
+    const map = [
+      ['CameraMaxZoomDistance', 'CameraMaxZoomDistance'], ['CameraMinZoomDistance', 'CameraMinZoomDistance'], ['CameraMode', 'CameraMode'],
+      ['DevCameraOcclusionMode', 'DevCameraOcclusionMode'], ['DevComputerCameraMovementMode', 'DevComputerCameraMode'], ['DevComputerMovementMode', 'DevComputerMovementMode'],
+      ['DevTouchCameraMovementMode', 'DevTouchCameraMode'], ['DevTouchMovementMode', 'DevTouchMovementMode'], ['EnableMouseLockOption', 'DevEnableMouseLock'],
+      ['HealthDisplayDistance', 'HealthDisplayDistance'], ['NameDisplayDistance', 'NameDisplayDistance'], ['AutoJumpEnabled', 'AutoJumpEnabled'],
+    ];
+    for (const [from, to] of map) {
+      if (!sp.info.all.has(from) || !player.info.all.has(to)) continue;
+      const v = sp.props.get(from);
+      if (v !== undefined && v !== null) player.props.set(to, v);
+    }
+    if (sp.info.all.has('LoadCharacterAppearance') && player.info.all.has('CanLoadCharacterAppearance')) player.props.set('CanLoadCharacterAppearance', sp.props.get('LoadCharacterAppearance') !== false);
+  }
+
   copyPlayerScripts(player) {
     const sp = this.dm.services.get('StarterPlayer');
     const sps = sp && sp.findChildOfClass('StarterPlayerScripts');
@@ -283,6 +344,7 @@ export class Game {
       this.dm.emit(this.dm.root, '__Close');
       await new Promise((r) => setTimeout(r, 2500));
     }
+    this.playerData.flushAll();
     this.stop();
   }
 
@@ -404,9 +466,36 @@ export class Game {
         if (c && placeId > 0) this.io.send(c.cid, JSON.stringify({ t: 'teleport', place: placeId | 0 }));
       },
       saveData: async (pl, k, kind, v) => {
-        this.store.set(`${pl.props.get('userId')}:${kind}:${k}`, v);
+        const uid = pl.props.get('userId') | 0;
+        if (uid <= 0) return;
+        const val = kind === 'n' ? (Number.isFinite(+v) ? +v : 0) : kind === 'b' ? !!v : v == null ? '' : String(v);
+        await this.playerData.set(uid, kind, k, val);
+        if (!pl.destroyed) dm.setProp(pl, 'DataComplexity', this.playerData.complexity(uid));
       },
-      loadData: async (pl, k, kind) => this.store.get(`${pl.props.get('userId')}:${kind}:${k}`),
+      loadData: async (pl, k, kind) => {
+        const uid = pl.props.get('userId') | 0;
+        return uid > 0 ? this.playerData.get(uid, kind, k) : null;
+      },
+      waitForData: async (pl) => {
+        const uid = pl.props.get('userId') | 0;
+        if (uid > 0) await this.playerData.load(uid);
+        return true;
+      },
+      saveInstance: async (pl, k, inst) => {
+        const uid = pl.props.get('userId') | 0;
+        if (uid <= 0) return;
+        const xml = inst && !inst.destroyed ? writeModel(dm, [inst]) : null;
+        await this.playerData.set(uid, 'i', k, xml);
+      },
+      loadInstance: async (pl, k) => {
+        const uid = pl.props.get('userId') | 0;
+        const xml = uid > 0 ? await this.playerData.get(uid, 'i', k) : null;
+        if (!xml) return null;
+        const made = dm.load(parsePlace(String(xml)), null);
+        const top = made.find((m) => !m.parent) || null;
+        for (const m of made) if (!m.parent && m !== top) dm.destroy(m, true);
+        return top;
+      },
       bubbleChat: (part, msg, color) => {
         if (part && part.isA('BasePart')) this.broadcast({ t: 'bubble', id: part.id, m: cleanText(msg, MAX_CHAT), c: (typeof color === 'number' ? color : color && color.value) | 0 });
       },
@@ -502,6 +591,8 @@ export class Game {
     player.props.set('CharacterAppearance', endpoint('appearance', user.id) || '');
     player.props.set('MembershipType', user.membership | 0);
     player.props.set('AccountAge', user.age | 0);
+    player.props.set('DataReady', false);
+    player.props.set('DataComplexityLimit', 45000);
     player.data = Object.assign(player.data || {}, { avatarType: user.avatarType === 'R15' ? 'R15' : 'R6', scale: user.scale || null });
     const bp = dm.create('Backpack', player);
     bp.props.set('Name', 'Backpack');
@@ -530,7 +621,10 @@ export class Game {
     }
     for (const o of dm.observers) if (o.created) for (const x of made) o.created(x);
     this.assignTeam(player);
-    if (this.era === 2018) this.copyPlayerScripts(player);
+    if (this.era === 2018) {
+      this.applyStarterPlayer(player);
+      this.copyPlayerScripts(player);
+    }
     const client = { cid, user, player, ready: false, seq: 0, lastChat: 0, dev: !!user.dev, remoteT: 0, remoteN: 0 };
     this.clients.set(cid, client);
     this.replicator.addClient(cid, player, (s) => this.io.send(cid, s));
@@ -544,11 +638,16 @@ export class Game {
     const rc = this.replicator.clients.get(cid);
     const snap = this.replicator.snapshotFor(rc);
     const anims = this.era === 2018 ? this.preloadAnims(player.data && player.data.avatarType === 'R15') : [];
-    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap, anims }));
+    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap, anims, terrain: this.terrain && this.terrain.chunks.size ? this.terrain.encode() : null }));
     rc.ready = true;
     client.ready = true;
     if (client.dev && this.outHistory) for (const line of this.outHistory) this.io.send(cid, line);
     for (const s of this.anims.snapshot()) this.io.send(cid, JSON.stringify({ t: 'anim', op: 'play', ...s }));
+    this.playerData.load(user.id).then(() => {
+      if (player.destroyed) return;
+      dm.setProp(player, 'DataComplexity', this.playerData.complexity(user.id));
+      dm.setProp(player, 'DataReady', true);
+    }).catch(() => {});
     dm.emit(players, 'PlayerAdded', player);
     this.broadcast({ t: 'sys', m: `${user.name} has joined the game.` });
     this.loadFriendStatuses(client).catch(() => {});
@@ -612,9 +711,15 @@ export class Game {
     this.dm.emit(players, 'PlayerRemoving', pl);
     const ch = pl.props.get('Character');
     if (ch && !ch.destroyed) this.dm.destroy(ch);
-    if (!pl.destroyed) this.dm.destroy(pl);
+    if (!pl.destroyed) {
+      if (pl.parent) this.dm.setParent(pl, null);
+      setTimeout(() => {
+        if (!pl.destroyed) this.dm.destroy(pl);
+      }, 10000);
+    }
     this.mice.delete(pl);
     this.toolMice.delete(pl);
+    this.playerData.release(c.user.id);
     this.broadcast({ t: 'sys', m: `${c.user.name} has left the game.` });
   }
 
@@ -730,12 +835,68 @@ export class Game {
     const old = player.props.get('Character');
     if (old && !old.destroyed) dm.destroy(old);
     const uid = player.props.get('userId');
-    const look = await appearance(uid).catch(() => ({ colors: null, assets: [], gear: [] }));
+    const starter = this.era === 2018 ? dm.services.get('StarterPlayer') : null;
+    const custom = starter && starter.children.find((c) => c.ClassName === 'Model' && c.props.get('Name') === 'StarterCharacter' && c.findChildOfClass('Humanoid'));
+    const skipLook = !!custom || (player.info.all.has('CanLoadCharacterAppearance') && player.props.get('CanLoadCharacterAppearance') === false);
+    const look = skipLook ? { colors: null, assets: [], gear: [] } : await appearance(uid).catch(() => ({ colors: null, assets: [], gear: [] }));
+    const nodeCache = new Map();
+    const nodesOf = (id) => {
+      if (!nodeCache.has(id)) nodeCache.set(id, assetNodes(id).catch((e) => {
+        this.log('warn', `appearance asset ${id}: ${e.message}`);
+        return null;
+      }));
+      return nodeCache.get(id);
+    };
     if (player.destroyed || !player.parent) return;
     const { pos, spawn } = this.spawnPoint(player);
-    const r15 = this.era === 2018 && player.data && player.data.avatarType === 'R15' && load2018().r15;
-    const { model, humanoid } = r15 ? buildR15(dm, load2018().r15, player.props.get('Name'), pos, player.data.scale) : buildCharacter(dm, player.props.get('Name'), pos, { rootPart: this.era === 2018 });
-    for (const n of this.era === 2018 ? (r15 ? load2018().characterR15 : load2018().character) : loadCharacterScripts()) dm.load([n], model);
+    const r15 = !custom && this.era === 2018 && player.data && player.data.avatarType === 'R15' && load2018().r15;
+    let built;
+    if (custom) {
+      const m = this.cloneAlways(custom);
+      m.props.set('Name', player.props.get('Name'));
+      built = { model: m, humanoid: m.findChildOfClass('Humanoid') };
+      const root = rootOf(m);
+      if (root) {
+        const cf = root.props.get('CFrame');
+        const off = [pos[0] - cf[0], pos[1] - cf[1], pos[2] - cf[2]];
+        for (const d of m.descendants()) if (d.isA('BasePart')) {
+          const c = d.props.get('CFrame').slice();
+          c[0] += off[0]; c[1] += off[1]; c[2] += off[2];
+          d.props.set('CFrame', c);
+        }
+      }
+    } else {
+      let pkgFolder = null;
+      if (r15) {
+        for (const id of look.assets) {
+          const ns = await nodesOf(id);
+          const f = ns && ns.find((n) => n.cls === 'Folder' && n.props.get('Name')?.v === 'R15ArtistIntent');
+          if (!f) continue;
+          if (pkgFolder) dm.destroy(pkgFolder, true);
+          pkgFolder = dm.load([f], null).find((m) => !m.parent) || null;
+        }
+        if (player.destroyed || !player.parent) {
+          if (pkgFolder) dm.destroy(pkgFolder, true);
+          return;
+        }
+      }
+      built = r15 ? buildR15(dm, load2018().r15, player.props.get('Name'), pos, player.data.scale, pkgFolder ? pkgFolder.children : null) : buildCharacter(dm, player.props.get('Name'), pos, { rootPart: this.era === 2018 });
+      if (pkgFolder) dm.destroy(pkgFolder, true);
+    }
+    const { model, humanoid } = built;
+    for (const n of this.era === 2018 ? (r15 ? load2018().characterR15 : load2018().character) : loadCharacterScripts()) {
+      const nm = n.props.get('Name');
+      if (custom && model.findChild(nm && nm.v !== undefined ? nm.v : nm)) continue;
+      dm.load([n], model);
+    }
+    const sh = starter && starter.children.find((c) => c.ClassName === 'Humanoid' && c.props.get('Name') === 'StarterHumanoid');
+    if (sh && humanoid && !custom) {
+      for (const [k, v] of sh.props) {
+        if (k === 'Name' || k === 'Health' || k === 'HipHeight' && r15 || !humanoid.info.all.has(k)) continue;
+        humanoid.props.set(k, Array.isArray(v) ? v.slice() : v);
+      }
+      if (humanoid.info.all.has('Health')) humanoid.props.set('Health', humanoid.props.get('MaxHealth'));
+    }
     if (this.era === 2018) {
       const scs = dm.services.get('StarterPlayer') && dm.services.get('StarterPlayer').findChildOfClass('StarterCharacterScripts');
       if (scs) for (const c of scs.children) {
@@ -755,7 +916,8 @@ export class Game {
     }
     for (const id of look.assets) {
       try {
-        const nodes = await assetNodes(id);
+        const nodes = await nodesOf(id);
+        if (!nodes) continue;
         const made = dm.load(nodes, model);
         for (const m of made) this.applyWearable(model, m);
       } catch (e) {
@@ -826,6 +988,7 @@ export class Game {
       if (st === STATES.jump) dm.emit(hum, 'Jumping', true);
       if (st === STATES.fall) dm.emit(hum, 'FreeFalling', true);
       if (st === STATES.climb) dm.emit(hum, 'Climbing', hum.props.get('WalkSpeed'));
+      if (this.era === 2018) dm.emit(hum, 'StateChanged', T.e('HumanoidStateType', HUM_STATE[prev] ?? 8), T.e('HumanoidStateType', HUM_STATE[st] ?? 8));
     }
     const speed = st === STATES.walk ? Math.hypot(rec.vel[0], rec.vel[2]) : 0;
     const running = speed > 0.5 ? Math.round(speed) : 0;
@@ -875,6 +1038,10 @@ export class Game {
       if (head) dm.setParent(inst, head);
     } else if (inst.isA('Tool') || inst.ClassName === 'HopperBin') {
       dm.destroy(inst);
+    } else if (inst.ClassName === 'Folder' && /^R15/i.test(String(inst.props.get('Name') || ''))) {
+      dm.destroy(inst, true);
+    } else if (inst.ClassName === 'CharacterMesh' && model.findChild('UpperTorso')) {
+      dm.destroy(inst, true);
     } else if (inst.ClassName === 'Model') {
       for (const c of [...inst.children]) {
         dm.setParent(c, model);
@@ -1093,9 +1260,11 @@ export class Game {
           }
         }
         const r = rec.ctrl.update(dt, { move, jump: false });
+        const prev = rec.state;
         rec.torsoCF = r.cf;
         rec.vel = r.vel;
         rec.state = r.state;
+        this.humanoidEvents(rec, prev);
       }
       const poses = rec.rig.pose(rec.torsoCF);
       for (const [p, cf] of poses) this.dm.setProp(p, 'CFrame', cf, { physics: true });
@@ -1154,9 +1323,37 @@ export class Game {
     } else if (rec.ctrl) rec.ctrl.teleport(rec.torsoCF);
   }
 
+  sweepTouches(rec, from, to) {
+    const dist = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    if (dist < 1.2 || dist > 60) return;
+    const R = this.physics.R;
+    const torso = rootOf(rec.model);
+    if (!torso) return;
+    if (!this.sweepBox) this.sweepBox = new R.Cuboid(1, 2.5, 0.6);
+    const q = C.toQuat(to);
+    const rot = { x: q[0], y: q[1], z: q[2], w: q[3] };
+    const steps = Math.ceil(dist / 0.8);
+    const hit = new Set();
+    for (let i = 1; i < steps; i++) {
+      const k = i / steps;
+      const at = { x: from[0] + (to[0] - from[0]) * k, y: from[1] + (to[1] - from[1]) * k - 0.5, z: from[2] + (to[2] - from[2]) * k };
+      this.physics.world.intersectionsWithShape(at, rot, this.sweepBox, (c) => {
+        const r = this.physics.byHandle.get(c.handle);
+        if (r && r.part && r.touch && !r.character && !r.sensorOnly && !liveCharacterOf(r.part)) hit.add(r.part);
+        return true;
+      });
+    }
+    for (const part of hit) {
+      if (part.destroyed || this.physics.touchingParts(part).some((o) => o.isDescendantOf(rec.model))) continue;
+      this.pendingTouches.push([part, torso, true]);
+      this.pendingTouches.push([part, torso, false]);
+    }
+  }
+
   handleTouches() {
     const list = this.pendingTouches;
     this.pendingTouches = [];
+    if (!list.length) return false;
     for (const [a, b, started] of list) {
       if (a.destroyed || b.destroyed) continue;
       const ca = liveCharacterOf(a), cb = liveCharacterOf(b);
@@ -1187,6 +1384,7 @@ export class Game {
         }
       }
     }
+    return true;
   }
 
   handleExplosions() {
@@ -1301,7 +1499,9 @@ export class Game {
           c.tpPending = { t: 'tp', s: rec.tpSeq, c: flat(rec.torsoCF) };
           return;
         }
+        const was = rec.torsoCF;
         rec.torsoCF = C.orthonormalize(cf);
+        this.sweepTouches(rec, was, rec.torsoCF);
         rec.vel = v;
         const prev = rec.state;
         rec.state = Math.max(0, Math.min(7, m.st | 0));
@@ -1579,6 +1779,7 @@ export class Game {
     this.frame++;
     try {
       this.host.tick(this.t);
+      if (this.terrain) this.terrain.flush();
       const rs = this.dm.services.get('RunService');
       if (rs && (this.dm.hasListener(rs, 'Stepped') || this.dm.hasListener(rs, 'Heartbeat'))) {
         this.dm.emit(rs, 'Stepped', this.t, dt);
@@ -1588,7 +1789,7 @@ export class Game {
       this.updateChars(dt);
       this.handleExplosions();
       this.physics.step(dt);
-      this.handleTouches();
+      if (this.handleTouches()) this.host.tick(this.t);
       this.dm.services.get('Workspace').props.set('DistributedGameTime', this.t);
       if (this.frame % 2 === 0) this._ph = this.collectPhys();
       this.replicator.flush((client, msg) => this.physExtras(client, msg));

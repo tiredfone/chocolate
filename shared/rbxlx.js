@@ -1,4 +1,5 @@
 import { isService } from './classes.js';
+import { storeTerrain } from './terrain.js';
 
 const HEADER = '<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">\n\t<External>null</External>\n\t<External>nil</External>\n';
 const SKIP = new Set(['Archivable', 'RobloxLocked', 'DistributedGameTime', 'LocalPlayer', 'NumPlayers', 'JobId', 'PlaceId', 'CreatorId', 'GameId', 'Parent', 'ClassName']);
@@ -69,7 +70,7 @@ function value(type, tag, name, v, refOf) {
 }
 
 export function writePlace(dm) {
-  const tops = dm.root.children.filter((c) => c.fileProps || KEEP_SERVICES.has(c.ClassName) || (isService(c.ClassName) && c.children.some((k) => !k.fileProps)));
+  const tops = dm.root.children.filter((c) => c.fileProps || c.keepService || KEEP_SERVICES.has(c.ClassName) || (isService(c.ClassName) && c.children.some((k) => !k.fileProps)));
   return serialize(dm, tops);
 }
 
@@ -122,9 +123,11 @@ function serialize(dm, tops, opts = {}) {
       const v = inst.props.get(name);
       const always = name === 'Name' || (inst.isA('BasePart') && (name === 'CFrame' || name === 'Size' || name === 'BrickColor'));
       if (fp && !from && !(dirty && dirty.has(name)) && !always) continue;
+      if (!from && !(dirty && dirty.has(name)) && inst.extra && inst.extra.has(name) && inst.extra.get(name).t === 'raw') continue;
       const xml = value(p.type, from && from.tag, from ? from.raw : serialName(inst, name), v, refOf);
       if (xml) out.push(`${pad}\t\t${xml}\n`);
     }
+    if (inst.terrain) storeTerrain(inst);
     if (inst.extra) {
       for (const [name, pv] of inst.extra) {
         let xml;
