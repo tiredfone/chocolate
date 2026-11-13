@@ -89,6 +89,40 @@ export async function assetBytes(id) {
   return bytes;
 }
 
+const ANIM_CACHE = 'chocolate-animations-v1';
+const ANIM_CACHE_MAX = 80;
+
+async function animCache() {
+  try {
+    return typeof caches !== 'undefined' ? await caches.open(ANIM_CACHE) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function animationBytes(id) {
+  const url = new URL(endpointUrl('asset', id), location.href).href;
+  const cache = await animCache();
+  if (cache) {
+    const hit = await cache.match(url).catch(() => null);
+    if (hit) {
+      const bytes = new Uint8Array(await hit.arrayBuffer());
+      if (bytes.length) {
+        raw.set(id, Promise.resolve(bytes));
+        return assetBytes(id);
+      }
+    }
+  }
+  const bytes = await assetBytes(id);
+  if (cache && bytes.length && new TextDecoder().decode(bytes.subarray(0, 65536)).includes('KeyframeSequence')) {
+    cache.put(url, new Response(bytes.slice(), { headers: { 'Content-Type': 'application/octet-stream' } })).then(async () => {
+      const keys = await cache.keys();
+      for (const k of keys.slice(0, Math.max(0, keys.length - ANIM_CACHE_MAX))) await cache.delete(k);
+    }).catch(() => {});
+  }
+  return bytes;
+}
+
 function looksLikeImage(b) {
   return (b[0] === 0x89 && b[1] === 0x50) || (b[0] === 0xff && b[1] === 0xd8) || (b[0] === 0x47 && b[1] === 0x49) || (b[0] === 0x42 && b[1] === 0x4d) || (b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57);
 }

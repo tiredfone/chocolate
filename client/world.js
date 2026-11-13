@@ -6,7 +6,7 @@ import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
 import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES, rootOf } from '../shared/humanoid.js';
-import { loadAudio, assetId, builtin, loadCoreSources, assetBytes, publicPath, endpointUrl, useContent2018 } from './assets.js';
+import { loadAudio, assetId, builtin, loadCoreSources, assetBytes, animationBytes, publicPath, endpointUrl, useContent2018 } from './assets.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 
@@ -117,7 +117,14 @@ export class ClientWorld {
     uis.props.set('MouseEnabled', !this.touch);
     uis.props.set('KeyboardEnabled', !this.touch);
     this.host = new ScriptHost(dm, this.env());
-    this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
+    this.anims = new Animations(dm, async (id) => {
+      const bytes = await animationBytes(id);
+      if (!new TextDecoder().decode(bytes.subarray(0, 8)).startsWith('<roblox')) throw new Error('asset ' + id + ' is not a model');
+      const model = dm.create('Model', null);
+      model.props.set('Name', 'Model');
+      dm.load(parsePlace(bytes), model);
+      return model;
+    });
     if (pack) this.host.flags = FLAGS_2018;
     await this.host.init(luaFactory, runtimeSrc, pack && pack.runtime ? [{ source: pack.runtime, name: 'runtime2018' }] : []);
     if (pack) {
