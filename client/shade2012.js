@@ -126,6 +126,13 @@ varying vec3 vTP;
 vec4 toGamma(vec4 c) {
   return vec4(mix(pow(c.rgb, vec3(0.41666)) * 1.055 - vec3(0.055), c.rgb * 12.92, vec3(lessThanEqual(c.rgb, vec3(0.0031308)))), c.a);
 }
+float softWhite1(float x) {
+  if (x <= 0.75) return x;
+  return 0.75 + 0.25 * (1.0 - exp(4.0 * (0.75 - x)));
+}
+vec3 softWhite(vec3 v) {
+  return vec3(softWhite1(v.r), softWhite1(v.g), softWhite1(v.b));
+}
 void main() {
   vec3 N = normalize(vWN);
   if (!gl_FrontFacing) N = -N;
@@ -148,7 +155,7 @@ void main() {
       vec4 sv = toGamma(textureGrad(studMap, vec2(sf.x, (4.0 - studRow + sf.y) / 5.0), dFdx(so) * vec2(1.0, 0.2), dFdy(so) * vec2(1.0, 0.2)));
     #endif
     if (sv.a < 0.004) discard;
-    gl_FragColor = vec4(sv.rgb * mix(shadowTint, vec3(1.0), dot(N, lamp0Dir) > 0.0 ? getShadowMask() : 0.0), sv.a);
+    gl_FragColor = vec4(sv.rgb * mix(shadowTint, vec3(1.0), getShadowMask() * smoothstep(0.0, 0.25, dot(N, lamp0Dir))), sv.a);
     #include <fog_fragment>
     return;
   #endif
@@ -158,7 +165,7 @@ void main() {
     float ndl0 = dot(N, lamp0Dir);
     vec3 H = normalize(V + lamp0Dir);
     float spec = ndl0 > 0.0 ? pow(max(dot(N, H), 0.0), specExp) : 0.0;
-    vec3 lit = clamp(base.rgb * (max(ndl0, 0.0) * lamp0Color + max(dot(N, lamp1Dir), 0.0) * lamp1Color + ambColor), 0.0, 1.0);
+    vec3 lit = softWhite(max(base.rgb * (max(ndl0, 0.0) * lamp0Color + max(dot(N, lamp1Dir), 0.0) * lamp1Color + ambColor), vec3(0.0)));
     #ifdef USE_MATTEX
       vec2 mt = vec2(dot(matU, vec4(vTP, 1.0)), dot(matV, vec4(vTP, 1.0)));
       vec4 m = toGamma(texture2D(matMap, mt));
@@ -191,11 +198,11 @@ void main() {
       vec3 env = toGamma(textureCube(envMap, vec3(-r.x, r.y, r.z))).rgb;
       lit = mix(lit, env, refl);
     #endif
-    lit = clamp(lit, 0.0, 1.0);
+    lit = clamp(softWhite(max(lit, vec3(0.0))), 0.0, 1.0);
     #ifdef ERA2018
-      lit *= mix(shadowTint, vec3(1.0), ndl0 > 0.0 ? getShadowMask() : 1.0);
+      lit *= mix(shadowTint, vec3(1.0), mix(1.0, getShadowMask(), smoothstep(0.0, 0.25, ndl0)));
     #else
-      lit *= mix(shadowTint, vec3(1.0), ndl0 > 0.0 ? getShadowMask() : 0.0);
+      lit *= mix(shadowTint, vec3(1.0), getShadowMask() * smoothstep(0.0, 0.25, ndl0));
     #endif
   #endif
   gl_FragColor = vec4(lit, base.a);
