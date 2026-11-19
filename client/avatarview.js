@@ -251,11 +251,7 @@ export class AvatarView {
       if (keep.length) for (const m of dm.load(keep, model)) tool = this.wear(model, m, tool);
     }
     partColorProps(model);
-    if (tool) {
-      gripWeld(dm, model, tool);
-      const sh = model.findChild('Torso') && model.findChild('Torso').findChild('Right Shoulder');
-      if (sh) sh.props.set('CurrentAngle', Math.PI / 2);
-    }
+    if (tool) gripWeld(dm, model, tool);
     const root = model.findChild('HumanoidRootPart');
     this.rootCF = r15 && root ? root.props.get('CFrame').slice() : C.cf(0, 3, 0);
     const rig = new Rig(model);
