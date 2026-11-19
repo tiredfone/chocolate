@@ -317,7 +317,15 @@ export class UI {
   }
 
   mobile() {
-    return window.matchMedia('(pointer: coarse) and (hover: none)').matches;
+    if (this.phone === undefined) {
+      const q = new URLSearchParams(location.search).get('touch');
+      const ua = navigator.userAgent || '';
+      const uad = navigator.userAgentData;
+      const touchMac = /Macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1 && !window.matchMedia('(any-pointer: fine)').matches;
+      this.phone = q === '1' ? true : q === '0' ? false : !!(uad && uad.mobile === true) || /Android|iPhone|iPod|iPad/i.test(ua) || touchMac;
+      document.documentElement.classList.toggle('st-phone', this.phone);
+    }
+    return this.phone;
   }
 
   layout() {

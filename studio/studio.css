@@ -597,18 +597,17 @@ html, body {
   border-color: var(--st-hover-border);
 }
 
-@media (pointer: coarse) and (hover: none) {
-  .st-node .st-add {
-    display: block;
-    width: 20px;
-    height: 20px;
-    line-height: 19px;
-  }
-  .st-explorer-search input, .st-classpicker input {
-    font-size: 16px;
-    height: 28px;
-  }
+html.st-phone .st-node .st-add {
+  display: block;
+  width: 20px;
+  height: 20px;
+  line-height: 19px;
 }
+html.st-phone .st-explorer-search input, html.st-phone .st-classpicker input {
+  font-size: 16px;
+  height: 28px;
+}
+
 
 .st-props {
   width: 100%;
@@ -1305,125 +1304,102 @@ html, body {
 }
 
 
-@media (pointer: coarse) and (hover: none) {
-  html, body {
-    font-size: 13px;
-  }
-
-  .st-menubar {
-    height: 40px;
-  }
-
-  .st-menubar > .st-menu-title {
-    display: none;
-  }
-
-  .st-hamburger {
-    display: flex !important;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    font-size: 20px;
-  }
-
-  .st-toolbars {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .st-toolbar {
-    height: 40px;
-    flex: none;
-  }
-
-  .st-btn {
-    width: 38px;
-    height: 38px;
-  }
-
-  .st-btn > i {
-    transform: scale(1.5);
-  }
-
-  .st-dock-left, .st-dock-right, .st-dock-bottom, .st-splitter-v, .st-splitter-h {
-    display: none !important;
-  }
-
-  .st-touch {
-    display: block;
-  }
-
-  .st-sheet {
-    display: flex;
-    flex-direction: column;
-    flex: none;
-    height: 40vh;
-    border-top: 1px solid var(--st-border);
-    background: var(--st-bg);
-  }
-
-  .st-sheet.collapsed {
-    height: 34px;
-  }
-
-  .st-sheet-tabs {
-    display: flex;
-    height: 34px;
-    flex: none;
-  }
-
-  .st-sheet-tabs > div {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    border-right: 1px solid var(--st-border-light);
-    background: linear-gradient(var(--st-bar-top), var(--st-bar-bottom));
-    color: var(--st-caption-text);
-  }
-
-  .st-sheet-tabs > div.active {
-    background: #fff;
-    font-weight: bold;
-  }
-
-  .st-sheet-body {
-    flex: 1;
-    display: flex;
-    min-height: 0;
-  }
-
-  .st-sheet .st-pane-caption {
-    display: none;
-  }
-
-  .st-node {
-    height: 30px;
-  }
-
-  .st-props td {
-    height: 30px;
-  }
-
-  .st-props input[type="text"], .st-props select {
-    height: 28px;
-    font-size: 16px;
-  }
-
-  .st-popup .st-item {
-    height: 36px;
-  }
-
-  .st-objects input, .st-dialog input[type="text"], .st-editor textarea, .st-tb-top select, .st-tb-top input, .st-team-add input, .st-team-say, .st-br-left input {
-    font-size: 16px;
-  }
-
-  .st-statusbar {
-    display: none;
-  }
+html.st-phone, html.st-phone body {
+  font-size: 13px;
 }
+html.st-phone .st-menubar {
+  height: 40px;
+}
+html.st-phone .st-menubar > .st-menu-title {
+  display: none;
+}
+html.st-phone .st-hamburger {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  font-size: 20px;
+}
+html.st-phone .st-toolbars {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+html.st-phone .st-toolbar {
+  height: 40px;
+  flex: none;
+}
+html.st-phone .st-btn {
+  width: 38px;
+  height: 38px;
+}
+html.st-phone .st-btn > i {
+  transform: scale(1.5);
+}
+html.st-phone .st-dock-left, html.st-phone .st-dock-right, html.st-phone .st-dock-bottom, html.st-phone .st-splitter-v, html.st-phone .st-splitter-h {
+  display: none !important;
+}
+html.st-phone .st-touch {
+  display: block;
+}
+html.st-phone .st-sheet {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  height: 40vh;
+  border-top: 1px solid var(--st-border);
+  background: var(--st-bg);
+}
+html.st-phone .st-sheet.collapsed {
+  height: 34px;
+}
+html.st-phone .st-sheet-tabs {
+  display: flex;
+  height: 34px;
+  flex: none;
+}
+html.st-phone .st-sheet-tabs > div {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-right: 1px solid var(--st-border-light);
+  background: linear-gradient(var(--st-bar-top), var(--st-bar-bottom));
+  color: var(--st-caption-text);
+}
+html.st-phone .st-sheet-tabs > div.active {
+  background: #fff;
+  font-weight: bold;
+}
+html.st-phone .st-sheet-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+html.st-phone .st-sheet .st-pane-caption {
+  display: none;
+}
+html.st-phone .st-node {
+  height: 30px;
+}
+html.st-phone .st-props td {
+  height: 30px;
+}
+html.st-phone .st-props input[type="text"], html.st-phone .st-props select {
+  height: 28px;
+  font-size: 16px;
+}
+html.st-phone .st-popup .st-item {
+  height: 36px;
+}
+html.st-phone .st-objects input, html.st-phone .st-dialog input[type="text"], html.st-phone .st-editor textarea, html.st-phone .st-tb-top select, html.st-phone .st-tb-top input, html.st-phone .st-team-add input, html.st-phone .st-team-say, html.st-phone .st-br-left input {
+  font-size: 16px;
+}
+html.st-phone .st-statusbar {
+  display: none;
+}
+
 
 .st-2018 {
   --st-font: "Segoe UI", Tahoma, Verdana, sans-serif;
@@ -1883,21 +1859,20 @@ html, body {
   align-self: flex-end;
 }
 
-@media (pointer: coarse) and (hover: none) {
-  .st-gs-field input, .st-gs-field textarea, .st-gs-field select {
-    font-size: 16px;
-  }
-  .st-dialog .st-dlg-body.st-gs {
-    flex-direction: column;
-  }
-  .st-gs-nav {
-    width: auto;
-    display: flex;
-    border-right: 0;
-    border-bottom: 1px solid var(--st-border);
-    overflow-x: auto;
-  }
+html.st-phone .st-gs-field input, html.st-phone .st-gs-field textarea, html.st-phone .st-gs-field select {
+  font-size: 16px;
 }
+html.st-phone .st-dialog .st-dlg-body.st-gs {
+  flex-direction: column;
+}
+html.st-phone .st-gs-nav {
+  width: auto;
+  display: flex;
+  border-right: 0;
+  border-bottom: 1px solid var(--st-border);
+  overflow-x: auto;
+}
+
 
 .st-playdoc {
   position: absolute;
