@@ -130,6 +130,50 @@ function studUvGeometry(geo) {
   return g;
 }
 
+function unionSurfaceGeometry(g, sx, sy, sz) {
+  const key = `${sx.toFixed(4)},${sy.toFixed(4)},${sz.toFixed(4)}`;
+  if (!g.userData.surfaces) g.userData.surfaces = new Map();
+  let out = g.userData.surfaces.get(key);
+  if (out) return out;
+  const P = g.attributes.position, N = g.attributes.normal, I = g.index;
+  const n = I ? I.count : P.count;
+  const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2), tp = new Float32Array(n * 3);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), fn = new THREE.Vector3();
+  for (let t = 0; t + 2 < n; t += 3) {
+    const ids = [0, 1, 2].map((j) => (I ? I.getX(t + j) : t + j));
+    a.set(P.getX(ids[0]) * sx, P.getY(ids[0]) * sy, P.getZ(ids[0]) * sz);
+    b.set(P.getX(ids[1]) * sx, P.getY(ids[1]) * sy, P.getZ(ids[1]) * sz);
+    c.set(P.getX(ids[2]) * sx, P.getY(ids[2]) * sy, P.getZ(ids[2]) * sz);
+    fn.copy(b).sub(a).cross(c.clone().sub(a));
+    if (fn.lengthSq() > 0) fn.normalize();
+    const ax = Math.abs(fn.x), ay = Math.abs(fn.y), az = Math.abs(fn.z);
+    const axis = ax >= ay && ax >= az ? 0 : ay >= az ? 1 : 2;
+    for (let j = 0; j < 3; j++) {
+      const o = t + j, i = ids[j];
+      const x = P.getX(i) * sx, y = P.getY(i) * sy, z = P.getZ(i) * sz;
+      pos[o * 3] = P.getX(i); pos[o * 3 + 1] = P.getY(i); pos[o * 3 + 2] = P.getZ(i);
+      nrm[o * 3] = N.getX(i); nrm[o * 3 + 1] = N.getY(i); nrm[o * 3 + 2] = N.getZ(i);
+      const u = axis === 0 ? z : x;
+      const v = axis === 1 ? z : y;
+      uv[o * 2] = u;
+      uv[o * 2 + 1] = v;
+      tp[o * 3] = u;
+      tp[o * 3 + 1] = v;
+      tp[o * 3 + 2] = x * fn.x + y * fn.y + z * fn.z;
+    }
+  }
+  out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  out.setAttribute('tpos', new THREE.BufferAttribute(tp, 3));
+  out.boundingBox = g.boundingBox;
+  out.computeBoundingSphere();
+  out.userData.shared = true;
+  g.userData.surfaces.set(key, out);
+  return out;
+}
+
 function wedgeGeometry(sx, sy, sz) {
   const hx = sx / 2, hy = sy / 2, hz = sz / 2;
   const P = {
@@ -1106,9 +1150,10 @@ export class Renderer {
       }
       g.userData.shared = true;
       const bb = g.boundingBox;
-      const base = Array.isArray(init) ? init : [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z];
-      mesh.scale.set(size[0] / (base[0] || 1), size[1] / (base[1] || 1), size[2] / (base[2] || 1));
-      mesh.geometry = g;
+      const base = Array.isArray(init) && init.every((v) => v > 0) ? init : [bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z];
+      const k = [size[0] / (base[0] || 1), size[1] / (base[1] || 1), size[2] / (base[2] || 1)];
+      mesh.scale.set(k[0], k[1], k[2]);
+      mesh.geometry = unionSurfaceGeometry(g, k[0], k[1], k[2]);
     };
     const inline = extra('MeshData');
     if (typeof inline === 'string' && inline.length > 8) {
@@ -1117,6 +1162,7 @@ export class Renderer {
         const raw = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) raw[i] = bin.charCodeAt(i);
         fit(unionGeometry(raw));
+        if (mesh.geometry.userData) mesh.geometry.userData.shared = false;
         return holder;
       } catch {}
     }

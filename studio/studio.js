@@ -1518,6 +1518,21 @@ export class Studio {
       rel[0] *= k[0];
       rel[1] *= k[1];
       rel[2] *= k[2];
+      if (k.some((v) => Math.abs(v - 1) > 1e-6) && d.info.all.has('Size')) {
+        const sz = d.props.get('Size').slice();
+        const out = sz.slice();
+        let axisAligned = true;
+        for (let i = 0; i < 3; i++) {
+          let hit = -1;
+          for (let j = 0; j < 3; j++) if (Math.abs(rel[3 + 3 * j + i]) > 0.999) hit = j;
+          if (hit < 0) axisAligned = false;
+          else out[i] = sz[i] * k[hit];
+        }
+        if (axisAligned) {
+          d.props.set('Size', out);
+          this.touch(d, 'Size');
+        }
+      }
       d.props.set('CFrame', C.mul(frame, rel));
       for (const name of ['CFrame']) this.touch(d, name);
     }
