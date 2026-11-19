@@ -98,7 +98,7 @@ export async function assetBytes(id) {
   return bytes;
 }
 
-const ANIM_CACHE = 'chocolate-animations-v1';
+const ANIM_CACHE = 'chocolate-animations-v2';
 const ANIM_CACHE_MAX = 80;
 
 async function animCache() {
