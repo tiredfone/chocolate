@@ -1,6 +1,8 @@
 import http from 'http';
 import crypto from 'crypto';
 import { Worker } from 'worker_threads';
+import { spawn } from 'child_process';
+import fs from 'fs';
 import { WebSocketServer } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -61,6 +63,10 @@ function startInstance(placeId, kind, privateId, max, allowGear, era = 2012, ext
       }
     } else if (m.t === 'log') {
       log(m.line);
+      if (p.captures && p.captures.size && /\[(error|warn|print)\]/.test(m.line)) {
+        const line = String(m.line).replace(/^\[place [^\]]+\] /, '').slice(0, 2000);
+        for (const c of p.captures) if (c.length < 200) c.push(line);
+      }
       if (p.debugSend && /\[(error|warn|print)\]/.test(m.line)) p.debugSend({ t: 'dbg', out: String(m.line).replace(/^\[place [^\]]+\] /, '').slice(0, 2000) });
     } else if (m.t === 'dbg') {
       if (p.debugSend) p.debugSend({ t: 'dbg', side: 'server', pause: m.data });
@@ -115,6 +121,17 @@ function cleanScale(sc) {
     if (Number.isFinite(v)) out[k] = Math.max(lim[k][0], Math.min(lim[k][1], v));
   }
   if (sc.depth === undefined) out.depth = out.width;
+  return out;
+}
+
+function cleanGenres(v) {
+  return Array.isArray(v) ? v.map((g) => String(g).slice(0, 24)).slice(0, 16) : [];
+}
+
+function cleanGearMap(v) {
+  const out = {};
+  if (!v || typeof v !== 'object') return out;
+  for (const k of Object.keys(v).slice(0, 64)) if (/^\d{1,12}$/.test(k)) out[k] = cleanGenres(v[k]);
   return out;
 }
 
@@ -234,6 +251,42 @@ function statusJson() {
   };
 }
 
+const ACTIVE_TYPES = new Set(['jump', 'key', 'click', 'chat', 'act', 'drive', 'equip', 'unequip', 'drop', 'hop']);
+function noteActivity(p, cid, str) {
+  const m = p && p.members.get(cid);
+  if (!m) return;
+  let msg;
+  try {
+    msg = JSON.parse(str);
+  } catch {
+    return;
+  }
+  const t = msg && msg.t;
+  let active = false;
+  if (t === 'char') {
+    const c = msg.c;
+    if (Array.isArray(c) && c.length >= 3) {
+      const x = +c[0], z = +c[2];
+      if (Number.isFinite(x) && Number.isFinite(z)) {
+        if (m.px === undefined) {
+          m.px = x;
+          m.pz = z;
+        } else if (Math.hypot(x - m.px, z - m.pz) > 1.5) {
+          m.px = x;
+          m.pz = z;
+          active = true;
+          if (m.cells.size < 64) m.cells.add(Math.round(x / 8) + ',' + Math.round(z / 8));
+        }
+      }
+    }
+  } else if (t === 'mouse') active = msg.b === 'down';
+  else if (ACTIVE_TYPES.has(t)) active = true;
+  if (!active) return;
+  m.lastActive = Date.now();
+  m.acts++;
+  if (m.kinds.size < 16) m.kinds.add(t);
+}
+
 let presenceTimer = null;
 function pushPresence() {
   if (!PRESENCE || presenceTimer) return;
@@ -246,9 +299,10 @@ async function sendPresence() {
   const seen = new Set();
   for (const p of places.values()) {
     if (p.dead) continue;
+    const nowMs = Date.now();
     for (const u of p.members.values()) if (!seen.has(u.id)) {
       seen.add(u.id);
-      users.push({ id: u.id, kind: 'play', place: p.placeId });
+      users.push({ id: u.id, kind: 'play', place: p.placeId, job: p.id, srv: p.kind, players: p.members.size, idle: Math.floor((nowMs - u.lastActive) / 1000), session: Math.floor((nowMs - u.joinedAt) / 1000), acts: u.acts, kinds: u.kinds.size, cells: u.cells.size });
     }
   }
   for (const st of studios.values()) for (const u of st.users()) if (!seen.has(u.id)) {
@@ -367,9 +421,90 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  if (req.url === '/run' && req.method === 'POST') {
+    keyedJson(req, res, 262144, (q) => {
+      const source = typeof q.source === 'string' ? q.source : '';
+      const p = places.get(String(q.job || ''));
+      if (!source.trim() || source.length > 200000) return { ok: false, error: 'No code given' };
+      if (!p || p.dead || p.kind === 'test') return { ok: false, error: 'That server is not running' };
+      if (!p.ready) return { ok: false, error: 'That server is still starting' };
+      const by = String(q.by || 'a developer').replace(/[^\w .-]/g, '').slice(0, 40);
+      const cap = [];
+      if (!p.captures) p.captures = new Set();
+      p.captures.add(cap);
+      p.worker.postMessage({ t: 'run', source, by });
+      log(`${p.tag} server code run by ${by} (${source.length} bytes)`);
+      return new Promise((resolve) => setTimeout(() => {
+        p.captures.delete(cap);
+        resolve({ ok: true, output: cap.slice(0, 200) });
+      }, Math.max(200, Math.min(5000, q.wait | 0 || 1500))));
+    });
+    return;
+  }
+  if (req.url === '/restart' && req.method === 'POST') {
+    keyedJson(req, res, 4096, () => {
+      setTimeout(restartSelf, 200);
+      return { ok: true, places: [...places.values()].filter((p) => !p.dead).length };
+    });
+    return;
+  }
   res.writeHead(404);
   res.end();
 });
+
+function keyedJson(req, res, max, fn) {
+  const given = String(req.headers['x-chocolate-key'] || '');
+  const ok = KEY.length > 0 && given.length === KEY.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(KEY));
+  let body = '';
+  req.on('data', (c) => {
+    body += c;
+    if (body.length > max) req.destroy();
+  });
+  req.on('end', () => {
+    if (!ok) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    let q = {};
+    try {
+      q = JSON.parse(body || '{}') || {};
+    } catch {}
+    Promise.resolve()
+      .then(() => fn(q))
+      .catch((e) => ({ ok: false, error: e.message }))
+      .then((out) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(out));
+      });
+  });
+}
+
+let restarting = false;
+function restartSelf() {
+  if (restarting) return;
+  restarting = true;
+  log('restarting');
+  for (const p of [...places.values()]) shutdown(p, 'The game server is restarting');
+  for (const s of sockets.values()) {
+    try {
+      s.ws.close(1012, 'restart');
+    } catch {}
+  }
+  setTimeout(() => {
+    let out = 'ignore';
+    try {
+      out = fs.openSync(config.logFile || '/tmp/chocolate-server.log', 'a');
+    } catch {}
+    const child = spawn('sh', ['-c', 'sleep 2; exec sh "$0"', path.join(HERE, 'start.sh')], { cwd: path.dirname(HERE), detached: true, stdio: ['ignore', out, out] });
+    child.unref();
+    try {
+      server.closeAllConnections();
+    } catch {}
+    server.close();
+    setTimeout(() => process.exit(0), 300);
+  }, 1500);
+}
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_STUDIO_MSG, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
 
@@ -387,6 +522,7 @@ wss.on('connection', async (ws, req, url) => {
   const ticket = url.searchParams.get('ticket') || '';
   const s = { ws, cid, place: null, joined: false, count: 0, window: Date.now() };
   sockets.set(cid, s);
+  ws.on('error', (e) => log(`socket ${cid} error: ${e && e.message}`));
   const early = [];
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
@@ -404,7 +540,10 @@ wss.on('connection', async (ws, req, url) => {
     }
     if (s.studio) s.studio.message(cid, str);
     else if (s.solo) soloMessage(s, str);
-    else s.place.worker.postMessage({ t: 'msg', cid, data: str });
+    else {
+      noteActivity(s.place, cid, str);
+      s.place.worker.postMessage({ t: 'msg', cid, data: str });
+    }
   });
   ws.on('close', () => {
     sockets.delete(cid);
@@ -502,18 +641,46 @@ wss.on('connection', async (ws, req, url) => {
   const p = pick.p;
   clearTimeout(p.idleTimer);
   s.place = p;
-  p.members.set(cid, { id: info.userId | 0, name: String(info.username) });
-  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6', scale: cleanScale(info.scale) } });
+  const joinedAt = Date.now();
+  p.members.set(cid, { id: info.userId | 0, name: String(info.username), joinedAt, lastActive: joinedAt, acts: 0, kinds: new Set(), cells: new Set(), px: undefined, pz: undefined });
+  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6', scale: cleanScale(info.scale), gearGenres: cleanGenres(info.gearGenres), gearMap: cleanGearMap(info.gearMap), animations: Array.isArray(info.animations) ? info.animations.map((a) => String(a)).filter((a) => /^\d{1,20}$/.test(a)).slice(0, 16) : [] } });
   s.joined = true;
   for (const str of early.splice(0)) p.worker.postMessage({ t: 'msg', cid, data: str });
   log(`${p.tag} ${info.username} (${info.userId}) connected`);
   pushPresence();
 });
 
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.readyState !== 1) continue;
+    if (ws.solarAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.solarAlive = false;
+    try {
+      ws.ping();
+    } catch {}
+  }
+}, 25000);
+wss.on('connection', (ws) => {
+  ws.solarAlive = true;
+  ws.on('pong', () => (ws.solarAlive = true));
+  ws.on('message', () => (ws.solarAlive = true));
+});
+
 server.listen(PORT, HOST, () => {
   log(`chocolate listening on ${HOST}:${PORT}`);
   sendPresence();
   setInterval(sendPresence, 60000);
+});
+
+process.on('uncaughtException', (e) => {
+  log(`uncaught exception: ${(e && e.stack) || e}`);
+});
+
+process.on('unhandledRejection', (e) => {
+  log(`unhandled rejection: ${(e && e.stack) || e}`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {

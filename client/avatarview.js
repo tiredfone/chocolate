@@ -267,6 +267,7 @@ export class AvatarView {
     dm.setParent(model, this.ws);
     if (old) dm.destroy(old);
     this.animIds = this.animsFrom(lists, r15 ? 'R15' : 'R6');
+    this.toolAnim = tool ? (r15 ? '507768375' : '182393478') : null;
     this.playPreview();
     this.wake(4000);
   }
@@ -282,6 +283,7 @@ export class AvatarView {
     const id = this.animIds[this.animName] || this.animIds.idle;
     const speed = this.animName === 'run' && id === this.animIds.walk ? 1.6 : 1;
     this.anims.op(this.hum, 'preview', 'play', id, 0.15, 1, speed);
+    if (this.toolAnim) this.anims.op(this.hum, 'tool', 'play', this.toolAnim, 0.15, 1, 1);
   }
 
   wear(model, inst, tool) {

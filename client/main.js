@@ -11,6 +11,7 @@ import { configure, publicPath, endpointUrl, loadContentIndex, contentUrl } from
 import { CursorLayer, CURSORS } from './cursor.js';
 import { DevConsole } from './devconsole.js';
 import { Input2018 } from './input2018.js';
+import { GameRecorder } from './recorder.js';
 import * as THREE from 'three';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent);
@@ -96,7 +97,7 @@ async function boot() {
   const [t, src] = await Promise.all([ticket(), fetch(publicPath('/shared/runtime.lua?v=') + cfg.version).then((r) => r.text()), RAPIER.init(), loadContentIndex()]);
   setStatus('Connecting');
   const net = new Net();
-  let world = null, renderer = null, camera = null, gui = null;
+  let world = null, renderer = null, camera = null, gui = null, recorder = null;
   const pending = [];
   let kicked = false;
   net.on('kick', (m) => {
@@ -125,7 +126,10 @@ async function boot() {
     const speaker = m.p ? dm.byId.get(m.p) : players.children.find((c) => c.ClassName === 'Player' && c.props.get('userId') === m.u);
     const kind = m.k === 'team' ? 1 : m.k === 'whisper' ? 2 : 0;
     const to = m.to ? dm.byId.get(m.to) || null : null;
-    if (speaker) dm.emit(players, 'PlayerChatted', T.e('PlayerChatType', kind), speaker, m.m, to);
+    if (speaker) {
+      dm.emit(players, 'PlayerChatted', T.e('PlayerChatType', kind), speaker, m.m, to);
+      dm.emit(speaker, 'Chatted', m.m, to);
+    }
     const head = m.h && dm.byId.get(m.h);
     if (head && gui && kind !== 2 && world.era !== 2018) gui.bubble(head, m.m);
   });
@@ -154,6 +158,9 @@ async function boot() {
     const players = world.dm.services.get('Players');
     if (a && b && players) world.dm.emit(players, 'FriendRequestEvent', a, b, T.e('FriendRequestEvent', m.e | 0));
   };
+  net.on('mktr', (m) => { if (world) world.onMarket(m); });
+  net.on('prompt', (m) => { if (world && world.ready) world.promptPurchase(m.kind, m.id | 0, !!m.equip); });
+  net.on('pver', (m) => { if (world && world.ready) world.purchaseVerified(m); });
   net.on('fs', (m) => {
     if (world && world.ready) applyFs(m);
     else pending.push(m);
@@ -164,9 +171,22 @@ async function boot() {
   });
   net.on('out', (m) => {
     devConsole.add('server', m.k, m.m);
-    if (!world || !world.ready) return;
+    if (!world) return;
+    world.isDev = true;
+    const mt = m.k === 'error' ? 3 : m.k === 'warn' ? 2 : 0;
+    if (world.era === 2018) {
+      if (!world.serverLog) world.serverLog = [];
+      const entry = { m: String(m.m), k: mt, t: Math.floor(Date.now() / 1000) };
+      world.serverLog.push(entry);
+      if (world.serverLog.length > 500) world.serverLog.shift();
+      if (!world.ready) return;
+      const ls2 = world.dm.services.get('LogService');
+      if (ls2) world.dm.emit(ls2, 'ServerMessageOut', entry.m, T.e('MessageType', mt), entry.t);
+      return;
+    }
+    if (!world.ready) return;
     const ls = world.dm.services.get('LogService');
-    if (ls) world.dm.emit(ls, 'MessageOut', '[server] ' + m.m, T.e('MessageType', m.k === 'error' ? 3 : m.k === 'warn' ? 2 : 0));
+    if (ls) world.dm.emit(ls, 'MessageOut', '[server] ' + m.m, T.e('MessageType', mt));
   });
   net.on('teleport', (m) => {
     if ((m.place | 0) > 0) location.href = pageUrl('play', m.place);
@@ -210,6 +230,10 @@ async function boot() {
           else if (root.requestFullscreen) root.requestFullscreen().catch(() => {});
         },
         inFullscreen: () => !!document.fullscreenElement,
+        recordToggle: () => {
+          if (!recorder) recorder = new GameRecorder({ root, canvas, world, uploadUrl: endpointUrl('videoUpload'), csrf: cfg.csrf, title: cfg.placeName || 'Solar recording', onChange: (on) => world && world.recordingChanged(on) });
+          recorder.toggle();
+        },
         screenshot: () => {
           if (!renderer) return;
           renderer.frame(0);
@@ -237,6 +261,7 @@ async function boot() {
           showFatal('Disconnected', msg);
         },
         focusTextBox: (inst, on) => gui && gui.focusTextBox(inst, on),
+        focusedTextBox: () => (gui && gui.focused) || null,
         setMessage: (msg) => gui && gui.setHint(msg),
         bubble: (part, msg) => gui && gui.bubble(part, msg),
         ownCharacter: (model) => {
@@ -251,6 +276,8 @@ async function boot() {
       });
       await world.init(m, RAPIER, () => Lua.create({ customWasmUri: publicPath('/client/vendor/liblua5.1.wasm') }), src);
       renderer = new Renderer(canvas, world);
+      world.renderer = renderer;
+      if (renderer.setAssemblies) renderer.setAssemblies(m.asm || [], []);
       renderer.attach();
       camera = new CameraController(world, renderer, canvas);
       gui = new Gui(root, world, renderer, {
@@ -283,7 +310,22 @@ async function boot() {
           new Promise((r) => setTimeout(r, 20000)),
         ])
         : Promise.resolve();
+      const characterReady = () => new Promise((resolve) => {
+        const players = world.dm.services.get('Players');
+        if (!players || !players.props.get('CharacterAutoLoads')) return resolve();
+        const t0 = performance.now();
+        const check = () => {
+          const ch = world.player && world.player.props.get('Character');
+          if ((ch && world.own && world.own.model === ch) || performance.now() - t0 > 30000) return resolve();
+          setTimeout(check, 100);
+        };
+        check();
+      });
       animsReady.then(() => {
+        const ch = world.player && world.player.props.get('Character');
+        if (!ch) setStatus('Loading character');
+        return characterReady();
+      }).then(() => {
         setStatus('Starting');
         finishLoading(world);
       });
@@ -308,12 +350,22 @@ function start(world, renderer, camera, gui, net) {
   const codes = new Set();
   let jumpQueued = false;
   const KEYMAP = { w: 'forward', arrowup: 'forward', s: 'back', arrowdown: 'back', a: 'left', d: 'right' };
+  const relock = () => {
+    const in18 = world.input2018;
+    if (in18 && in18.behavior !== 0 && document.pointerLockElement !== canvas && !gui.isTyping()) in18.setBehavior(in18.behavior);
+  };
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'F9') {
+    if (e.key === 'F12' && world && world.hooks && world.hooks.recordToggle) {
+      e.preventDefault();
+      if (!e.repeat) world.hooks.recordToggle();
+      return;
+    }
+    if (e.key === 'F9' && !world.input2018) {
       e.preventDefault();
       if (!e.repeat) devConsole.toggle();
       return;
     }
+    if (e.key !== 'Escape') relock();
     const in18 = world.input2018;
     if (in18) {
       in18.keyDown(e, gui.isTyping());
@@ -402,8 +454,9 @@ function start(world, renderer, camera, gui, net) {
   canvas.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch') return;
     const r = canvas.getBoundingClientRect();
-    ms.x = e.clientX - r.left;
-    ms.y = e.clientY - r.top;
+    const centered = camera.aimCentered();
+    ms.x = centered ? r.width / 2 : e.clientX - r.left;
+    ms.y = centered ? r.height / 2 : e.clientY - r.top;
     ms.ndc = [(ms.x / r.width) * 2 - 1, -(ms.y / r.height) * 2 + 1];
     world.emitMouse('Move');
   });
@@ -424,6 +477,7 @@ function start(world, renderer, camera, gui, net) {
     if (e.pointerType === 'touch') return;
     world.ensureAudio();
     if (gui.isTyping()) document.activeElement.blur();
+    relock();
     if (world.input2018) world.input2018.buttonDown(e.button, false, document.pointerLockElement === canvas ? null : [e.clientX, e.clientY]);
     if (e.button === 0) world.mouseDown(0);
   });
@@ -439,24 +493,38 @@ function start(world, renderer, camera, gui, net) {
     if (e.pointerType === 'touch') return;
     if (world.input2018) world.input2018.buttonUp(e.button, overGuiTarget(e), document.pointerLockElement === canvas ? null : [e.clientX, e.clientY]);
     if (e.button === 0 && ms.down) world.mouseUp(0);
-  });
+  }, true);
+  let wheelAcc = 0;
   canvas.addEventListener('wheel', (e) => {
-    world.emitMouse(e.deltaY > 0 ? 'WheelBackward' : 'WheelForward');
-    if (world.input2018) {
-      e.preventDefault();
-      world.input2018.wheel(e.deltaY > 0 ? -1 : 1, false);
+    const unit = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100;
+    if (Math.sign(e.deltaY) !== Math.sign(wheelAcc)) wheelAcc = 0;
+    wheelAcc += e.deltaY / unit;
+    while (Math.abs(wheelAcc) >= 1) {
+      wheelAcc -= Math.sign(wheelAcc);
+      world.emitMouse(e.deltaY > 0 ? 'WheelBackward' : 'WheelForward');
+      if (world.input2018) world.input2018.wheel(e.deltaY > 0 ? -1 : 1, false);
     }
+    if (world.input2018) e.preventDefault();
+    if (Math.abs(e.deltaY) >= unit * 0.99) wheelAcc = 0;
   }, { passive: false });
   let last = performance.now();
   let pingT = 0;
-  const FRAME_MS = world.era === 2018 ? 1000 / 60 : 1000 / 30;
+  let frameMs = 1000 / 30;
+  if (world.era === 2018 && world.host) {
+    const gs = world.host.userSettings().findChild('GameSettings');
+    if (gs) {
+      const syncCap = () => { frameMs = 1000 / Math.max(15, Math.min(240, +gs.props.get('FramerateCap') || 60)); };
+      syncCap();
+      world.dm.observe({ changed: (inst, name) => { if (inst === gs && name === 'FramerateCap') syncCap(); } });
+    }
+  }
   let due = last;
   const loop = (now) => {
     if (now < due - 1) {
       requestAnimationFrame(loop);
       return;
     }
-    due = due + FRAME_MS < now ? now + FRAME_MS : due + FRAME_MS;
+    due = due + frameMs < now ? now + frameMs : due + frameMs;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     const f = camera.forwardFlat(), rt = camera.rightFlat();
@@ -469,13 +537,14 @@ function start(world, renderer, camera, gui, net) {
       sd = tm[0];
     }
     const move = [f[0] * fw + rt[0] * sd, 0, f[2] * fw + rt[2] * sd];
-    const input = { move, face: camera.faceDir(), jump: held.has(' ') || jumpQueued || world.touchJump, forward: fw > 0.3, back: fw < -0.3, left: sd < -0.3, right: sd > 0.3 };
+    const input = { move, face: camera.faceDir(), jump: held.has(' ') || jumpQueued || world.touchJump, dismount: held.has('backspace'), forward: fw > 0.3, back: fw < -0.3, left: sd < -0.3, right: sd > 0.3 };
     jumpQueued = false;
     world.touchJump = false;
     try {
+      const tCpu = performance.now();
       world.update(dt, input);
       camera.update(dt);
-      if (camera.mouseLocked()) {
+      if (camera.aimCentered()) {
         const cr = canvas.getBoundingClientRect();
         ms.x = cr.width / 2;
         ms.y = cr.height / 2;
@@ -486,9 +555,11 @@ function start(world, renderer, camera, gui, net) {
       const cd = world.updateMouse(ray, renderer);
       const icon = (world.toolMouse && world.toolMouse.props.get('Icon')) || world.mouse.props.get('Icon');
       cursor.set(camera.shiftLock && camera.mouseLocked() && !camera.firstPerson ? CURSORS.mouseLock : icon || (cd ? CURSORS.hand : world.mouseHit && world.mouseHit.part ? CURSORS.arrow : CURSORS.far));
-      if (document.pointerLockElement === canvas) cursor.place(camera.mouseLocked());
+      if (document.pointerLockElement === canvas || camera.aimCentered()) cursor.place(camera.aimCentered(), true);
+      const tGpu = performance.now();
       renderer.frame(dt);
       gui.frame();
+      if (world.era === 2018) world.updatePerfStats(dt, tGpu - tCpu, performance.now() - tGpu);
     } catch (e) {
       console.error(e);
     }

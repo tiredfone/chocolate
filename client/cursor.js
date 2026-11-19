@@ -75,15 +75,17 @@ export class CursorLayer {
     resolveCursor(url).then((c) => {
       if (this.want !== url) return;
       this.current = c;
-      this.target.style.cursor = c ? `url("${c.src}") ${c.w >> 1} ${c.h >> 1}, ${this.fallback}` : this.fallback;
+      const css = c ? `url("${c.src}") ${c.w >> 1} ${c.h >> 1}, ${this.fallback}` : this.fallback;
+      this.target.style.cursor = css;
+      document.documentElement.style.setProperty('--ch-cursor', css);
       if (c) this.overlay.src = c.src;
       this.place();
     });
   }
 
-  place(center = false) {
+  place(center = false, force = false) {
     const c = this.current;
-    const locked = document.pointerLockElement === this.target;
+    const locked = document.pointerLockElement === this.target || (force && center);
     if (!c || !locked) {
       this.overlay.style.display = 'none';
       return;

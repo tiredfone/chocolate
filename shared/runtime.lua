@@ -19,6 +19,21 @@ require = nil
 dofile = nil
 loadfile = nil
 __RTDEBUG = debug debug = nil
+do
+  local rawTostring, dget, dset = tostring, __RTDEBUG.getmetatable, __RTDEBUG.setmetatable
+  tostring = function(v)
+    if type(v) == "function" then
+      local mt = dget(v)
+      if mt then
+        dset(v, nil)
+        local ok, s = pcall(rawTostring, v)
+        dset(v, mt)
+        if ok then return s end
+      end
+    end
+    return rawTostring(v)
+  end
+end
 os = { time = os_time, clock = os_clock, date = os_date, difftime = os_difftime }
 string.dump = nil
 collectgarbage = function(opt)
@@ -783,6 +798,14 @@ end
 Signal.Connect = Signal.connect
 Signal.connectFirst = Signal.connect
 Signal.connectLast = Signal.connect
+local strictConnect = Signal.connect
+function Signal.connect(s, fn)
+  if fn == nil then return Signal.__wrap(setmetatable({ connected = false }, ConnMT)) end
+  return strictConnect(s, fn)
+end
+Signal.Connect = Signal.connect
+Signal.connectFirst = Signal.connect
+Signal.connectLast = Signal.connect
 
 function Signal.wait(s)
   s = Signal.__box[s] or s
@@ -921,7 +944,10 @@ local instanceNewindex = function(u, k, v)
     error("Unable to assign function to property " .. tostring(k), 2)
   end
   local r = JS_SET(id, k, unpack(enc(v)))
-  if r then error(r, 2) end
+  if r then
+    if v == nil and not LuaMethods.__gameCaller(3) then return end
+    error(r, 2)
+  end
 end
 
 template = newproxy(true)
@@ -984,7 +1010,7 @@ local function callAsync(id, method, ...)
   end
   return decResult(r, 3)
 end
-for _, m in ipairs({ "LoadAsset", "loadAsset", "GetProductInfo", "AwardBadge", "UserHasBadge", "IsInGroup", "GetRankInGroup", "GetRoleInGroup", "IsFriendsWith", "isFriendsWith", "isInGroup", "PlayerOwnsAsset", "GetCollectibles", "SaveNumber", "LoadNumber", "SaveString", "LoadString", "SaveBoolean", "LoadBoolean", "SaveInstance", "LoadInstance", "WaitForDataReady", "waitForDataReady", "GetFriendsOnline", "LoadCharacter", "loadCharacter", "GetUserIdFromNameAsync", "GetNameFromUserIdAsync", "HttpGet", "PostAsync", "GetAsync" }) do
+for _, m in ipairs({ "PlayerHasPass", "LoadAsset", "loadAsset", "GetProductInfo", "AwardBadge", "UserHasBadge", "IsInGroup", "GetRankInGroup", "GetRoleInGroup", "IsFriendsWith", "isFriendsWith", "isInGroup", "PlayerOwnsAsset", "GetCollectibles", "SaveNumber", "LoadNumber", "SaveString", "LoadString", "SaveBoolean", "LoadBoolean", "SaveInstance", "LoadInstance", "WaitForDataReady", "waitForDataReady", "GetFriendsOnline", "LoadCharacter", "loadCharacter", "GetUserIdFromNameAsync", "GetNameFromUserIdAsync", "HttpGet", "PostAsync", "GetAsync" }) do
   LuaMethods[m] = function(self, id, ...) return callAsync(id, m, ...) end
 end
 

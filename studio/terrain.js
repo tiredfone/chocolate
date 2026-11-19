@@ -50,6 +50,7 @@ export class TerrainTools {
     this.box = null;
     this.preview = null;
     this.stroke = null;
+    this.planeLock = true;
   }
 
   terrain() {
@@ -161,6 +162,11 @@ export class TerrainTools {
     if (this.era === 2018) slider('Size', 1, 64, 1, () => this.size, (v) => (this.size = v), (v) => `${v * 2} studs`);
     else slider('Size', 1, 12, 1, () => this.size, (v) => (this.size = v), (v) => `${v} cells`);
     slider('Strength', 0.1, 1, 0.05, () => this.strength, (v) => (this.strength = v), (v) => `${Math.round(v * 100)}%`);
+    const lock = row('Plane Lock');
+    const lockBox = el('input', null, lock);
+    lockBox.type = 'checkbox';
+    lockBox.checked = this.planeLock;
+    lockBox.addEventListener('change', () => (this.planeLock = lockBox.checked));
     if (this.era === 2018) {
       const r = row('Shape');
       for (const s of ['sphere', 'cube']) {
@@ -193,19 +199,25 @@ export class TerrainTools {
         this.renderPane();
       });
     }
-    el('div', 'st-terrain-hint', box, this.era === 2018 ? 'Hold the left mouse button over the world to use a brush. Flatten levels terrain to the height where the stroke started.' : 'Terrain is made of 4-stud cells. Hold the left mouse button over the world to use a tool. Smoother adds wedges to the edges under the brush.');
+    el('div', 'st-terrain-hint', box, this.era === 2018 ? 'Hold the left mouse button over the world to use a brush. Plane Lock keeps the brush level while you drag; hold Shift and drag up or down to raise or lower it. Flatten levels terrain to the height where the stroke started.' : 'Terrain is made of 4-stud cells. Hold the left mouse button over the world to use a tool. Plane Lock keeps the brush level while you drag; hold Shift and drag up or down to raise or lower it. Smoother adds wedges to the edges under the brush.');
   }
 
   hit(e, view) {
     const ray = view.ray(e);
     const o = ray.origin, d = ray.direction;
+    const s = this.stroke;
+    if (s && this.planeLock) return this.planeHit(o, d, s.plane + s.lift, s.normal) || null;
     const r = this.app.ph.raycast([o.x, o.y, o.z], [d.x * 3000, d.y * 3000, d.z * 3000], [], (p) => !this.app.hiddenPart(p));
     if (r.part) return { point: r.point, normal: r.normal, terrain: r.part.ClassName === 'Terrain' };
-    if (Math.abs(d.y) > 1e-4) {
-      const t = -o.y / d.y;
-      if (t > 0 && t < 3000) return { point: [o.x + d.x * t, 0, o.z + d.z * t], normal: [0, 1, 0], terrain: false };
-    }
-    return null;
+    if (s) return this.planeHit(o, d, s.plane + s.lift, s.normal) || null;
+    return this.planeHit(o, d, 0, [0, 1, 0]);
+  }
+
+  planeHit(o, d, y, normal) {
+    if (Math.abs(d.y) < 1e-4) return null;
+    const t = (y - o.y) / d.y;
+    if (t <= 0 || t >= 3000) return null;
+    return { point: [o.x + d.x * t, y, o.z + d.z * t], normal, terrain: false };
   }
 
   radius() {
@@ -258,7 +270,7 @@ export class TerrainTools {
     const h = this.hit(e, view);
     if (!h) return { kind: 'terrain' };
     const { data } = this.terrain();
-    this.stroke = { before: new Map(), keys: new Set(), plane: h.point[1], last: 0, data };
+    this.stroke = { before: new Map(), keys: new Set(), plane: h.point[1], lift: 0, normal: h.normal, sy: e.clientY, last: 0, data };
     this.apply(h);
     const timer = setInterval(() => {
       if (this.stroke && this.lastHit) this.apply(this.lastHit, true);
@@ -266,6 +278,9 @@ export class TerrainTools {
     return {
       kind: 'terrain',
       move: (ev) => {
+        const st = this.stroke;
+        if (st && this.planeLock && ev.shiftKey) st.lift += (st.sy - ev.clientY) * Math.max(0.05, Math.min(0.5, this.radius() * 0.02));
+        if (st) st.sy = ev.clientY;
         const hh = this.hit(ev, view);
         if (!hh) return;
         this.showPreview(hh);

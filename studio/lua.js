@@ -60,6 +60,7 @@ export class StudioLua {
     this.mice = new Map();
     this.active = null;
     this.plugins = [];
+    this.actions = [];
   }
 
   ensure() {
@@ -240,12 +241,13 @@ export class StudioLua {
     pl.props.set('Name', entry.name || `Plugin ${entry.id}`);
     pl.pluginId = +entry.id;
     app.dm.load(parsePlace(bytes), pl, { track: true });
-    const scripts = pl.descendants().filter((d) => d.ClassName === 'Script' && !d.props.get('Disabled'));
+    const code = pl.descendants().filter((d) => ['Script', 'LocalScript', 'ModuleScript'].includes(d.ClassName));
+    const scripts = code.filter((d) => d.ClassName !== 'ModuleScript' && !d.props.get('Disabled'));
     if (!scripts.length) throw new Error('the model has no Script to run');
-    for (const s of scripts) {
-      s.props.set('Source', 'local plugin = script:FindFirstAncestorOfClass("Plugin") ' + String(s.props.get('Source') || ''));
-      this.startScript(s);
-    }
+    if (pl.info.all.has('GridSize')) pl.props.set('GridSize', app.grid || 1);
+    if (pl.info.all.has('CollisionEnabled')) pl.props.set('CollisionEnabled', false);
+    for (const s of code) s.props.set('Source', 'local plugin = script:FindFirstAncestorOfClass("Plugin") ' + String(s.props.get('Source') || ''));
+    for (const s of scripts) this.startScript(s);
     this.plugins.push(pl);
     app.print(`Loaded plugin ${pl.props.get('Name')}`, 'info');
   }
@@ -253,11 +255,14 @@ export class StudioLua {
   unloadPlugins() {
     const app = this.app;
     for (const pl of this.plugins) {
+      if (!pl.destroyed) app.dm.emit(pl, 'Unloading');
+      if (this.host) this.host.tick(this.t);
       if (this.host) for (const d of pl.descendants()) if (this.host.running.has(d.id)) this.host.stopScript(d);
       if (!pl.destroyed) app.dm.destroy(pl, true);
     }
     this.plugins = [];
     this.toolbars = [];
+    this.actions = [];
     for (const w of this.widgets.values()) if (w.paneId) app.ui.togglePane(w.paneId, false);
     this.widgets.clear();
     this.mice.clear();
@@ -355,11 +360,22 @@ export class StudioLua {
     def('SetSetting', 'Plugin', (pl, [k, v]) => {
       try {
         const val = u(v);
-        localStorage.setItem(PLUGIN_SETTINGS + (pl.pluginId || 0) + ':' + String(u(k)), JSON.stringify(typeof val === 'object' ? null : val));
+        localStorage.setItem(PLUGIN_SETTINGS + (pl.pluginId || 0) + ':' + String(u(k)), JSON.stringify(plainValue(val)));
       } catch {}
       return null;
     });
     def('GetStudioUserId', 'Plugin', () => app.cfg.userId | 0);
+    def('IsActivatedWithExclusiveMouse', 'Plugin', (pl) => this.active === pl);
+    def('SelectRibbonTool OpenWikiPage', 'Plugin', () => null);
+    def('CreatePluginAction', 'Plugin', (pl, [id, text, tip, icon]) => {
+      const a = dm.create('PluginAction', pl);
+      a.props.set('Name', String(u(id) || 'Action'));
+      a.props.set('ActionId', String(u(id) || ''));
+      a.props.set('Text', String(u(text) || ''));
+      a.props.set('StatusTip', String(u(tip) || ''));
+      this.actions.push(a);
+      return a;
+    });
     def('OpenScript', 'Plugin', (pl, [s]) => {
       const sc = u(s);
       if (sc && sc.isA && sc.isA('LuaSourceContainer')) app.openScript(sc);
@@ -399,7 +415,7 @@ export class StudioLua {
         changed: (inst, name) => {
           if (inst !== w) return;
           if (name === 'Enabled') app.ui.togglePane(rec.paneId, !!w.props.get('Enabled'));
-          if (name === 'Title' && rec.pane) rec.pane.el.querySelector('.st-pane-caption').firstChild.textContent = String(w.props.get('Title'));
+          if (name === 'Title' && rec.pane) { rec.pane.title = String(w.props.get('Title')); rec.pane.titleEl.textContent = rec.pane.title; }
         },
       });
       return w;
@@ -440,6 +456,21 @@ export class StudioLua {
     });
     def('GetSelectedParts', 'Plugin', () => T.list([...app.selection].flatMap(partsOf)));
   }
+}
+
+function plainValue(v, depth = 0) {
+  v = u(v);
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' || typeof v === 'boolean') return v;
+  if (typeof v !== 'object' || depth > 6) return null;
+  if (v instanceof Map) v = Object.fromEntries(v);
+  if (Array.isArray(v)) return v.map((x) => plainValue(x, depth + 1));
+  const proto = Object.getPrototypeOf(v);
+  if (proto !== Object.prototype && proto !== null) return null;
+  const out = {};
+  for (const [k, x] of Object.entries(v)) out[k] = plainValue(x, depth + 1);
+  return out;
 }
 
 function cloneVal(v) {

@@ -294,6 +294,19 @@ export class StudioView {
       if (e.ctrlKey) this.zoom(e.deltaY > 0 ? 1.12 : 1 / 1.12);
       else this.dolly(e, e.deltaY < 0);
     }, { passive: false });
+    const toolboxDrag = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('application/x-studio-toolbox');
+    el.addEventListener('dragover', (e) => {
+      if (!toolboxDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    el.addEventListener('drop', (e) => {
+      if (!toolboxDrag(e)) return;
+      e.preventDefault();
+      let item = null;
+      try { item = JSON.parse(e.dataTransfer.getData('application/x-studio-toolbox')); } catch {}
+      if (item) this.app.dropToolboxItem(item, this.app.dropPoint(e));
+    });
     el.addEventListener('pointerdown', (e) => this.down(e));
     el.addEventListener('pointermove', (e) => this.move(e));
     el.addEventListener('pointerup', (e) => this.up(e));

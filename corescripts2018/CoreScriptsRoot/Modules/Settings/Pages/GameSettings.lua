@@ -264,6 +264,33 @@ local function Initialize()
     end
   end -- of createGraphicsOptions
 
+  local function createFramerateOption()
+    local caps = {30, 60, 120, 144, 240}
+    local names = {}
+    for i = 1, #caps do
+      names[i] = tostring(caps[i]) .. " FPS"
+    end
+
+    local function getDesiredFramerateIndex()
+      local current = GameSettings.FramerateCap
+      for i = 1, #caps do
+        if caps[i] == current then
+          return i
+        end
+      end
+      return 2
+    end
+
+    this.FramerateFrame, this.FramerateLabel, this.FramerateMode =
+      utility:AddNewRow(this, "Frame Rate Cap", "DropDown", names, getDesiredFramerateIndex())
+
+    this.FramerateMode.IndexChanged:connect(
+      function(newIndex)
+        GameSettings.FramerateCap = caps[newIndex]
+      end
+    )
+  end
+
   local function createPerformanceStatsOptions()
     ------------------
     ------------------ Performance Stats -----------------
@@ -1378,6 +1405,12 @@ local function Initialize()
   -- we disable quality slider on Xbox since it has FRM disabled and forced to max quality level so the slider is useless
   if platform ~= Enum.Platform.XBoxOne then
     createGraphicsOptions()
+  end
+
+  local baseSetHub = this.SetHub
+  function this:SetHub(newHubRef)
+    baseSetHub(this, newHubRef)
+    createFramerateOption()
   end
 
   createPerformanceStatsOptions()

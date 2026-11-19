@@ -26,7 +26,20 @@ parentPort.on('message', (m) => {
   dispatch(m);
 });
 
+const report = (what, e) => parentPort.postMessage({ t: 'log', line: `[place ${workerData.placeId} ${workerData.jobId}] ${what}: ${(e && e.stack) || e}` });
+
+process.on('uncaughtException', (e) => report('uncaught exception', e));
+process.on('unhandledRejection', (e) => report('unhandled rejection', e));
+
 function dispatch(m) {
+  try {
+    run(m);
+  } catch (e) {
+    report('message ' + (m && m.t) + ' failed', e);
+  }
+}
+
+function run(m) {
   if (m.t === 'join') game.join(m.cid, m.user).catch((e) => {
     parentPort.postMessage({ t: 'log', line: `[place ${workerData.placeId} ${workerData.jobId}] join failed: ${e.stack || e.message}` });
     parentPort.postMessage({ t: 'kick', cid: m.cid, reason: 'Could not join the game' });
@@ -36,6 +49,7 @@ function dispatch(m) {
   else if (m.t === 'dbg') {
     if (game.debugger) game.debugger.handle(m.data);
   }
+  else if (m.t === 'run') game.runCode(String(m.source || ''), String(m.by || ''));
   else if (m.t === 'stop') {
     game.close().catch(() => {}).finally(() => process.exit(0));
   }

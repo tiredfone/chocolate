@@ -65,6 +65,7 @@ export class Net {
 
   send(obj) {
     const s = JSON.stringify(obj);
+    this.bytesOut = (this.bytesOut || 0) + s.length;
     if (this.lag && this.open) return this.delayed('out', () => this.ws.readyState === 1 && this.ws.send(s));
     if (this.open && this.ws.readyState === 1) this.ws.send(s);
     else if (this.queue.length < 100) this.queue.push(s);

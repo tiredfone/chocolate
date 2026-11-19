@@ -2,8 +2,19 @@ export function detectTouch() {
   const q = new URLSearchParams(location.search).get('touch');
   if (q === '1') return true;
   if (q === '0') return false;
-  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-  return coarse && (navigator.maxTouchPoints || 0) > 0;
+  const ua = navigator.userAgent || '';
+  const points = navigator.maxTouchPoints || 0;
+  const mq = (x) => typeof matchMedia === 'function' && matchMedia(x).matches;
+  const mouse = mq('(any-pointer: fine)') || mq('(pointer: fine)');
+  const uad = navigator.userAgentData;
+  if (uad && uad.mobile === true) return true;
+  if (/Android|iPhone|iPod/i.test(ua)) return true;
+  if (/iPad/i.test(ua)) return !mouse || points > 1;
+  if (/Macintosh/i.test(ua)) return points > 1 && !mouse;
+  if (/Windows NT|X11|CrOS/i.test(ua) && !/Mobile/i.test(ua)) return false;
+  if (/Mobile/i.test(ua)) return true;
+  if (points <= 0) return false;
+  return mq('(pointer: coarse)') && !mouse && !mq('(any-hover: hover)');
 }
 
 const TAP_MOVE = 20;

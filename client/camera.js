@@ -22,6 +22,12 @@ export class CameraController {
     });
     this.cf = C.cf(0, 20, 20);
     canvas.addEventListener('pointerdown', (e) => {
+      if (e.button === 0 && !this.luaDriven && this.firstPerson && document.pointerLockElement !== canvas && canvas.requestPointerLock) {
+        try {
+          const r = canvas.requestPointerLock();
+          if (r && r.catch) r.catch(() => {});
+        } catch {}
+      }
       if (e.button === 2 && !this.luaDriven) {
         this.dragging = true;
         this.dragMoved = 0;
@@ -64,6 +70,27 @@ export class CameraController {
     }, { passive: false });
   }
 
+  hideOwn(model) {
+    if (!this.hidden) this.hidden = new Set();
+    for (const p of [...this.hidden]) {
+      if (model && !p.destroyed && p.isDescendantOf && p.isDescendantOf(model)) continue;
+      this.hidden.delete(p);
+      if (!p.destroyed) this.renderer.setLocalTransparency(p, null);
+    }
+    if (!model || model.destroyed) {
+      this.hiddenModel = null;
+      return;
+    }
+    const n = model.descendants().length;
+    if (n === this.hiddenCount && this.hiddenModel === model) return;
+    this.hiddenCount = n;
+    this.hiddenModel = model;
+    for (const d of model.descendants()) if (d.isA('BasePart') && !this.hidden.has(d)) {
+      this.hidden.add(d);
+      this.renderer.setLocalTransparency(d, 1);
+    }
+  }
+
   shiftLockAllowed() {
     const sp = this.world.dm.services.get('StarterPlayer');
     if (sp && sp.props.get('EnableMouseLockOption') === false) return false;
@@ -94,6 +121,11 @@ export class CameraController {
     return document.pointerLockElement === this.canvas && (this.shiftLock || this.firstPerson);
   }
 
+  aimCentered() {
+    if (this.luaDriven) return !!(this.world.input2018 && this.world.input2018.behavior === 1);
+    return this.mouseLocked();
+  }
+
   faceDir() {
     if (!this.mouseLocked()) return null;
     const type = this.world.camera.props.get('CameraType');
@@ -106,16 +138,30 @@ export class CameraController {
     this.pitch = Math.max(-PITCH, Math.min(PITCH, this.pitch + dy * 0.86));
   }
 
+  zoomLimits() {
+    const pl = this.world.player;
+    let lo = 0.5, hi = 400;
+    if (pl && !pl.destroyed) {
+      const a = Number(pl.props.get('CameraMinZoomDistance')), b = Number(pl.props.get('CameraMaxZoomDistance'));
+      if (a > 0) lo = a;
+      if (b > 0) hi = Math.max(lo, b);
+      if (pl.props.get('CameraMode') === 1) hi = lo = Math.min(lo, 0.5);
+    }
+    return [lo, hi];
+  }
+
   zoomBy(f) {
-    this.targetZoom = Math.max(0.5, Math.min(400, this.targetZoom * f));
+    const [lo, hi] = this.zoomLimits();
+    this.targetZoom = Math.max(lo, Math.min(hi, this.targetZoom * f));
     this.zoom = this.targetZoom;
   }
 
   stepZoom(dir) {
     let z = this.targetZoom;
+    const [lo, hi] = this.zoomLimits();
     if (dir > 0) z = z < 1 ? 0.5 : z / 1.25 < 1 ? 0.5 : z / 1.25;
     else z = z < 1 ? 1.25 : z * 1.25;
-    z = Math.max(0.5, Math.min(400, z));
+    z = Math.max(lo, Math.min(hi, z));
     const from = Math.max(1, this.targetZoom), to = Math.max(1, z);
     this.pitch = Math.max(-PITCH, Math.min(PITCH, this.pitch - 0.15 * Math.log(to / from)));
     this.targetZoom = z;
@@ -169,13 +215,21 @@ export class CameraController {
       return;
     }
     this.yaw += this.keyYaw * dt * 2.2;
+    const zl = this.zoomLimits();
+    this.targetZoom = Math.max(zl[0], Math.min(zl[1], this.targetZoom));
     this.zoom = this.targetZoom;
     const fp = this.zoom < 1;
     if (fp !== this.firstPerson) {
       this.firstPerson = fp;
-      if (world.ownModel) for (const d of world.ownModel.descendants()) if (d.isA('BasePart')) this.renderer.setLocalTransparency(d, fp ? 1 : null);
+      if (fp && document.pointerLockElement !== this.canvas && this.canvas.requestPointerLock) {
+        try {
+          const r = this.canvas.requestPointerLock();
+          if (r && r.catch) r.catch(() => {});
+        } catch {}
+      }
       if (!fp && document.pointerLockElement === this.canvas && !this.dragging && !this.shiftLock) document.exitPointerLock();
     }
+    this.hideOwn(fp ? world.ownModel : null);
     if (type === 6 || type === 0) {
       this.cf = cam.props.get('CFrame');
     } else {

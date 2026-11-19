@@ -57,6 +57,14 @@ html, body {
   pointer-events: auto;
 }
 
+.ch-gui .ch-g, .ch-gui .ch-g * {
+  cursor: var(--ch-cursor, default);
+}
+
+.ch-gui .ch-g-box {
+  cursor: text;
+}
+
 .ch-g.ch-g-pass {
   pointer-events: none;
 }
@@ -403,23 +411,22 @@ html, body {
 }
 
 .ch-tag18 .ch-tag-name {
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 1;
+  font: 400 16px/18px "ch-ss", "Source Sans 3", "Source Sans Pro", Arial, sans-serif;
   color: #fff;
-  text-shadow: -1px -1px 0 rgba(0, 0, 0, 0.6), 1px -1px 0 rgba(0, 0, 0, 0.6), -1px 1px 0 rgba(0, 0, 0, 0.6), 1px 1px 0 rgba(0, 0, 0, 0.6);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75), 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
 .ch-tag18 .ch-tag-bar {
-  width: 70px;
-  height: 6px;
-  margin-top: 2px;
-  background: rgba(0, 0, 0, 0.55);
-  border: 1px solid rgba(0, 0, 0, 0.6);
+  width: 66px;
+  height: 4px;
+  margin: 2px auto 0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid #4fc34f;
+  border-radius: 1px;
 }
 
 .ch-tag18 .ch-tag-fill {
-  background: #4cd137;
+  background: #4fc34f;
 }
 
 .ch-tag-name canvas {
@@ -833,4 +840,103 @@ html, body {
   display: flex;
   align-items: center;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.ch-rec-badge {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 60;
+  padding: 3px 9px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #ff4b4b;
+  font: bold 13px Arial, sans-serif;
+  pointer-events: none;
+}
+
+.ch-rec-notice {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 6px 12px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font: 13px Arial, sans-serif;
+  pointer-events: none;
+}
+
+.ch-rec-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.ch-rec-box {
+  width: min(560px, 92%);
+  padding: 14px;
+  border-radius: 6px;
+  background: #1f2329;
+  color: #eee;
+  font: 14px Arial, sans-serif;
+  box-shadow: 0 6px 30px rgba(0, 0, 0, 0.5);
+}
+
+.ch-rec-title {
+  font-weight: bold;
+  margin-bottom: 10px;
+}
+
+.ch-rec-video {
+  width: 100%;
+  max-height: 50vh;
+  background: #000;
+  border-radius: 4px;
+}
+
+.ch-rec-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.ch-rec-btn {
+  padding: 6px 12px;
+  border: 1px solid #4a5260;
+  border-radius: 4px;
+  background: #2d333c;
+  color: #fff;
+  font: 13px Arial, sans-serif;
+  cursor: pointer;
+}
+
+.ch-rec-btn:hover {
+  background: #3a424e;
+}
+
+.ch-rec-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ch-rec-status {
+  margin-top: 8px;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.ch-rec-status a {
+  color: #6cb8ff;
+}
+
+#chocolate-loading, #chocolate-loading * {
+  cursor: var(--ch-cursor, default);
 }

@@ -38,6 +38,15 @@ function textPx(P) {
 function ud(v, base) {
   return Array.isArray(v) ? base * v[0] + v[1] : 0;
 }
+function guiKids(parent) {
+  const out = [];
+  for (const c of parent.children) {
+    if (c.isA('GuiObject')) out.push(c);
+    else if (c.ClassName === 'Folder') for (const k of guiKids(c)) out.push(k);
+  }
+  return out;
+}
+
 function sortKids(kids, order) {
   const list = kids.slice();
   if (order === 0) list.sort((a, b) => String(a.props.get('Name')).localeCompare(String(b.props.get('Name'))));
@@ -173,14 +182,33 @@ export class Gui {
     if (this.touch) root.classList.add('ch-touch');
     this.buildHud();
     this.dm.observe({
-      reparented: () => (this.dirty = true),
+      reparented: (inst) => {
+        this.dirty = true;
+        this.detachedAbs(inst);
+      },
       destroyed: () => (this.dirty = true),
       changed: (inst, name) => {
         if (inst.isA('GuiBase') || inst.ClassName === 'Message' || inst.ClassName === 'Hint') this.dirty = true;
+        if (name === 'Size' && inst.isA('GuiObject')) this.detachedAbs(inst);
         if (inst.ClassName === 'Player' || inst.isA('ValueBase')) this.listDirty = true;
         if (inst.ClassName === 'Humanoid') this.hudDirty = true;
       },
     });
+  }
+
+  detachedAbs(inst) {
+    if (!inst.isA('GuiObject')) return;
+    let top = inst;
+    while (top.parent && top.parent.isA('GuiObject')) top = top.parent;
+    if (top.parent && top.parent.isA('LayerCollector')) return;
+    const place = (c, base) => {
+      const sz = c.props.get('Size');
+      const abs = Array.isArray(sz) && sz.length === 4 ? [sz[0] * base[0] + sz[1], sz[2] * base[1] + sz[3]] : [0, 0];
+      this.setAbs(c, 'AbsoluteSize', abs);
+      for (const k of guiKids(c)) place(k, abs);
+    };
+    const par = inst.parent && inst.parent.isA('GuiObject') ? inst.parent.props.get('AbsoluteSize') || [0, 0] : [0, 0];
+    place(inst, par);
   }
 
   loadStyles() {
@@ -224,9 +252,10 @@ export class Gui {
   textBounds(inst) {
     const P = inst.props;
     const text = String(P.get('Text') ?? '');
-    if (text === '') return [0, 0];
     const font = P.get('Font') | 0;
     let px = textPx(P);
+    const lineH = contentEra() === 2018 ? Math.round(px * (P.has('LineHeight') ? +P.get('LineHeight') || 1 : 1)) : Math.round(px * 1.15);
+    if (text === '') return contentEra() === 2018 ? [0, lineH] : [0, 0];
     const wrapOn = P.get('TextWrapped') || P.get('TextWrap');
     const size = wrapOn || P.get('TextScaled') ? this.absSize(inst) : null;
     if (P.get('TextScaled')) px = Math.max(6, Math.min(100, Math.floor(Math.min(size[1] * 0.85, (size[0] / Math.max(1, text.length)) * 1.8))));
@@ -250,7 +279,7 @@ export class Gui {
       }
       lines.push(line);
     }
-    return [Math.max(...lines.map((l) => g.measureText(l).width)), lines.length * Math.round(px * 1.15)];
+    return [Math.max(...lines.map((l) => g.measureText(l).width)), lines.length * (P.get('TextScaled') ? Math.round(px * 1.15) : lineH)];
   }
 
   buildHud() {
@@ -338,6 +367,7 @@ export class Gui {
     for (const [inst, node] of this.nodes) {
       if (!live.has(inst) && !node.billboard && !(this.bbLive && this.bbLive.has(inst))) {
         node.el.remove();
+        if (node.kids) node.kids.remove();
         this.nodes.delete(inst);
       }
     }
@@ -393,7 +423,10 @@ export class Gui {
   nodeFor(inst, parentEl) {
     let node = this.nodes.get(inst);
     if (node) {
-      if (node.el.parentElement !== parentEl) parentEl.appendChild(node.el);
+      if (node.el.parentElement !== parentEl) {
+        parentEl.appendChild(node.el);
+        if (node.kids) parentEl.appendChild(node.kids);
+      }
       return node;
     }
     const cls = inst.ClassName;
@@ -428,6 +461,7 @@ export class Gui {
       e = el('div', 'ch-g', parentEl);
     }
     node = { el: e, inst, text: null, img: null, imgUrl: null };
+    if (cls === 'TextBox') node.kids = el('div', 'ch-g ch-g-pass', parentEl);
     if (!inst.isA('GuiButton') && cls !== 'TextBox') e.classList.add('ch-g-pass');
     if (cls === 'TextLabel' || cls === 'TextButton') node.text = el('span', 'ch-g-text', e);
     if (cls === 'ImageLabel' || cls === 'ImageButton') {
@@ -461,7 +495,7 @@ export class Gui {
         fire(ev, 'MouseButton2Click');
       });
     }
-    if (cls === 'ImageButton') {
+    if (inst.isA('GuiButton')) {
       e.addEventListener('pointerenter', () => { node.hover = true; this.dirty = true; });
       e.addEventListener('pointerleave', () => { node.hover = false; node.pressed = false; this.dirty = true; });
       e.addEventListener('pointerdown', () => { node.pressed = true; this.dirty = true; });
@@ -599,7 +633,7 @@ export class Gui {
         area = [Math.max(0, area[0] - L - R), Math.max(0, area[1] - T - B)];
       } else if (n === 'UIListLayout' || n === 'UIGridLayout') layout = c;
     }
-    const objs = parent.children.filter((c) => c.isA('GuiObject'));
+    const objs = guiKids(parent);
     const sizes = new Map();
     for (const c of objs) {
       const P = c.props;
@@ -661,7 +695,7 @@ export class Gui {
     }
     for (const c of objs) {
       live.add(c);
-      const node = this.nodeFor(c, pnode.el);
+      const node = this.nodeFor(c, pnode.kids || pnode.el);
       const P = c.props;
       const [w, h] = sizes.get(c);
       const [x, y] = this.posOf(c, placed, sizes, area, inner);
@@ -674,6 +708,7 @@ export class Gui {
       node.el.classList.toggle('ch-g-box-typing', typing);
       const visible = P.get('Visible') || typing;
       st.display = visible ? '' : 'none';
+      if (node.kids && !visible) node.kids.style.display = 'none';
       if (!visible) {
         if (c.children.length && contentEra() === 2018) this.measureHidden(c, abs, [w, h]);
         continue;
@@ -713,6 +748,19 @@ export class Gui {
       const bs = P.get('BorderSizePixel');
       st.boxShadow = bs > 0 && bt < 1 && !node.el.dataset.style ? `0 0 0 ${bs}px ${rgba(P.get('BorderColor3'), bt)}` : 'none';
       if (c.isA('GuiButton')) node.el.classList.toggle('auto', !!P.get('AutoButtonColor'));
+      if (node.kids) {
+        const ks = node.kids.style;
+        ks.display = st.display;
+        ks.left = st.left;
+        ks.top = st.top;
+        ks.width = st.width;
+        ks.height = st.height;
+        ks.zIndex = st.zIndex;
+        ks.transform = st.transform;
+        ks.transformOrigin = st.transformOrigin;
+        ks.overflow = P.get('ClipsDescendants') ? 'hidden' : 'visible';
+        ks.background = 'transparent';
+      }
       if (node.text || c.ClassName === 'TextBox') this.styleText(c, node, w, h);
       if (node.img) {
         const hover = P.has('HoverImage') && node.hover ? P.get('HoverImage') : '';
@@ -956,7 +1004,7 @@ export class Gui {
       const key = name + '|' + color;
       if (t.key !== key && e18) {
         t.key = key;
-        t.n.style.fontFamily = fontCss(4).family;
+        fontCss(3);
         t.n.style.color = color;
         t.n.textContent = name;
       } else if (t.key !== key) {

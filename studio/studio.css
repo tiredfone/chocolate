@@ -597,7 +597,7 @@ html, body {
   border-color: var(--st-hover-border);
 }
 
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .st-node .st-add {
     display: block;
     width: 20px;
@@ -1305,7 +1305,7 @@ html, body {
 }
 
 
-@media (max-width: 900px), (pointer: coarse) {
+@media (max-width: 900px), (pointer: coarse) and (hover: none) {
   html, body {
     font-size: 13px;
   }
@@ -1883,7 +1883,7 @@ html, body {
   align-self: flex-end;
 }
 
-@media (pointer: coarse) {
+@media (pointer: coarse) and (hover: none) {
   .st-gs-field input, .st-gs-field textarea, .st-gs-field select {
     font-size: 16px;
   }
@@ -2139,16 +2139,63 @@ html, body {
   outline: 2px solid #0a84ff;
 }
 
-.st-gui.st-uiedit .ch-g.st-uisel::after {
-  content: "";
+.st-uibox {
   position: absolute;
-  right: -5px;
-  bottom: -5px;
-  width: 9px;
-  height: 9px;
-  background: #0a84ff;
-  cursor: nwse-resize;
+  display: none;
+  pointer-events: none;
+  outline: 1px solid #0a84ff;
+  z-index: 2147483000;
 }
+
+.st-uihandle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  background: #fff;
+  border: 1px solid #0a84ff;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+.st-gui.st-uiedit .st-uibox .st-uihandle {
+  pointer-events: auto !important;
+}
+
+.st-uiguide {
+  position: absolute;
+  display: none;
+  background: #ff2d8a;
+  z-index: 2147483001;
+  pointer-events: none;
+}
+
+.st-uiguide-v { width: 1px; }
+.st-uiguide-h { height: 1px; }
+
+.st-gui.st-uiedit .st-uitext {
+  position: absolute;
+  z-index: 2147483002;
+  pointer-events: auto !important;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 2px 4px;
+  border: 2px solid #0a84ff;
+  background: rgba(255, 255, 255, 0.95);
+  color: #000;
+  font: 14px sans-serif;
+  resize: none;
+  outline: none;
+}
+
+.st-uih-nw { left: 0; top: 0; cursor: nwse-resize; }
+.st-uih-n { left: 50%; top: 0; cursor: ns-resize; }
+.st-uih-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.st-uih-e { left: 100%; top: 50%; cursor: ew-resize; }
+.st-uih-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.st-uih-s { left: 50%; top: 100%; cursor: ns-resize; }
+.st-uih-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.st-uih-w { left: 0; top: 50%; cursor: ew-resize; }
 .st-terrain { padding: 6px; font-size: 12px; overflow-y: auto; }
 .st-terrain-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 4px; margin-bottom: 8px; }
 .st-terrain-tool { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; border: 1px solid #b9b9b9; background: #f4f4f4; cursor: pointer; font: inherit; color: #222; }
@@ -2166,3 +2213,112 @@ html, body {
 .st-terrain-mat span { position: absolute; left: 0; right: 0; bottom: 0; font-size: 9px; background: rgba(0, 0, 0, 0.55); color: #fff; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .st-terrain-hint { margin-top: 8px; color: #666; line-height: 1.35; }
 .st-dlg-body .st-terrain-row > span { width: 90px; }
+
+.st-dock-bottom {
+  flex-direction: row;
+}
+
+.st-pane-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.st-pane-caption {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.st-pane-title.tabbed {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 100%;
+}
+
+.st-pane-tab {
+  display: flex;
+  align-items: center;
+  padding: 0 7px;
+  font-weight: normal;
+  opacity: 0.7;
+  border: 1px solid transparent;
+  border-bottom: 0;
+}
+
+.st-pane-tab.active {
+  opacity: 1;
+  font-weight: bold;
+  background: var(--st-pane);
+  border-color: var(--st-border);
+}
+
+.st-pane.st-floating {
+  position: fixed;
+  margin: 0;
+  flex: none;
+  min-width: 160px;
+  min-height: 90px;
+  resize: both;
+  overflow: hidden;
+  box-shadow: 3px 4px 12px rgba(0, 0, 0, 0.35);
+  border-color: var(--st-border);
+}
+
+.st-dropzone {
+  position: fixed;
+  z-index: 9000;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px dashed rgba(60, 120, 220, 0.55);
+  background: rgba(60, 120, 220, 0.1);
+}
+
+.st-dropzone.hot,
+.st-dropzone.target {
+  border: 2px solid rgba(40, 100, 220, 0.95);
+  background: rgba(60, 120, 220, 0.3);
+}
+
+.st-dropzone[hidden] {
+  display: none;
+}
+
+.st-drag-ghost {
+  position: fixed;
+  z-index: 9001;
+  pointer-events: none;
+  padding: 2px 8px;
+  background: var(--st-pane);
+  border: 1px solid var(--st-border);
+  box-shadow: 2px 3px 8px rgba(0, 0, 0, 0.3);
+  opacity: 0.92;
+}
+
+.st-dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+
+.st-asst { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 6px; font-size: 12px; gap: 6px; box-sizing: border-box; }
+.st-asst-note { color: #555; line-height: 1.35; margin-bottom: 6px; }
+.st-asst-btn { padding: 3px 10px; border: 1px solid #b9b9b9; background: #f4f4f4; color: #222; font: inherit; cursor: pointer; }
+.st-asst-btn:hover:not(:disabled) { border-color: #2a7fff; background: #e6f0ff; }
+.st-asst-btn:disabled { opacity: 0.5; cursor: default; }
+.st-asst-bar { height: 8px; border: 1px solid #aaa; background: #eee; margin: 6px 0; }
+.st-asst-bar i { display: block; height: 100%; width: 0; background: #2a7fff; }
+.st-asst-status { color: #444; word-break: break-word; }
+.st-asst-chat { flex: 1; min-height: 80px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.st-asst-msg { padding: 5px 7px; border: 1px solid #ccc; background: #fff; color: #222; line-height: 1.35; word-break: break-word; }
+.st-asst-msg.user { background: #e8f0fe; border-color: #b7cdf5; white-space: pre-wrap; }
+.st-asst-msg.note { color: #666; background: #f6f6f6; }
+.st-asst-text { white-space: pre-wrap; margin: 2px 0; }
+.st-asst-code { margin: 4px 0; border: 1px solid #bbb; background: #fafafa; }
+.st-asst-code pre { margin: 0; padding: 5px 6px; overflow-x: auto; font: 11px/1.35 Consolas, monospace; color: #111; white-space: pre; }
+.st-asst-codebar { display: flex; gap: 4px; padding: 3px; border-top: 1px solid #ddd; background: #eee; }
+.st-asst-form { display: flex; flex-direction: column; gap: 4px; }
+.st-asst-input { width: 100%; box-sizing: border-box; resize: vertical; font: 12px Arial, sans-serif; padding: 4px; }
+.st-asst-row { display: flex; gap: 4px; }

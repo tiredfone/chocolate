@@ -5,14 +5,24 @@ import { Core2018 } from '../shared/core2018.js';
 import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
-import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, holdsTool, syncGrip, STATES, rootOf } from '../shared/humanoid.js';
+import { Rig, Controller, CharacterProxy, liveCharacterOf, animate, stepMotors, readLimbAngles, applyLimbAngles, holdsTool, syncGrip, STATES, rootOf } from '../shared/humanoid.js';
 import { loadAudio, assetId, builtin, loadCoreSources, assetBytes, animationBytes, publicPath, endpointUrl, useContent2018, unionMeshData } from './assets.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 import { DEBUG_LUA, DebugAgent } from '../shared/debugger.js';
 import { terrainOf } from '../shared/terrain.js';
 
-const HUM_STATE = [8, 8, 3, 5, 13, 12, 15, 14];
+function surfaceOf(part, normal) {
+  const cf = part.props.get('CFrame');
+  if (!Array.isArray(cf) || cf.length < 12 || part.ClassName === 'Terrain') return normal[1] > 0.7 ? 1 : normal[1] < -0.7 ? 4 : 0;
+  const n = C.vector(C.inv(cf), normal[0], normal[1], normal[2]);
+  const ax = Math.abs(n[0]), ay = Math.abs(n[1]), az = Math.abs(n[2]);
+  if (ay >= ax && ay >= az) return n[1] > 0 ? 1 : 4;
+  if (ax >= az) return n[0] > 0 ? 0 : 3;
+  return n[2] > 0 ? 2 : 5;
+}
+
+const HUM_STATE = [8, 8, 3, 5, 13, 12, 15, 14, 4];
 
 export const STARTER_SCRIPT = 37801172;
 export const SETTINGS_SCRIPT = 46295863;
@@ -284,6 +294,7 @@ export class ClientWorld {
         if (v === 'Exit') h.leave && h.leave();
         else if (v === 'ToggleFullScreen') h.toggleFullscreen && h.toggleFullscreen();
         else if (v === 'Screenshot') h.screenshot && h.screenshot();
+        else if (v === 'RecordToggle') h.recordToggle && h.recordToggle();
       },
       isLoaded: () => !!this.loaded,
       message: () => (this.hooks.message ? this.hooks.message() : ''),
@@ -293,6 +304,11 @@ export class ClientWorld {
         this.loadingGuiRemoved = true;
         const rf = this.dm.services.get('ReplicatedFirst');
         if (rf) this.dm.emit(rf, 'RemoveDefaultLoadingGuiSignal');
+      },
+      canManage: () => !!this.isDev,
+      requestServerOutput: () => {
+        const ls = this.dm.services.get('LogService');
+        if (ls) for (const l of this.serverLog || []) this.dm.emit(ls, 'ServerMessageOut', l.m, T.e('MessageType', l.k), l.t);
       },
       inFullscreen: () => !!(this.hooks.inFullscreen && this.hooks.inFullscreen()),
       screenSize: () => this.screenSize(),
@@ -320,8 +336,18 @@ export class ClientWorld {
       },
       shutdown: () => this.hooks.leave && this.hooks.leave(),
       log: (k, m, w) => this.hooks.log && this.hooks.log(k, m, w),
+      unimplemented: (kind, name) => {
+        if (!this.unimplSent) this.unimplSent = new Set();
+        const key = kind + '|' + name;
+        if (this.unimplSent.has(key) || this.unimplSent.size >= 60 || !this.net) return;
+        this.unimplSent.add(key);
+        this.net.send({ t: 'unimpl', k: kind, n: name });
+      },
       localPlayer: () => this.player,
       mouseFor: (pl) => (pl === this.player ? this.mouse : null),
+      reportAbuse: (target, reason, text) => {
+        if (this.net) this.net.send({ t: 'report', p: target ? target.id : 0, r: reason.slice(0, 80), m: text.slice(0, 1500) });
+      },
       raycast: (o, d, ig) => this.physics.raycast(o, d, ig),
       equipTool: (h, tool) => { if (tool && this.ownModel && h.parent === this.ownModel) this.net.send({ t: 'equip', id: tool.id }); },
       unequipTools: (h) => { if (this.equippedTool) this.net.send({ t: 'unequip', id: this.equippedTool.id }); },
@@ -349,13 +375,14 @@ export class ClientWorld {
       },
       kick: (pl, msg) => { if (pl === this.player && this.hooks.kicked) this.hooks.kicked(msg || 'You have been kicked'); },
       focusTextBox: (t, on) => this.hooks.focusTextBox && this.hooks.focusTextBox(t, on),
+      focusedTextBox: () => (this.hooks.focusedTextBox ? this.hooks.focusedTextBox() : null),
       lastInputType: () => (this.input2018 ? this.input2018.last : this.touch ? 7 : 8),
       isKeyDown: (k) => (typeof k === 'number' && this.hooks.isKeyCodeDown ? this.hooks.isKeyCodeDown(k) : this.keys.has(String(k).toLowerCase())),
       setMessage: (m) => this.hooks.setMessage && this.hooks.setMessage(m),
       breakJoints: (p) => { if (this.ownModel && p.id > 0 && p.isDescendantOf(this.ownModel)) this.net.send({ t: 'break', id: p.id }); return null; },
       makeJoints: () => null,
       connectedParts: (p) => [p],
-      touchingParts: () => [],
+      touchingParts: (p) => this.physics.touchingParts(p),
       loadAsset: async (id) => {
         const bytes = await assetBytes(id);
         const head = new TextDecoder().decode(bytes.subarray(0, 8));
@@ -428,6 +455,22 @@ export class ClientWorld {
         });
       },
       invokeResult: (r, token, raw) => this.net.send({ t: 'rfr', k: token | 0, a: wireArgs(raw) }),
+      productInfoAsync: (id, kind) => this.market('info', { id, kind }).then((r) => (r && r.info) || null),
+      ownsAsset: (uid, id) => this.market('owns', { uid, id }).then((r) => !!(r && r.owns)),
+      balance: () => this.market('balance', {}).then((r) => (r ? r.robux | 0 : 0)),
+      purchase: (kind, id, price) => this.market('buy', { kind, id, price }).then((r) => r || { success: false, status: 'Error' }),
+      prompt: (pl, kind, id, equip) => { if (pl === this.player) this.promptPurchase(kind, id, equip); },
+      purchaseFinished: (kind, who, id, ok) => {
+        if (kind === 'asset' && this.passPrompts && this.passPrompts.delete(id)) kind = 'gamepass';
+        const mps = this.dm.services.get('MarketplaceService');
+        if (mps) {
+          if (kind === 'gamepass') this.dm.emit(mps, 'PromptGamePassPurchaseFinished', this.player, id, ok);
+          else if (kind === 'asset') this.dm.emit(mps, 'PromptPurchaseFinished', this.player, id, ok);
+          else this.dm.emit(mps, 'PromptProductPurchaseFinished', this.player ? this.player.props.get('userId') : 0, id, ok);
+        }
+        this.net.send({ t: 'pfin', kind, id, ok: !!ok });
+      },
+      receiptClaimed: () => this.net.send({ t: 'rcpt' }),
       mouseBehavior: (v) => this.hooks.mouseBehavior && this.hooks.mouseBehavior(v),
       mouseIconEnabled: (on) => this.hooks.mouseIconEnabled && this.hooks.mouseIconEnabled(on),
       mouseDelta: () => (this.hooks.mouseDelta ? this.hooks.mouseDelta() : [0, 0]),
@@ -555,6 +598,52 @@ export class ClientWorld {
     if (held && this.hooks.backpackChanged) this.hooks.backpackChanged();
   }
 
+  updatePerfStats(dt, cpuMs, gpuMs) {
+    const ps = this.perf || (this.perf = { t: 0, cpu: 0, gpu: 0, n: 0, inLast: 0, outLast: 0, items: null });
+    ps.t += dt;
+    ps.cpu += cpuMs;
+    ps.gpu += gpuMs;
+    ps.n++;
+    if (ps.t < 0.5) return;
+    const dm = this.dm;
+    if (!ps.items) {
+      const stats = dm.service('Stats');
+      const root = dm.create('StatsItem', null);
+      root.props.set('Name', 'PerformanceStats');
+      ps.items = new Map();
+      for (const n of ['Memory', 'CPU', 'GPU', 'NetworkSent', 'NetworkReceived', 'Physics', 'MaxMemory', 'MaxCPU', 'MaxGPU', 'MaxNetworkSent', 'MaxNetworkReceived', 'MaxPhysics']) {
+        const it = dm.create('StatsItem', null);
+        it.props.set('Name', n);
+        it.data = Object.assign(it.data || {}, { value: 0 });
+        for (const o of dm.observers) if (o.created) o.created(it);
+        dm.setParent(it, root);
+        ps.items.set(n, it);
+      }
+      for (const o of dm.observers) if (o.created) o.created(root);
+      dm.setParent(root, stats);
+      const max = { MaxMemory: 1024, MaxCPU: 1000 / 60, MaxGPU: 1000 / 60, MaxNetworkSent: 64, MaxNetworkReceived: 256, MaxPhysics: 8 };
+      for (const [k, v] of Object.entries(max)) ps.items.get(k).data.value = v;
+    }
+    const net = this.net || {};
+    const inB = net.bytesIn || 0, outB = net.bytesOut || 0;
+    const mem = performance.memory ? performance.memory.usedJSHeapSize / 1048576 : 0;
+    const set = (n, v) => {
+      ps.items.get(n).data.value = Math.round(v * 100) / 100;
+    };
+    set('Memory', mem || 100 + this.dm.byId.size * 0.002);
+    set('CPU', ps.cpu / ps.n);
+    set('GPU', ps.gpu / ps.n);
+    set('NetworkSent', (outB - ps.outLast) / 1024 / ps.t);
+    set('NetworkReceived', (inB - ps.inLast) / 1024 / ps.t);
+    set('Physics', this.physMs || 0);
+    ps.outLast = outB;
+    ps.inLast = inB;
+    ps.t = 0;
+    ps.cpu = 0;
+    ps.gpu = 0;
+    ps.n = 0;
+  }
+
   applyTerrain(m) {
     if (!this.terrain || typeof m.d !== 'string') return;
     try {
@@ -573,6 +662,7 @@ export class ClientWorld {
         console.warn('replication op failed', op[0], e);
       }
     }
+    if ((msg.as || msg.ad) && this.renderer && this.renderer.setAssemblies) this.renderer.setAssemblies(msg.as || [], msg.ad || []);
     if (msg.ph) {
       for (const r of msg.ph) {
         const inst = dm.byId.get(r[0]);
@@ -590,6 +680,7 @@ export class ClientWorld {
         rec.target = r.slice(1, 13);
         rec.vel = [r[13], r[14], r[15]];
         rec.state = r[16];
+        rec.netAngles = r.length >= 21 ? r.slice(17, 21) : null;
         rec.seen = this.t;
       }
     }
@@ -736,10 +827,11 @@ export class ClientWorld {
     m.props.set('Origin', C.lookAt(o[0], o[1], o[2], o[0] + ray.dir[0], o[1] + ray.dir[1], o[2] + ray.dir[2]));
     m.props.set('Hit', C.withPos(C.lookAt(o[0], o[1], o[2], hit.point[0], hit.point[1], hit.point[2]), hit.point[0], hit.point[1], hit.point[2]));
     m.props.set('Target', hit.part);
+    m.props.set('TargetSurface', hit.part ? surfaceOf(hit.part, hit.normal) : 0);
     const k = this.guiScale();
     m.props.set('X', (this.mouseState.x * k) | 0);
     m.props.set('Y', (this.mouseState.y * k) | 0);
-    if (this.toolMouse) for (const key of ['Origin', 'Hit', 'Target', 'X', 'Y']) this.toolMouse.props.set(key, m.props.get(key));
+    if (this.toolMouse) for (const key of ['Origin', 'Hit', 'Target', 'TargetSurface', 'X', 'Y']) this.toolMouse.props.set(key, m.props.get(key));
     this.mouseHit = hit;
     let cd = null;
     if (hit.part && !this.mouseState.overGui) {
@@ -816,14 +908,22 @@ export class ClientWorld {
     if ((this.equippedTool || this.selectedBin) && k.length === 1) this.net.send({ t: 'key', k, down: false });
   }
 
+  recordingChanged(on) {
+    for (const inst of this.dm.byId.values()) if (inst.ClassName === 'GameSettings' && !inst.destroyed) this.dm.emit(inst, 'VideoRecordingChangeRequest', !!on);
+  }
+
   seated() {
     if (!this.own) return null;
     const torso = rootOf(this.own.model);
     if (!torso) return null;
     const ws = this.dm.services.get('Workspace');
-    if (!this.own.hum.props.get('Sit')) return null;
+    const sit = this.own.hum.props.get('Sit'), stand = this.own.hum.props.get('PlatformStand');
+    if (!sit && !stand) return null;
     for (const d of ws.descendants()) {
-      if (d.ClassName === 'Weld' && d.props.get('Name') === 'SeatWeld' && d.props.get('Part1') === torso) return d.props.get('Part0');
+      if (d.ClassName === 'Weld' && d.props.get('Name') === 'SeatWeld' && d.props.get('Part1') === torso) {
+        const p0 = d.props.get('Part0');
+        if (sit || (p0 && p0.ClassName === 'SkateboardPlatform')) return p0;
+      }
     }
     return null;
   }
@@ -847,7 +947,18 @@ export class ClientWorld {
         own.seatedOn = seat || null;
         dm.emit(own.hum, 'Seated', !!seat, seat || null);
       }
-      if (seat) {
+      if (seat && seat.ClassName === 'SkateboardPlatform') {
+        const th = (input.forward ? 1 : 0) - (input.back ? 1 : 0), st = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+        const j = !!input.jump, dd = !!input.dismount;
+        const prev = own.drive;
+        if (!prev || prev[0] !== th || prev[1] !== st || prev[2] !== j || prev[3] !== dd) {
+          own.drive = [th, st, j, dd];
+          this.net.send({ t: 'drive', th, st, j, d: dd });
+        }
+        if (rec.target) rec.cf = C.lerp(rec.cf, rec.target, Math.min(1, dt * 15));
+        rec.state = STATES.stand;
+        own.ctrl.teleport(rec.cf);
+      } else if (seat) {
         if (input.jump) this.net.send({ t: 'jump' });
         if (seat.ClassName === 'VehicleSeat') {
           const th = (input.forward ? 1 : 0) - (input.back ? 1 : 0), st = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -897,10 +1008,30 @@ export class ClientWorld {
           const prev = rec.state;
           rec.state = r.state;
           if (r.state === STATES.jump && prev !== STATES.jump) dm.emit(own.hum, 'Jumping', true);
-          if (r.state === STATES.fall) dm.emit(own.hum, 'FreeFalling', true);
-          if (r.state === STATES.climb) dm.emit(own.hum, 'Climbing', own.hum.props.get('WalkSpeed'));
+          if (r.state === STATES.fall && this.era !== 2018) dm.emit(own.hum, 'FreeFalling', true);
+          if (r.state === STATES.climb && this.era !== 2018) dm.emit(own.hum, 'Climbing', own.hum.props.get('WalkSpeed'));
           if (this.era === 2018) dm.emit(own.hum, 'StateChanged', T.e('HumanoidStateType', HUM_STATE[prev] ?? 8), T.e('HumanoidStateType', HUM_STATE[r.state] ?? 8));
         }
+        if (this.era === 2018) {
+          if (r.state === STATES.fall) {
+            own.fallFor = (own.fallFor || 0) + dt;
+            if (!own.fallSent && (own.fallFor >= 0.12 || own.climbState === STATES.jump)) {
+              own.fallSent = true;
+              dm.emit(own.hum, 'FreeFalling', true);
+            }
+          } else {
+            own.fallFor = 0;
+            own.fallSent = false;
+          }
+        }
+        if (this.era === 2018 && r.state === STATES.climb) {
+          const cs = Math.abs(r.vel[1]) > 0.5 ? r.vel[1] : 0;
+          if (own.climbState !== r.state || own.lastClimb === undefined || Math.abs(own.lastClimb - cs) > 0.5) {
+            own.lastClimb = cs;
+            dm.emit(own.hum, 'Climbing', cs);
+          }
+        }
+        own.climbState = r.state;
         if (r.state === STATES.walk || r.state === STATES.idle) {
           const raw = Math.hypot(r.vel[0], r.vel[2]);
           const sp = r.state === STATES.walk && raw > 0.5 ? raw : 0;
@@ -911,13 +1042,21 @@ export class ClientWorld {
           }
         }
         own.runState = r.state;
+        if (r.state === STATES.swim) {
+          const sw = Math.hypot(r.vel[0], r.vel[2]) > 0.5 ? Math.round(Math.hypot(r.vel[0], r.vel[2])) : 0;
+          if (own.lastSwim !== sw || own.swimState !== r.state) {
+            own.lastSwim = sw;
+            dm.emit(own.hum, 'Swimming', sw);
+          }
+        }
+        own.swimState = r.state;
         if (rec.cf[1] < (dm.services.get('Workspace').props.get('FallenPartsDestroyHeight') || -500)) {
           own.hum.props.set('Health', 0);
         }
         this.sendAcc += dt;
         if (this.sendAcc >= 1 / SEND_HZ) {
           this.sendAcc = 0;
-          this.net.send({ t: 'char', s: this.tpSeq, c: rec.cf.map((v) => Math.round(v * 1e4) / 1e4), v: r.vel.map((v) => Math.round(v * 100) / 100), st: r.state });
+          this.net.send({ t: 'char', s: this.tpSeq, c: rec.cf.map((v) => Math.round(v * 1e4) / 1e4), v: r.vel.map((v) => Math.round(v * 100) / 100), st: r.state, j: readLimbAngles(rec.model) });
         }
       }
     }
@@ -937,6 +1076,7 @@ export class ClientWorld {
         || (this.era === 2018 && rec.model.children.some((c) => c.props.get('Name') === 'Animate' && (c.ClassName === 'LocalScript' || c.ClassName === 'Script')));
       if (!scripted) animate(rec.model, rec.state, speed, rec.t, holdsTool(rec.model));
       stepMotors(rec.model, dt);
+      if (rec.netAngles && (!own || rec !== own.rec)) applyLimbAngles(rec.model, rec.netAngles);
       const poses = rec.rig.pose(rec.cf);
       for (const [p, cf] of poses) if (p && !p.destroyed) dm.setProp(p, 'CFrame', cf, { local: true });
       if (rec.proxy) rec.proxy.update(rec.cf, poses);
@@ -944,8 +1084,52 @@ export class ClientWorld {
     if (rs && dm.hasListener(rs, 'Heartbeat')) dm.emit(rs, 'Heartbeat', dt);
     if (rs && dm.hasListener(rs, 'RenderStepped')) dm.emit(rs, 'RenderStepped', dt);
     this.host.renderStep(dt);
+    const tPh = performance.now();
     this.physics.world.step();
+    this.physMs = performance.now() - tPh;
     this.sendMouse(false);
+  }
+
+  market(op, data) {
+    if (!this.marketWaits) {
+      this.marketWaits = new Map();
+      this.marketSeq = 1;
+    }
+    const k = this.marketSeq++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.marketWaits.delete(k);
+        reject(new Error('The marketplace did not respond'));
+      }, 20000);
+      this.marketWaits.set(k, (r) => {
+        clearTimeout(timer);
+        resolve(r);
+      });
+      this.net.send(Object.assign({ t: 'mkt', op, k }, data));
+    });
+  }
+
+  onMarket(m) {
+    const w = this.marketWaits && this.marketWaits.get(m.k | 0);
+    if (!w) return;
+    this.marketWaits.delete(m.k | 0);
+    w(m.r || null);
+  }
+
+  promptPurchase(kind, id, equip) {
+    const mps = this.dm.services.get('MarketplaceService') || this.dm.service('MarketplaceService');
+    if (!mps || !this.player || !(id > 0)) return;
+    if (kind === 'gamepass') {
+      if (!this.passPrompts) this.passPrompts = new Set();
+      this.passPrompts.add(id);
+      this.dm.emit(mps, 'PromptPurchaseRequested', this.player, id, false, T.e('CurrencyType', 0));
+    } else if (kind === 'product') this.dm.emit(mps, 'PromptProductPurchaseRequested', this.player, id, !!equip, T.e('CurrencyType', 0));
+    else this.dm.emit(mps, 'PromptPurchaseRequested', this.player, id, !!equip, T.e('CurrencyType', 0));
+  }
+
+  purchaseVerified(m) {
+    const mps = this.dm.services.get('MarketplaceService');
+    if (mps && this.player) this.dm.emit(mps, 'ServerPurchaseVerification', T.dict({ playerId: this.player.props.get('userId'), productId: m.product | 0, receipt: String(m.receipt || '') }));
   }
 
   onRemote(m) {
@@ -956,6 +1140,7 @@ export class ClientWorld {
       this.invokes.delete(m.k | 0);
       clearTimeout(p.timer);
       p.resolve(unwireArgs(dm, m.a));
+      this.runSoon();
       return;
     }
     const r = dm.byId.get(m.id | 0);
@@ -963,6 +1148,20 @@ export class ClientWorld {
     const args = unwireArgs(dm, m.a);
     if (m.t === 're' && r.ClassName === 'RemoteEvent') dm.emit(r, 'OnClientEvent', ...args);
     else if (m.t === 'rfc' && r.ClassName === 'RemoteFunction') dm.emit(r, '__Invoke', m.k | 0, ...args);
+    this.runSoon();
+  }
+
+  runSoon() {
+    if (this.soonQueued || !this.host) return;
+    this.soonQueued = true;
+    setTimeout(() => {
+      this.soonQueued = false;
+      try {
+        this.host.tick(this.t);
+      } catch (e) {
+        console.error(e);
+      }
+    }, 0);
   }
 
   gameSettings() {
@@ -977,7 +1176,7 @@ export class ClientWorld {
     const gs = this.host.userSettings().findChild('GameSettings');
     if (!gs) return;
     const KEY = 'chocolate-settings-2018';
-    const SAVED = ['ControlMode', 'ComputerCameraMovementMode', 'ComputerMovementMode', 'TouchCameraMovementMode', 'TouchMovementMode', 'MouseSensitivity', 'MouseSensitivityFirstPerson', 'MouseSensitivityThirdPerson', 'MasterVolume', 'SavedQualityLevel', 'CameraYInverted', 'PerformanceStatsVisible', 'GamepadCameraSensitivity'];
+    const SAVED = ['ControlMode', 'ComputerCameraMovementMode', 'ComputerMovementMode', 'TouchCameraMovementMode', 'TouchMovementMode', 'MouseSensitivity', 'MouseSensitivityFirstPerson', 'MouseSensitivityThirdPerson', 'MasterVolume', 'FramerateCap', 'SavedQualityLevel', 'CameraYInverted', 'PerformanceStatsVisible', 'GamepadCameraSensitivity'];
     try {
       const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
       for (const k of SAVED) {
@@ -990,6 +1189,7 @@ export class ClientWorld {
     const apply = (k) => {
       if (k === 'MasterVolume') this.setVolume(Math.max(0, Math.min(1, +gs.props.get('MasterVolume') || 0)));
       if (k === 'SavedQualityLevel' && renderer && renderer.setQuality) renderer.setQuality(gs.props.get('SavedQualityLevel') | 0);
+      if (k === 'PerformanceStatsVisible') this.dm.emit(gs, 'PerformanceStatsVisibleChanged', !!gs.props.get('PerformanceStatsVisible'));
     };
     apply('MasterVolume');
     apply('SavedQualityLevel');
@@ -1041,15 +1241,19 @@ export class ClientWorld {
       return;
     }
     const ctx = this.ensureAudio();
-    if (!ctx) return;
+    if (!ctx) return this.soundFailed(s);
     const url = s.props.get('SoundId');
-    if (!assetId(url) && !builtin(url)) return;
+    if (!assetId(url) && !builtin(url)) return this.soundFailed(s);
     this.stopSound(s);
     const token = {};
     this.sounds.set(s, { token });
     const buf = await loadAudio(ctx, url);
     const cur = this.sounds.get(s);
-    if (!buf || !cur || cur.token !== token) return;
+    if (!cur || cur.token !== token) return;
+    if (!buf) {
+      this.sounds.delete(s);
+      return this.soundFailed(s);
+    }
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = !!s.props.get('Looped');
@@ -1083,6 +1287,15 @@ export class ClientWorld {
     src.start();
     cur.src = src;
     cur.gain = gain;
+  }
+
+  soundFailed(s) {
+    if (s.props.get('Looped')) return;
+    setTimeout(() => {
+      if (s.destroyed || this.sounds.has(s)) return;
+      s.props.set('IsPlaying', false);
+      this.dm.emit(s, 'Ended');
+    }, 0);
   }
 
   updateSound(s) {

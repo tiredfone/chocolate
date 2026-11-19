@@ -167,6 +167,11 @@ export class R15Atlases {
       m.frustumCulled = false;
       scene.add(m);
     };
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(def.w, def.h), new THREE.MeshBasicMaterial({ color: tint, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
+    fill.position.set(def.w / 2, def.h / 2, 0);
+    fill.renderOrder = 0;
+    fill.frustumCulled = false;
+    scene.add(fill);
     add(new THREE.MeshBasicMaterial({ color: tint, depthTest: false, depthWrite: false, side: THREE.DoubleSide }), 1);
     this.draw(e, scene);
     const texs = await Promise.all(def.layers.map((k) => (clothes[k] ? loadTexture(clothes[k]) : null)));

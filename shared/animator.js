@@ -4,6 +4,7 @@ const IDENTITY = C.cf();
 const seqCache = new Map();
 const HOLD_WHILE_LOADING = 3;
 const OPS = new Set(['play', 'stop', 'speed', 'weight', 'time']);
+const ALWAYS_LOOP = new Set([180426354]);
 
 export function animAssetId(url) {
   if (typeof url === 'number') return url > 0 ? url : null;
@@ -86,9 +87,11 @@ function accumulate(levels, prio, seq, t, w) {
   }
 }
 
+const rank = (p) => (p >= 1000 ? -1 : p);
+
 function resolve(levels) {
   const out = new Map();
-  for (const prio of [...levels.keys()].sort((a, b) => a - b)) {
+  for (const prio of [...levels.keys()].sort((a, b) => rank(a) - rank(b))) {
     for (const [name, e] of levels.get(prio)) {
       const k = Math.min(1, e.acc);
       const base = out.get(name);
@@ -131,6 +134,7 @@ export class Animations {
     const p = this.loadAsset(id).then((model) => {
       const ks = model.ClassName === 'KeyframeSequence' ? model : model.descendants().find((d) => d.ClassName === 'KeyframeSequence');
       const seq = ks ? parseSequence(ks) : null;
+      if (seq && ALWAYS_LOOP.has(id)) seq.loop = true;
       if (!model.destroyed) this.dm.destroy(model, true);
       if (!seq) throw new Error(`asset ${id} has no KeyframeSequence`);
       return seq;
@@ -150,7 +154,8 @@ export class Animations {
   priorityOf(tr) {
     const inst = tr.inst;
     const p = inst && !inst.destroyed ? inst.props.get('Priority') : undefined;
-    if (typeof p === 'number' && (p !== 0 || !tr.seq)) return p;
+    if (typeof p === 'number' && p >= 0) tr.prio = p;
+    if (typeof tr.prio === 'number') return tr.prio;
     return tr.seq ? tr.seq.priority : 1000;
   }
 
@@ -171,12 +176,13 @@ export class Animations {
       if (!id) return;
       if (!tr || tr.id !== id) {
         if (tr) an.tracks.splice(an.tracks.indexOf(tr), 1);
+        if (inst && !inst.destroyed && inst.props.has('Priority') && !inst.props.get('Priority')) inst.props.set('Priority', -1);
         tr = { key, id, inst, seq: null, t: 0, w: 0, target: 1, fade: 0.1, speed: 1, weight: 1, wait: 0 };
         const load = (n) => this.sequence(id).then((seq) => {
           tr.seq = seq;
           if (tr.inst && !tr.inst.destroyed) {
             tr.inst.props.set('Length', seq.length);
-            if (!tr.inst.props.get('Priority')) tr.inst.props.set('Priority', seq.priority);
+            if (tr.inst.props.get('Priority') < 0) tr.inst.props.set('Priority', seq.priority);
           }
         }).catch(() => {
           if (n >= 4 || tr.target === 0 || !an.tracks.includes(tr)) {
@@ -268,6 +274,7 @@ export class Animations {
         const prev = tr.t;
         let now = prev + dt * tr.speed;
         const len = seq.length;
+        if (now < 0) now = seq.loop && len > 0 ? ((now % len) + len) % len : 0;
         const reached = [];
         if (tr.target > 0) {
           if (len > 0 && now >= len) {

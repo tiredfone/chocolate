@@ -10,19 +10,19 @@ import { Core2018 } from '../shared/core2018.js';
 import { FLAGS_2018 } from '../shared/api2018.js';
 import { Physics } from '../shared/physics.js';
 import * as C from '../shared/cframe.js';
-import { buildCharacter, buildR15, attachAccessory, gripWeld, syncGrip, liveCharacterOf, Rig, Controller, CharacterProxy, partColorProps, STATES, rootOf } from '../shared/humanoid.js';
+import { buildCharacter, buildR15, attachAccessory, gripWeld, gripArm, syncGrip, liveCharacterOf, withHumanoidMemo, Rig, Controller, CharacterProxy, partColorProps, STATES, rootOf, applyLimbAngles } from '../shared/humanoid.js';
 import { Replicator } from './replicator.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 import { placeBytes, assetNodes, appearance, luaSource, assetBytes, assetIdOf } from './assets.js';
 import { endpoint, config } from './config.js';
-import { social } from './social.js';
+import { social, report } from './social.js';
 import { meshDataFromAsset } from '../shared/csg.js';
 import { PlayerData } from './persistence.js';
 import { DEBUG_LUA, DebugAgent } from '../shared/debugger.js';
 import { writeModel } from '../shared/rbxlx.js';
 import { terrainOf } from '../shared/terrain.js';
 
-const HUM_STATE = [8, 8, 3, 5, 13, 12, 15, 14];
+const HUM_STATE = [8, 8, 3, 5, 13, 12, 15, 14, 4];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNTIME = fs.readFileSync(path.join(HERE, '../shared/runtime.lua'), 'utf8');
@@ -55,6 +55,7 @@ function load2018() {
   return era2018;
 }
 const TICK = 1 / 30;
+const ASSEMBLY_MIN = 8;
 const PRELOAD_ANIMS = new Set(['idle', 'walk', 'run', 'jump', 'fall', 'climb', 'sit', 'toolnone']);
 const MAX_CHAT = 200;
 const SERVER_LIBRARIES = { RbxGui: 45284430, RbxGear: 45374389, RbxUtility: 60595411, RbxStamper: 73157242 };
@@ -95,6 +96,8 @@ let rapierReady = null;
 function cleanText(s, max) {
   return String(s ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
 }
+
+const CHARACTER_MASS = 9.8;
 
 function finiteArr(a, n) {
   if (!Array.isArray(a) || a.length !== n) return null;
@@ -148,6 +151,16 @@ export class Game {
     }
   }
 
+  runCode(source, by) {
+    const dm = this.dm;
+    const sss = dm.service('ServerScriptService');
+    const sc = dm.create('Script', null);
+    sc.props.set('Name', 'ServerCode');
+    sc.props.set('Source', source);
+    this.log('print', `Running server code from ${by || 'a developer'}`);
+    dm.setParent(sc, sss);
+  }
+
   async start() {
     if (!rapierReady) rapierReady = RAPIER.init();
     await Promise.all([rapierReady, preloadLibraries()]);
@@ -182,7 +195,10 @@ export class Game {
         return id ? assetBytes(id).then(meshDataFromAsset).catch(() => null) : null;
       },
     });
-    this.physics.attachWorkspace(ws);
+    withHumanoidMemo(() => this.physics.attachWorkspace(ws));
+    this.physics.onBoardState = (board, state, old) => {
+      this.dm.emit(board, 'MoveStateChanged', T.e('MoveState', state), T.e('MoveState', old));
+    };
     this.replicator = new Replicator(dm);
     dm.observe({
       reparented: (inst) => this.scanCharacters(inst),
@@ -197,6 +213,8 @@ export class Game {
     this.anims = new Animations(dm, (id) => this.host.env.loadAsset(id));
     for (const [name, id] of Object.entries(SERVER_LIBRARIES)) this.host.libraries.set(name, String(id));
     if (this.era === 2018) this.host.flags = FLAGS_2018;
+    this.unimplTimer = setInterval(() => this.flushUnimplemented(), 60000);
+    if (this.unimplTimer.unref) this.unimplTimer.unref();
     await this.host.init(() => Lua.create(), RUNTIME, [...(this.era === 2018 ? [{ source: load2018().runtime, name: 'runtime2018' }] : []), ...(this.kind === 'test' ? [{ source: DEBUG_LUA, name: 'debug' }] : [])]);
     if (this.kind === 'test' && this.io.debug) {
       this.debugger = new DebugAgent(this.host, (info) => this.io.debug(info));
@@ -211,7 +229,17 @@ export class Game {
     for (let i = 0; i < 3; i++) this.host.tick(this.t);
     this.running = true;
     this.t0 = performance.now();
-    this.loop = setInterval(() => this.tick(), TICK * 1000);
+    this.nextTick = performance.now() + TICK * 1000;
+    this.loop = setInterval(() => {
+      const now = performance.now();
+      if (now - this.nextTick > TICK * 4000) this.nextTick = now;
+      let n = 0;
+      while (this.running && now >= this.nextTick - 1 && n < 3) {
+        this.nextTick += TICK * 1000;
+        n++;
+        this.tick();
+      }
+    }, 8);
     const begin = performance.now();
     while (performance.now() - begin < 15000) {
       const quiet = performance.now() - Math.max(begin, this.lastLoadChange || 0);
@@ -337,6 +365,28 @@ export class Game {
   stop() {
     this.running = false;
     clearInterval(this.loop);
+    clearInterval(this.unimplTimer);
+    this.flushUnimplemented();
+  }
+
+  noteUnimplemented(kind, name, side) {
+    if (this.kind === 'test' || !/^(method|class|service)$/.test(kind)) return;
+    if (!this.unimpl) this.unimpl = new Map();
+    const key = `${kind}|${name}|${side}`;
+    const e = this.unimpl.get(key);
+    if (e) {
+      e.count++;
+      return;
+    }
+    if (this.unimpl.size >= 200) return;
+    this.unimpl.set(key, { kind, name: String(name).slice(0, 120), side, count: 1 });
+  }
+
+  flushUnimplemented() {
+    if (!this.unimpl || !this.unimpl.size) return;
+    const items = [...this.unimpl.values()];
+    this.unimpl.clear();
+    social('unimplemented', { placeId: this.placeId | 0, era: this.era | 0, items }).catch(() => {});
   }
 
   async close() {
@@ -352,11 +402,13 @@ export class Game {
     const dm = this.dm;
     return {
       log: (k, m, w) => this.log(k, m, w),
+      unimplemented: (kind, name) => this.noteUnimplemented(kind, name, 'server'),
       thumbnailUrl: (id, kind) => (kind === 'avatar' && endpoint('avatarThumbnail', id)) || endpoint('thumbnail', id) || '',
       placeThumbnailUrl: (id) => endpoint('placeThumbnail', id) || '',
       coreSource: (id) => luaAsset(id),
       raycast: (o, d, ig) => this.physics.raycast(o, d, ig),
       breakJoints: (p) => this.physics.breakJoints(p),
+      boardImpulse: (b, v) => this.physics.boardImpulse(b, v),
       makeJoints: (ps) => this.physics.makeJoints(ps),
       connectedParts: (p) => this.physics.connectedParts(p),
       touchingParts: (p) => this.physics.touchingParts(p),
@@ -461,6 +513,23 @@ export class Game {
       friendStatus: (pl, other) => this.friendStatusOf(pl, other),
       friendRequest: (pl, other, on) => { this.changeFriendship(pl, other, on).catch(() => {}); },
       setMessage: (m) => this.broadcast({ t: 'msg', m: m == null ? null : cleanText(m, 500) }),
+      productInfoAsync: (id, kind) => this.productInfo(id, kind),
+      ownsAsset: async (uid, id) => {
+        if (!(uid > 0) || !(id > 0)) return false;
+        const r = await social('ownsAsset', { userId: uid, assetId: id });
+        return !!(r && r.owns);
+      },
+      prompt: (pl, kind, id, equip) => {
+        const c = pl && pl.ClassName === 'Player' ? this.clientOf(pl) : null;
+        if (c && id > 0) this.io.send(c.cid, JSON.stringify({ t: 'prompt', kind, id, equip: !!equip }));
+      },
+      receiptResult: (token, result) => {
+        const w = this.receiptWaits && this.receiptWaits.get(token | 0);
+        if (w) {
+          this.receiptWaits.delete(token | 0);
+          w(String(result || ''));
+        }
+      },
       teleport: (placeId, pl) => {
         const c = pl && this.clientOf(pl);
         if (c && placeId > 0) this.io.send(c.cid, JSON.stringify({ t: 'teleport', place: placeId | 0 }));
@@ -497,6 +566,8 @@ export class Game {
         return top;
       },
       bubbleChat: (part, msg, color) => {
+        const owner = part && part.parent ? this.playerOfChar(part.parent) : null;
+        if (owner) this.noteChat(owner.props.get('Name'), cleanText(msg, MAX_CHAT));
         if (part && part.isA('BasePart')) this.broadcast({ t: 'bubble', id: part.id, m: cleanText(msg, MAX_CHAT), c: (typeof color === 'number' ? color : color && color.value) | 0 });
       },
       findSpace: (m, parts, cf, target) => this.findSpace(m, parts, cf, target),
@@ -531,9 +602,99 @@ export class Game {
     return target;
   }
 
+  noteChat(name, msg) {
+    if (!this.chatLog) this.chatLog = [];
+    this.chatLog.push(`${name}: ${msg}`.slice(0, 200));
+    if (this.chatLog.length > 40) this.chatLog.shift();
+  }
+
   broadcast(obj, except) {
     const s = JSON.stringify(obj);
     for (const c of this.clients.values()) if (c.ready && c !== except) this.io.send(c.cid, s);
+  }
+
+  productInfo(id, kind) {
+    if (!(id > 0)) return Promise.resolve(null);
+    if (!this.infoCache) this.infoCache = new Map();
+    const key = kind + ':' + id;
+    const hit = this.infoCache.get(key);
+    if (hit && Date.now() - hit.at < 30000) return hit.p;
+    const p = social('productInfo', { kind, id }).then((r) => (r && r.info) || null);
+    this.infoCache.set(key, { at: Date.now(), p });
+    if (this.infoCache.size > 500) this.infoCache.delete(this.infoCache.keys().next().value);
+    return p;
+  }
+
+  async marketRequest(c, m) {
+    const uid = c.user.id | 0;
+    const id = Math.max(0, Math.floor(+m.id || 0));
+    if (m.op === 'info') return { info: await this.productInfo(id, ['asset', 'gamepass', 'product'].includes(m.kind) ? m.kind : 'asset') };
+    if (m.op === 'owns') {
+      const who = Math.floor(+m.uid || 0);
+      if (!(who > 0) || !(id > 0)) return { owns: false };
+      const r = await social('ownsAsset', { userId: who, assetId: id });
+      return { owns: !!(r && r.owns) };
+    }
+    if (m.op === 'balance') {
+      const r = await social('balance', { userId: uid });
+      return { robux: r ? r.robux | 0 : 0 };
+    }
+    if (m.op === 'buy') {
+      const kind = m.kind === 'product' ? 'product' : 'asset';
+      const r = await social('purchase', { userId: uid, placeId: this.placeId, kind, id, price: Math.floor(+m.price || 0) });
+      const out = { success: !!(r && r.success), status: String((r && r.status) || 'Error') };
+      if (out.success || out.status === 'AlreadyOwned') {
+        if (!c.bought) c.bought = new Set();
+        c.bought.add(kind + ':' + id);
+        if (this.infoCache) this.infoCache.delete('asset:' + id);
+      }
+      if (out.success && kind === 'product') {
+        out.receipt = String(r.receipt);
+        setTimeout(() => {
+          this.io.send(c.cid, JSON.stringify({ t: 'pver', receipt: out.receipt, product: id }));
+          this.processReceipts(c).catch(() => {});
+        }, 0);
+      }
+      if (out.success) this.log('print', `${c.user.name} bought ${kind} ${id} for ${r.price | 0} Robux`);
+      return out;
+    }
+    return null;
+  }
+
+  async processReceipts(c) {
+    if (this.era !== 2018 || c.receiptBusy || !this.clients.has(c.cid)) return;
+    c.receiptBusy = true;
+    let retry = false;
+    try {
+      const r = await social('pendingReceipts', { userId: c.user.id, placeId: this.placeId });
+      const list = r && Array.isArray(r.receipts) ? r.receipts : [];
+      const mps = this.dm.service('MarketplaceService');
+      for (const rc of list) {
+        if (!this.clients.has(c.cid)) break;
+        if (!this.receiptWaits) this.receiptWaits = new Map();
+        const token = this.invokeSeq++;
+        const result = await new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            this.receiptWaits.delete(token);
+            resolve('Timeout');
+          }, 60000);
+          this.receiptWaits.set(token, (v) => {
+            clearTimeout(timer);
+            resolve(v);
+          });
+          this.dm.emit(mps, '__Receipt', token, T.dict({
+            PlayerId: c.user.id, PlaceIdWherePurchased: this.placeId, PurchaseId: String(rc.id), ProductId: rc.productId | 0,
+            CurrencyType: T.e('CurrencyType', 1), CurrencySpent: rc.robux | 0,
+          }));
+        });
+        if (/PurchaseGranted$/.test(result)) await social('grantReceipt', { receiptId: rc.id, userId: c.user.id, placeId: this.placeId });
+        else if (result === 'NoHandler') break;
+        else retry = true;
+      }
+    } finally {
+      c.receiptBusy = false;
+    }
+    if (retry && this.clients.has(c.cid)) setTimeout(() => this.processReceipts(c).catch(() => {}), 30000);
   }
 
   clientOf(pl) {
@@ -593,7 +754,7 @@ export class Game {
     player.props.set('AccountAge', user.age | 0);
     player.props.set('DataReady', false);
     player.props.set('DataComplexityLimit', 45000);
-    player.data = Object.assign(player.data || {}, { avatarType: user.avatarType === 'R15' ? 'R15' : 'R6', scale: user.scale || null });
+    player.data = Object.assign(player.data || {}, { avatarType: user.avatarType === 'R15' ? 'R15' : 'R6', scale: user.scale || null, gearGenres: Array.isArray(user.gearGenres) ? user.gearGenres : [], gearMap: user.gearMap || {}, animations: Array.isArray(user.animations) ? user.animations : [] });
     const bp = dm.create('Backpack', player);
     bp.props.set('Name', 'Backpack');
     const gui = dm.create('PlayerGui', player);
@@ -637,8 +798,9 @@ export class Game {
     this.copyStarterGui(player);
     const rc = this.replicator.clients.get(cid);
     const snap = this.replicator.snapshotFor(rc);
-    const anims = this.era === 2018 ? this.preloadAnims(player.data && player.data.avatarType === 'R15') : [];
-    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap, anims, terrain: this.terrain && this.terrain.chunks.size ? this.terrain.encode() : null }));
+    const r15Player = !!(player.data && player.data.avatarType === 'R15');
+    const anims = this.era === 2018 ? [...new Set([...(r15Player ? player.data.animations || [] : []), ...this.preloadAnims(r15Player)])].slice(0, 32) : [];
+    this.io.send(cid, JSON.stringify({ t: 'init', place: this.placeId, era: this.era, you: player.id, user: { id: user.id, name: user.name }, snap, asm: this.assemblySnapshot(), anims, terrain: this.terrain && this.terrain.chunks.size ? this.terrain.encode() : null }));
     rc.ready = true;
     client.ready = true;
     if (client.dev && this.outHistory) for (const line of this.outHistory) this.io.send(cid, line);
@@ -650,6 +812,7 @@ export class Game {
     }).catch(() => {});
     dm.emit(players, 'PlayerAdded', player);
     this.broadcast({ t: 'sys', m: `${user.name} has joined the game.` });
+    if (this.era === 2018) setTimeout(() => this.processReceipts(client).catch(() => {}), 8000);
     this.loadFriendStatuses(client).catch(() => {});
     if (players.props.get('CharacterAutoLoads')) this.loadCharacter(player).catch((e) => this.log('error', 'LoadCharacter: ' + e.message));
   }
@@ -850,6 +1013,7 @@ export class Game {
     if (player.destroyed || !player.parent) return;
     const { pos, spawn } = this.spawnPoint(player);
     const r15 = !custom && this.era === 2018 && player.data && player.data.avatarType === 'R15' && load2018().r15;
+    const animOverrides = new Map();
     let built;
     if (custom) {
       const m = this.cloneAlways(custom);
@@ -870,10 +1034,22 @@ export class Game {
       if (r15) {
         for (const id of look.assets) {
           const ns = await nodesOf(id);
+          const anim = ns && ns.find((n) => n.cls === 'Folder' && n.props.get('Name')?.v === 'R15Anim');
+          if (anim) for (const sv of anim.children) if (sv.cls === 'StringValue') animOverrides.set(sv.props.get('Name')?.v, sv);
           const f = ns && ns.find((n) => n.cls === 'Folder' && n.props.get('Name')?.v === 'R15ArtistIntent');
           if (!f) continue;
-          if (pkgFolder) dm.destroy(pkgFolder, true);
-          pkgFolder = dm.load([f], null).find((m) => !m.parent) || null;
+          const loaded = dm.load([f], null).find((m) => !m.parent) || null;
+          if (!loaded) continue;
+          if (!pkgFolder) {
+            pkgFolder = loaded;
+            continue;
+          }
+          for (const ch of [...loaded.children]) {
+            const old = pkgFolder.findChild(ch.props.get('Name'));
+            if (old) dm.destroy(old, true);
+            dm.setParent(ch, pkgFolder);
+          }
+          dm.destroy(loaded, true);
         }
         if (player.destroyed || !player.parent) {
           if (pkgFolder) dm.destroy(pkgFolder, true);
@@ -898,6 +1074,13 @@ export class Game {
       if (humanoid.info.all.has('Health')) humanoid.props.set('Health', humanoid.props.get('MaxHealth'));
     }
     if (this.era === 2018) {
+      const animate = animOverrides.size && model.findChild('Animate');
+      if (animate) for (const [slot, sv] of animOverrides) {
+        const target = slot && animate.findChild(slot);
+        if (!target || !sv.children.length) continue;
+        for (const old of [...target.children]) dm.destroy(old, true);
+        dm.load(sv.children, target);
+      }
       const scs = dm.services.get('StarterPlayer') && dm.services.get('StarterPlayer').findChildOfClass('StarterCharacterScripts');
       if (scs) for (const c of scs.children) {
         if (model.findChild(c.props.get('Name'))) dm.destroy(model.findChild(c.props.get('Name')));
@@ -916,8 +1099,9 @@ export class Game {
     }
     for (const id of look.assets) {
       try {
-        const nodes = await nodesOf(id);
-        if (!nodes) continue;
+        const all = await nodesOf(id);
+        const nodes = all && (r15 ? all : all.filter((n) => !(n.cls === 'Folder' && /^R15/i.test(String(n.props.get('Name')?.v ?? '')))));
+        if (!nodes || !nodes.length) continue;
         const made = dm.load(nodes, model);
         for (const m of made) this.applyWearable(model, m);
       } catch (e) {
@@ -943,7 +1127,7 @@ export class Game {
         const k = dm.clone(c);
         if (k) dm.setParent(k, bp);
       }
-      for (const tpl of this.allowGear ? await this.gearFor(player, look.gear) : []) {
+      for (const tpl of this.allowGear ? await this.gearFor(player, this.allowedGear(player, look.gear)) : []) {
         if (player.destroyed || bp.destroyed) break;
         const k = dm.clone(tpl);
         if (k) dm.setParent(k, bp);
@@ -990,12 +1174,30 @@ export class Game {
       if (st === STATES.climb) dm.emit(hum, 'Climbing', hum.props.get('WalkSpeed'));
       if (this.era === 2018) dm.emit(hum, 'StateChanged', T.e('HumanoidStateType', HUM_STATE[prev] ?? 8), T.e('HumanoidStateType', HUM_STATE[st] ?? 8));
     }
-    const speed = st === STATES.walk ? Math.hypot(rec.vel[0], rec.vel[2]) : 0;
+    const speed = st === STATES.walk || st === STATES.swim ? Math.hypot(rec.vel[0], rec.vel[2]) : 0;
     const running = speed > 0.5 ? Math.round(speed) : 0;
+    if (st === STATES.swim) {
+      if (running !== rec.lastSwim || prev !== st) {
+        rec.lastSwim = running;
+        dm.emit(hum, 'Swimming', running);
+      }
+    } else rec.lastSwim = undefined;
+    if (st === STATES.swim) return;
     if (running !== rec.lastRunning) {
       rec.lastRunning = running;
       dm.emit(hum, 'Running', running);
     }
+  }
+
+  allowedGear(player, ids) {
+    const d = player.data || {};
+    const allowed = d.gearGenres || [];
+    if (!allowed.length) return ids || [];
+    const map = d.gearMap || {};
+    return (ids || []).filter((id) => {
+      const g = map[String(id)];
+      return Array.isArray(g) && g.some((x) => allowed.includes(x));
+    });
   }
 
   async gearFor(player, ids) {
@@ -1229,6 +1431,8 @@ export class Game {
         continue;
       }
       if (rec.owner) {
+        if (!rec.seat && (rec.state === STATES.idle || rec.state === STATES.walk || rec.state === STATES.stand)) this.physics.setLoad(model, rec.torsoCF, CHARACTER_MASS);
+        else this.physics.clearLoad(model);
         const h = hum.props.get('Health'), mh = hum.props.get('MaxHealth');
         if (h < mh) this.dm.setProp(hum, 'Health', Math.min(mh, h + mh * 0.01 * dt));
       }
@@ -1275,6 +1479,17 @@ export class Game {
     }
   }
 
+  sitHeight(model, root) {
+    const lower = model.findChild('LowerTorso');
+    const leg = model.findChild('RightUpperLeg');
+    const hip = leg && leg.findChild('RightHip');
+    const c0 = hip && hip.props.get('C0');
+    if (!lower || !leg || !c0 || !root) return 1;
+    const rel = lower.props.get('CFrame')[1] - root.props.get('CFrame')[1] + c0[1];
+    const h = -rel + (leg.props.get('Size')[0] || 1) / 2;
+    return Math.max(0.3, Math.min(1.5, h));
+  }
+
   sit(rec, seat) {
     if (rec.seat || rec.dead || seat.props.get('Disabled') || seat.props.get('Occupant')) return;
     const last = this.lastSit.get(rec.model) || 0;
@@ -1285,7 +1500,7 @@ export class Game {
     w.props.set('Name', 'SeatWeld');
     w.props.set('Part0', seat);
     w.props.set('Part1', torso);
-    w.props.set('C0', C.cf(0, seat.props.get('Size')[1] / 2 + 1, 0));
+    w.props.set('C0', C.cf(0, seat.props.get('Size')[1] / 2 + this.sitHeight(rec.model, torso), 0));
     w.props.set('C1', C.angles(0, 0, 0));
     for (const o of dm.observers) if (o.created) o.created(w);
     dm.setParent(w, seat);
@@ -1296,8 +1511,66 @@ export class Game {
     dm.emit(rec.hum, 'Seated', true, seat);
   }
 
+  mountBoard(rec, board) {
+    if (rec.seat || rec.dead || board.props.get('ControllingHumanoid')) return;
+    const last = this.lastSit.get(rec.model) || 0;
+    if (this.t - last < 1.2) return;
+    const torso = rootOf(rec.model);
+    if (!torso) return;
+    const bcf = board.props.get('CFrame'), tcf = torso.props.get('CFrame');
+    if (tcf[1] < bcf[1] + 1) return;
+    const dm = this.dm;
+    const r15 = !!rec.model.findChild('UpperTorso');
+    const hip = r15 ? (+rec.hum.props.get('HipHeight') || 2) + (torso.props.get('Size')?.[1] || 2) / 2 : 3;
+    const w = dm.create('Weld', null);
+    w.props.set('Name', 'SeatWeld');
+    w.props.set('Part0', board);
+    w.props.set('Part1', torso);
+    w.props.set('C0', C.cf(0, board.props.get('Size')[1] / 2 + hip, 0));
+    w.props.set('C1', C.angles(0, 0, 0));
+    for (const o of dm.observers) if (o.created) o.created(w);
+    dm.setParent(w, board);
+    const controller = dm.create('SkateboardController', null);
+    controller.props.set('Name', 'SkateboardController');
+    controller.data = { buttons: {} };
+    for (const o of dm.observers) if (o.created) o.created(controller);
+    dm.setParent(controller, board);
+    rec.seat = { seat: board, weld: w, board: true, controller };
+    if (rec.proxy) rec.proxy.setSeated(true);
+    dm.setProp(rec.hum, 'PlatformStand', true);
+    dm.setProp(board, 'ControllingHumanoid', rec.hum);
+    dm.setProp(board, 'Controller', controller);
+    dm.emit(board, 'equipped', rec.hum, controller);
+    dm.emit(board, 'Equipped', rec.hum, controller);
+  }
+
   unseat(rec) {
     if (!rec.seat) return;
+    if (rec.seat.board) {
+      const { seat: board, weld, controller } = rec.seat;
+      rec.seat = null;
+      if (rec.proxy) rec.proxy.setSeated(false);
+      this.lastSit.set(rec.model, this.t);
+      if (!weld.destroyed) this.dm.destroy(weld);
+      if (!board.destroyed) {
+        this.dm.setProp(board, 'Throttle', 0);
+        this.dm.setProp(board, 'Steer', 0);
+        this.dm.setProp(board, 'ControllingHumanoid', null);
+        this.dm.setProp(board, 'Controller', null);
+        this.dm.emit(board, 'unequipped', board);
+        this.dm.emit(board, 'Unequipped', board);
+      }
+      if (controller && !controller.destroyed) this.dm.destroy(controller);
+      if (!rec.hum.destroyed) this.dm.setProp(rec.hum, 'PlatformStand', false);
+      rec.torsoCF = C.mul(rec.torsoCF, C.cf(0, 1.5, 0));
+      rec.vel = [0, 20, 0];
+      if (rec.owner) {
+        rec.tpSeq++;
+        const c = this.clientOf(rec.owner);
+        if (c) c.tpPending = { t: 'tp', s: rec.tpSeq, c: flat(rec.torsoCF), v: [0, 25, 0] };
+      } else if (rec.ctrl) rec.ctrl.teleport(rec.torsoCF);
+      return;
+    }
     const { seat, weld } = rec.seat;
     rec.seat = null;
     if (rec.proxy) rec.proxy.setSeated(false);
@@ -1367,6 +1640,7 @@ export class Game {
         const rec = this.chars.get(ch);
         if (!rec) continue;
         if ((part.ClassName === 'Seat' || part.ClassName === 'VehicleSeat') && !rec.seat) this.sit(rec, part);
+        if (part.ClassName === 'SkateboardPlatform' && !rec.seat) this.mountBoard(rec, part);
         if (part.props.get('Name') === 'Handle' && part.parent && part.parent.ClassName === 'Tool' && this.dm.inWorkspace(part) && !liveCharacterOf(part)) {
           const pl = rec.owner;
           if (pl) {
@@ -1433,7 +1707,7 @@ export class Game {
     const dm = this.dm;
     model = model || (pl && pl.props.get('Character'));
     if (!model || tool.parent !== model) return;
-    const arm = model.findChild('Right Arm');
+    const arm = gripArm(model);
     const grip = arm && arm.findChild('RightGrip');
     if (grip) dm.destroy(grip);
     const bp = pl && pl.findChildOfClass('Backpack');
@@ -1490,6 +1764,11 @@ export class Game {
         const cf = finiteArr(m.c, 12);
         const v = finiteArr(m.v, 3);
         if (!cf || !v) return;
+        const ja = finiteArr(m.j, 4);
+        if (ja) {
+          rec.netAngles = ja.map((a) => Math.max(-7, Math.min(7, Math.round(a * 1000) / 1000)));
+          applyLimbAngles(rec.model, rec.netAngles);
+        }
         const ws = rec.hum.props.get('WalkSpeed');
         const dt = Math.max(0.03, this.t - (rec.lastUpdate || this.t - 0.05));
         const dist = Math.hypot(cf[0] - rec.torsoCF[0], cf[2] - rec.torsoCF[2]);
@@ -1504,8 +1783,13 @@ export class Game {
         this.sweepTouches(rec, was, rec.torsoCF);
         rec.vel = v;
         const prev = rec.state;
-        rec.state = Math.max(0, Math.min(7, m.st | 0));
+        rec.state = Math.max(0, Math.min(8, m.st | 0));
         rec.lastUpdate = this.t;
+        if (rec.state === STATES.jump || rec.state === STATES.fall) rec.fallSpeed = Math.min(rec.fallSpeed || 0, v[1]);
+        else if (prev === STATES.jump || prev === STATES.fall) {
+          if ((rec.fallSpeed || 0) < -5) this.physics.addImpact(rec.model, rec.torsoCF, CHARACTER_MASS * -rec.fallSpeed);
+          rec.fallSpeed = 0;
+        }
         this.humanoidEvents(rec, prev);
         break;
       }
@@ -1514,6 +1798,31 @@ export class Game {
         break;
       }
       case 'drive': {
+        if (rec && rec.seat && rec.seat.board) {
+          const board = rec.seat.seat, ctl = rec.seat.controller;
+          const th = Math.max(-1, Math.min(1, m.th | 0)), st = Math.max(-1, Math.min(1, m.st | 0));
+          const axis = th !== (board.props.get('Throttle') | 0) || st !== (board.props.get('Steer') | 0);
+          dm.setProp(board, 'Throttle', th);
+          dm.setProp(board, 'Steer', st);
+          if (ctl && !ctl.destroyed) {
+            dm.setProp(ctl, 'Throttle', th);
+            dm.setProp(ctl, 'Steer', st);
+            if (axis) dm.emit(ctl, 'AxisChanged', th !== (ctl.data.lastTh ?? 0) ? 'Throttle' : 'Steer');
+            ctl.data.lastTh = th;
+            for (const [key, code] of [['j', 32], ['d', 33]]) {
+              const down = !!m[key];
+              if (down === !!ctl.data.buttons[code]) continue;
+              ctl.data.buttons[code] = down;
+              dm.emit(ctl, 'ButtonChanged', T.e('Button', code));
+              if (down && code === 32 && !dm.hasListener(ctl, 'ButtonChanged') && this.physics.boardGrounded(board)) this.physics.boardImpulse(board, [0, 32, 0]);
+              if (down && code === 33) {
+                this.unseat(rec);
+                return;
+              }
+            }
+          }
+          return;
+        }
         if (!rec || !rec.seat || rec.seat.seat.ClassName !== 'VehicleSeat') return;
         const seat = rec.seat.seat;
         dm.setProp(seat, 'Throttle', Math.max(-1, Math.min(1, m.th | 0)));
@@ -1544,6 +1853,61 @@ export class Game {
         this.equip(pl, tool, model);
         break;
       }
+      case 'unimpl': {
+        const now = Date.now();
+        if (!c.unimplWindow || now - c.unimplWindow > 60000) {
+          c.unimplWindow = now;
+          c.unimplCount = 0;
+        }
+        if (++c.unimplCount > 40) return;
+        if (typeof m.n === 'string' && m.n.length <= 120) this.noteUnimplemented(m.k, m.n, 'client');
+        break;
+      }
+      case 'report': {
+        if (this.t - (c.lastReport || -999) < 20) return;
+        c.lastReport = this.t;
+        const target = m.p ? this.ownedInst(c, m.p, 'Player') : null;
+        this.log('info', `report from ${c.user.name} (${c.user.id | 0}) about ${target ? target.props.get('Name') : 'the game'}: ${cleanText(m.r, 80)}`);
+        report({
+          reporterId: c.user.id | 0,
+          targetId: target ? target.props.get('userId') | 0 : 0,
+          placeId: this.placeId | 0,
+          job: String(this.jobId || ''),
+          reason: cleanText(m.r, 80),
+          description: cleanText(m.m, 1500),
+          chat: (this.chatLog || []).slice(-25),
+        }).catch(() => {});
+        break;
+      }
+      case 'mkt': {
+        const now = Date.now();
+        if (!c.mktWindow || now - c.mktWindow > 10000) {
+          c.mktWindow = now;
+          c.mktCount = 0;
+        }
+        if (++c.mktCount > 30) {
+          this.io.send(c.cid, JSON.stringify({ t: 'mktr', k: m.k | 0, r: null }));
+          return;
+        }
+        this.marketRequest(c, m).catch(() => null).then((r) => this.io.send(c.cid, JSON.stringify({ t: 'mktr', k: m.k | 0, r })));
+        break;
+      }
+      case 'pfin': {
+        const id = Math.max(0, Math.floor(+m.id || 0));
+        const kind = m.kind === 'product' ? 'product' : m.kind === 'gamepass' ? 'gamepass' : 'asset';
+        const key = (kind === 'product' ? 'product:' : 'asset:') + id;
+        const ok = !!m.ok && !!(c.bought && c.bought.has(key));
+        if (ok) c.bought.delete(key);
+        const mps = dm.service('MarketplaceService');
+        if (kind === 'gamepass') dm.emit(mps, 'PromptGamePassPurchaseFinished', pl, id, ok);
+        else if (kind === 'asset') dm.emit(mps, 'PromptPurchaseFinished', pl, id, ok);
+        else dm.emit(mps, 'PromptProductPurchaseFinished', c.user.id, id, ok);
+        break;
+      }
+      case 'rcpt': {
+        this.processReceipts(c).catch(() => {});
+        break;
+      }
       case 'friend': {
         const other = this.dm.byId.get(m.id | 0);
         if (other && other.ClassName === 'Player') this.changeFriendship(pl, other, !!m.on).catch(() => {});
@@ -1558,7 +1922,7 @@ export class Game {
       case 'drop': {
         const tool = this.ownedInst(c, m.id, 'Tool');
         if (!tool || !rec || tool.parent !== model || !tool.props.get('CanBeDropped')) return;
-        const arm = model.findChild('Right Arm');
+        const arm = gripArm(model);
         const grip = arm && arm.findChild('RightGrip');
         if (grip) dm.destroy(grip);
         this.toolMice.delete(pl);
@@ -1673,6 +2037,7 @@ export class Game {
         const target = kind === 'whisper' ? this.ownedInst(c, m.to, 'Player') : null;
         if (kind === 'whisper' && !target) return;
         dm.emit(pl, 'Chatted', msg, target);
+        if (kind === 'all') this.noteChat(pl.props.get('Name'), msg);
         const head = model && model.findChild('Head');
         const out = JSON.stringify({ t: 'chat', p: pl.id, n: pl.props.get('Name'), u: pl.props.get('userId'), m: msg, k: kind, to: target ? target.id : undefined, h: head ? head.id : null });
         for (const o of this.clients.values()) {
@@ -1724,6 +2089,7 @@ export class Game {
           setTimeout(() => this.invokes.delete(k), 60000);
           dm.emit(r, '__Invoke', k, pl, ...args);
         }
+        this.runSoon();
         break;
       }
       default:
@@ -1736,12 +2102,16 @@ export class Game {
       const ph = this._ph;
       if (ph && ph.length) msg.ph = ph;
     }
+    if (this._asmDiff) {
+      if (this._asmDiff.as.length) msg.as = this._asmDiff.as;
+      if (this._asmDiff.ad.length) msg.ad = this._asmDiff.ad;
+    }
     const ch = [];
     for (const rec of this.chars.values()) {
       if (rec.dead) continue;
       if (rec.owner === client.player && !rec.seat) continue;
       const cf = rec.torsoCF;
-      ch.push([rec.model.id, ...flat(cf), Math.round(rec.vel[0] * 100) / 100, Math.round(rec.vel[1] * 100) / 100, Math.round(rec.vel[2] * 100) / 100, rec.state]);
+      ch.push([rec.model.id, ...flat(cf), Math.round(rec.vel[0] * 100) / 100, Math.round(rec.vel[1] * 100) / 100, Math.round(rec.vel[2] * 100) / 100, rec.state, ...(rec.owner && rec.netAngles ? rec.netAngles : [])]);
     }
     if (ch.length) msg.ch = ch;
     const c = this.clients.get(client.cid);
@@ -1751,6 +2121,48 @@ export class Game {
       if (c.tpPending) msg.after.push(c.tpPending);
       c.ownPending = c.tpPending = null;
     }
+  }
+
+  assemblyList() {
+    const out = new Map();
+    for (const asm of this.physics.assemblies) {
+      if (!asm.body || asm.anchored || asm.parts.size < ASSEMBLY_MIN) continue;
+      const ids = [];
+      for (const p of asm.parts) if (p.repWas && p.repWas.rep) ids.push(p.id);
+      if (ids.length < ASSEMBLY_MIN) continue;
+      ids.sort((a, b) => a - b);
+      let prev = 0;
+      const d = ids.map((id) => {
+        const x = id - prev;
+        prev = id;
+        return x;
+      });
+      out.set(asm.root.id, d);
+    }
+    return out;
+  }
+
+  assemblySnapshot() {
+    if (!this._asmSent) return [];
+    return [...this._asmSent].map(([r, d]) => [r, d]);
+  }
+
+  syncAssemblies() {
+    if (this._asmEpoch === this.physics.asmEpoch) {
+      this._asmDiff = null;
+      return;
+    }
+    this._asmEpoch = this.physics.asmEpoch;
+    const now = this.assemblyList();
+    const old = this._asmSent || new Map();
+    const as = [], ad = [];
+    for (const [r, d] of now) {
+      const o = old.get(r);
+      if (!o || o.length !== d.length || o.some((x, i) => x !== d[i])) as.push([r, d]);
+    }
+    for (const r of old.keys()) if (!now.has(r)) ad.push(r);
+    this._asmSent = now;
+    this._asmDiff = as.length || ad.length ? { as, ad } : null;
   }
 
   collectPhys() {
@@ -1772,6 +2184,20 @@ export class Game {
     return out;
   }
 
+  runSoon() {
+    if (this.soonQueued || !this.running) return;
+    this.soonQueued = true;
+    setImmediate(() => {
+      this.soonQueued = false;
+      if (!this.running) return;
+      try {
+        this.host.tick(this.t);
+      } catch (e) {
+        this.log('error', 'tick: ' + (e.stack || e.message));
+      }
+    });
+  }
+
   tick() {
     if (!this.running) return;
     const dt = TICK;
@@ -1789,6 +2215,7 @@ export class Game {
       this.updateChars(dt);
       this.handleExplosions();
       this.physics.step(dt);
+      this.syncAssemblies();
       if (this.handleTouches()) this.host.tick(this.t);
       this.dm.services.get('Workspace').props.set('DistributedGameTime', this.t);
       if (this.frame % 2 === 0) this._ph = this.collectPhys();

@@ -143,7 +143,7 @@ export class Replicator {
         }
       }
       if (extraFor) extraFor(client, msg);
-      if (o.length || msg.ph || msg.ch || msg.after) client.send(JSON.stringify(msg));
+      if (o.length || msg.ph || msg.ch || msg.after || msg.as || msg.ad) client.send(JSON.stringify(msg));
     }
   }
 

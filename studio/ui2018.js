@@ -106,6 +106,7 @@ const ACTIONS = {
   viewTaskSchedulerAction: ['stats:render', 'Task Scheduler', ICON_DIR + 'View/Task-Scheduler.png'],
   viewScriptPerformanceAction: ['stats:summary', 'Script Performance', ICON_DIR + 'View/Script-Performance.png'],
   viewFindResultsWindowAction: ['findall', 'Find Results', ICON_DIR + 'View/Find-Results.png'],
+  viewAssistantAction: ['view:assistant', 'Assistant', SMALL + 'console_16.png'],
   viewTeamCreateAction: ['view:team', 'Team Create', ICON_DIR + 'View/TeamCreate.png'],
   viewScriptRecoveryAction: ['autosaves', 'Script Recovery', SMALL + 'report.png'],
   toggleAxisWidgetAction: ['axis', 'Display Axis', ICON_DIR + 'View/Display-Axis.png'],
@@ -197,6 +198,14 @@ export class UI2018 extends UI {
   buildBody() {
     super.buildBody();
     this.commandBar.classList.add('st18-command');
+  }
+
+  extraGroup(caption, label, icon, cmd, name) {
+    const box = el('div', 'st18-group', this.ribbonBody);
+    const items = el('div', 'st18-items', box);
+    const col = el('div', 'st18-col st18-col-big', items);
+    this.bigButton(col, label, icon, cmd, name, null);
+    el('div', 'st18-caption', box, caption);
   }
 
   pluginGroups() {
@@ -298,6 +307,9 @@ export class UI2018 extends UI {
     this.ribbonBody.replaceChildren();
     for (const g of page.kids) if (g.tag === 'Group') this.group(g);
     if (/plugin/i.test(name)) this.pluginGroups();
+    if (/plugin/i.test(name)) this.extraGroup('MCP', 'MCP', 'RibbonBar/images/Studio 2.0 icons/32x32/managePlugins.png', 'mcp', 'studioMcpAction');
+    if (/^view$/i.test(name)) this.extraGroup('Layout', 'Reset Layout', ICON_DIR + 'View/Explorer.png', 'resetlayout', 'resetLayoutAction');
+    if (/^view$/i.test(name)) this.extraGroup('Assistant', 'Assistant', ICON_DIR + 'View/Help-Wiki.png', 'view:assistant', 'viewAssistantAction');
     this.refresh();
     this.app.resized();
   }

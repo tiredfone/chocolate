@@ -265,6 +265,7 @@ export class TerrainData {
     const r = new Reader(unb64(text));
     if (r.byte() !== 67) throw new Error('not chocolate terrain data');
     const era = r.byte() === 2 ? 2018 : 2012;
+    if (era !== this.era && !this.chunks.size) this.era = era;
     const n = r.varint();
     const changed = [];
     for (let i = 0; i < n; i++) {
@@ -566,6 +567,8 @@ export function meshChunk(t, key) {
 
 export function terrainOf(inst, era) {
   if (!inst) return null;
+  const want = era === 2018 ? 2018 : 2012;
+  if (inst.terrain && inst.terrain.era !== want && !inst.terrain.chunks.size) inst.terrain.era = want;
   if (!inst.terrain) {
     inst.terrain = new TerrainData(era);
     const raw = inst.extra && inst.extra.get('ChocolateTerrain');
@@ -586,6 +589,17 @@ export function storeTerrain(inst) {
     return;
   }
   inst.extra.set('ChocolateTerrain', { t: 'raw', v: `<BinaryString name="ChocolateTerrain">${inst.terrain.encode()}</BinaryString>` });
+}
+
+export function waterSurface(t, x, y, z) {
+  if (!t || !t.chunks.size) return null;
+  const water = t.era === 2018 ? SMOOTH_WATER : CELL_WATER;
+  const cx = Math.floor(x / VOXEL), cz = Math.floor(z / VOXEL);
+  let cy = Math.floor(y / VOXEL);
+  if (t.get(cx, cy, cz) !== water) return null;
+  for (let i = 0; i < 64 && t.get(cx, cy + 1, cz) === water; i++) cy++;
+  const top = cy * VOXEL + (t.era === 2018 ? (VOXEL * t.occ(cx, cy, cz)) / 255 : VOXEL);
+  return y <= top ? top : null;
 }
 
 export function smoothIndex(material) {

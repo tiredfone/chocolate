@@ -1,4 +1,5 @@
 import { publicPath } from '../client/assets.js';
+import { Dock } from './dock.js';
 
 const S = (strip, i, w = 16) => ({ strip, i, w });
 const P = (name) => ({ png: name });
@@ -35,8 +36,8 @@ export const MENUS = [
     ['lock', 'Lock'], ['lockall', 'Unlock All'],
   ]],
   ['View', [
-    ['view:objects', 'Toolbox'], ['view:explorer', 'Explorer'], ['view:properties', 'Properties'], ['view:output', 'Output'], ['objectbrowser', 'Object Browser'], null,
-    ['fullscreen', 'Full Screen'],
+    ['view:objects', 'Toolbox'], ['view:explorer', 'Explorer'], ['view:properties', 'Properties'], ['view:output', 'Output'], ['view:assistant', 'Assistant'], ['objectbrowser', 'Object Browser'], null,
+    ['resetlayout', 'Reset Layout'], ['fullscreen', 'Full Screen'],
   ]],
   ['Insert', [
     ['insert:model', 'Model...'], null,
@@ -52,7 +53,7 @@ export const MENUS = [
     ['joints', 'Manual Joints'], null,
     ['objectbrowser', 'Object Browser'], ['analysis', 'Script Analysis'], null,
     ['runscript', 'Run Script...'], ['view:commandbar', 'Command Bar'], null,
-    ['plugins', 'Manage Plugins...'], null,
+    ['plugins', 'Manage Plugins...'], ['mcp', 'MCP...'], null,
     ['gamesettings', 'Game Settings...'],
   ]],
   ['Terrain', [
@@ -139,12 +140,13 @@ export class UI {
     this.panes = new Map();
     this.build();
     document.addEventListener('pointerdown', (e) => {
-      if (!e.target.closest('.st-popup') && !e.target.closest('.st-menu-title') && !e.target.closest('.st-hamburger')) this.closePopups();
+      if (!e.target.closest('.st-popup, .st-menu-title, .st-hamburger, .st18-file')) this.closePopups();
     });
     window.addEventListener('blur', () => this.closePopups());
   }
 
   build() {
+    this.dock = new Dock(this);
     this.buildBars();
     this.buildBody();
   }
@@ -286,6 +288,7 @@ export class UI {
       const up = () => {
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', up);
+        this.dock.queueSave();
       };
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', up);
@@ -294,38 +297,39 @@ export class UI {
 
   addPane(id, title, dock, iconId) {
     const p = el('div', 'st-pane');
-    const cap = el('div', 'st-pane-caption', p, title);
+    const cap = el('div', 'st-pane-caption', p);
+    const titleEl = el('span', 'st-pane-title', cap, title);
     const close = el('div', 'st-close', cap, '×');
     close.addEventListener('click', () => this.togglePane(id, false));
     const body = el('div', 'st-pane-body', p);
     const tab = el('div', null, this.sheetTabs, title);
     tab.addEventListener('click', () => this.showSheet(id));
-    const pane = { id, el: p, body, dock, tab, title };
+    const pane = { id, el: p, body, dock, tab, title, titleEl };
     this.panes.set(id, pane);
+    this.dock.adopt(pane);
     this.place(pane);
     return body;
   }
 
   place(pane) {
-    const target = pane.dock === 'left' ? this.left : pane.dock === 'bottom' ? this.bottom : this.right;
+    const target = pane.dock === 'left' ? this.left : pane.dock === 'bottom' ? this.bottom : pane.dock === 'float' ? this.root : this.right;
     if (pane.el.parentNode !== target) target.appendChild(pane.el);
   }
 
   mobile() {
-    return window.matchMedia('(max-width: 900px), (pointer: coarse)').matches;
+    return window.matchMedia('(max-width: 900px), (pointer: coarse) and (hover: none)').matches;
   }
 
   layout() {
     const m = this.mobile();
-    for (const pane of this.panes.values()) {
-      if (m) {
+    if (m) {
+      for (const pane of this.panes.values()) {
+        this.dock.unfloat(pane.el);
         if (pane.el.parentNode !== this.sheetBody) this.sheetBody.appendChild(pane.el);
         pane.el.hidden = this.sheetActive !== pane.id;
-      } else {
-        this.place(pane);
-        pane.el.hidden = !!pane.closed;
+        if (pane.titleEl) pane.titleEl.textContent = pane.title;
       }
-    }
+    } else this.dock.layout();
     for (const d of [this.left, this.right, this.bottom]) d.style.display = [...d.children].some((c) => !c.hidden) ? '' : 'none';
     this.splitLeft.style.display = this.left.style.display;
     this.splitRight.style.display = this.right.style.display;

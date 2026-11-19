@@ -71,10 +71,18 @@ function contentImage(path) {
 async function fetchBytes(id) {
   let p = raw.get(id);
   if (!p) {
-    p = fetch(endpointUrl('asset', id), { credentials: 'same-origin' }).then(async (r) => {
-      if (!r.ok) throw new Error('asset ' + id + ' ' + r.status);
+    const attempt = (n) => fetch(endpointUrl('asset', id), { credentials: 'same-origin' }).then(async (r) => {
+      if (!r.ok) {
+        const err = new Error('asset ' + id + ' ' + r.status);
+        err.retry = r.status >= 500 || r.status === 429 || r.status === 408;
+        throw err;
+      }
       return new Uint8Array(await r.arrayBuffer());
+    }).catch((e) => {
+      if (n >= 4 || e.retry === false) throw e;
+      return new Promise((res) => setTimeout(res, 400 * 2 ** n + Math.random() * 300)).then(() => attempt(n + 1));
     });
+    p = attempt(0);
     raw.set(id, p);
     p.catch(() => raw.delete(id));
   }
@@ -147,9 +155,22 @@ async function imageFromBytes(bytes, depth = 0) {
   throw new Error('not an image');
 }
 
+const thumbImages = new Map();
+function thumbImage(id) {
+  let p = thumbImages.get(id);
+  if (!p) {
+    const url = endpointUrl('itemThumbnail', id);
+    p = url ? fetch(url, { credentials: 'same-origin' }).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => (b ? imageFromBytes(new Uint8Array(b)) : null)).catch(() => null) : Promise.resolve(null);
+    thumbImages.set(id, p);
+  }
+  return p;
+}
+
 export function loadImage(url) {
   const b = builtin(url);
   if (b) return contentImage(b);
+  const thumb = /(?:^|\/)thumbs\/asset\.ashx\?(?:[^#]*&)?assetid=(\d+)/i.exec(String(url || ''));
+  if (thumb) return thumbImage(+thumb[1]);
   const id = assetId(url);
   if (!id) return Promise.resolve(null);
   let p = images.get(id);
@@ -351,6 +372,8 @@ export function loadUnionMesh(url) {
 }
 
 export function loadMesh(url) {
+  const b = builtin(url);
+  if (b) return b.includes('..') ? Promise.resolve(null) : contentMesh(b);
   const id = assetId(url);
   if (!id) return Promise.resolve(null);
   let p = meshes.get(id);
@@ -363,7 +386,10 @@ export function loadMesh(url) {
       g.setAttribute('uv', new THREE.BufferAttribute(m.uv, 2));
       g.computeBoundingSphere();
       return g;
-    }).catch(() => null);
+    }).catch(() => {
+      meshes.delete(id);
+      return null;
+    });
     meshes.set(id, p);
   }
   return p;

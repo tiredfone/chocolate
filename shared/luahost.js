@@ -1,5 +1,5 @@
 import { Instance } from './instance.js';
-import { ENUMS, canonicalProp, isCreatable, isService, enumName } from './classes.js';
+import { ENUMS, CLASSES, canonicalProp, isCreatable, isService, enumName } from './classes.js';
 import { BRICK, brickByName, nearestBrick, brickPalette, brick } from './brickcolor.js';
 import * as C from './cframe.js';
 import { EVENTS2018, METHODS2018 } from './classes2018.js';
@@ -23,6 +23,8 @@ const EVENTS = {
   RemoteEvent: ['OnServerEvent', 'OnClientEvent'],
   RunService: ['Stepped', 'Heartbeat', 'RenderStepped'],
   Seat: ['Seated'],
+  SkateboardPlatform: ['Equipped', 'Unequipped', 'equipped', 'unequipped', 'MoveStateChanged'],
+  SkateboardController: ['AxisChanged', 'ButtonChanged'],
   Explosion: ['Hit'],
   Sound: ['Played', 'Paused', 'Stopped', 'Ended'],
   Dialog: ['DialogChoiceSelected'],
@@ -37,11 +39,11 @@ const EVENTS = {
   Lighting: ['LightingChanged'],
   Camera: [],
   GuiService: ['KeyPressed', 'SpecialKeyPressed', 'EscapeKeyPressed', 'BrowserWindowClosed', 'MenuOpened', 'MenuClosed'],
-  LogService: ['MessageOut'],
+  LogService: ['MessageOut', 'ServerMessageOut', 'HttpResultOut', 'ServerHttpResultOut', 'OnHttpResultApproved'],
   ScriptContext: ['Error'],
   StarterGui: ['CoreGuiChangedSignal'],
-  UserGameSettings: ['StudioModeChanged', 'FullscreenChanged'],
-  MarketplaceService: ['PromptPurchaseRequested', 'PromptProductPurchaseRequested', 'PromptGamePassPurchaseRequested', 'PromptPurchaseFinished', 'PromptProductPurchaseFinished', 'ServerPurchaseVerification', 'ClientPurchaseSuccess', 'ClientLuaDialogRequested'],
+  UserGameSettings: ['StudioModeChanged', 'FullscreenChanged', 'PerformanceStatsVisibleChanged'],
+  MarketplaceService: ['PromptPurchaseRequested', 'PromptProductPurchaseRequested', 'PromptGamePassPurchaseRequested', 'PromptPurchaseFinished', 'PromptProductPurchaseFinished', 'PromptGamePassPurchaseFinished', 'ServerPurchaseVerification', 'ClientPurchaseSuccess', 'ClientLuaDialogRequested'],
   TeleportService: ['ItemChanged'],
   PointsService: ['PointsAwarded'],
   CollectionService: ['ItemAdded', 'ItemRemoved'],
@@ -54,9 +56,9 @@ for (const [cls, list] of Object.entries(EVENTS2018)) {
   for (const e of list) if (!have.includes(e)) have.push(e);
 }
 
-const ASYNC = new Set(['LoadAsset', 'loadAsset', 'GetProductInfo', 'AwardBadge', 'UserHasBadge', 'IsInGroup', 'GetRankInGroup', 'GetRoleInGroup', 'IsFriendsWith', 'isFriendsWith', 'isInGroup', 'PlayerOwnsAsset', 'GetCollectibles', 'SaveNumber', 'LoadNumber', 'SaveString', 'LoadString', 'SaveBoolean', 'LoadBoolean', 'SaveInstance', 'LoadInstance', 'WaitForDataReady', 'waitForDataReady', 'GetFriendsOnline', 'LoadCharacter', 'loadCharacter', 'GetUserIdFromNameAsync', 'GetNameFromUserIdAsync', 'HttpGet', 'PostAsync', 'GetAsync', '__invokeServer', '__invokeClient', 'RequestAsync', 'GetAssetThumbnailAsync', 'GetGroupsAsync', 'GetGroupInfoAsync']);
+const ASYNC = new Set(['LoadAsset', 'loadAsset', 'GetProductInfo', 'AwardBadge', 'UserHasBadge', 'IsInGroup', 'GetRankInGroup', 'GetRoleInGroup', 'IsFriendsWith', 'isFriendsWith', 'isInGroup', 'PlayerOwnsAsset', 'GetCollectibles', 'SaveNumber', 'LoadNumber', 'SaveString', 'LoadString', 'SaveBoolean', 'LoadBoolean', 'SaveInstance', 'LoadInstance', 'WaitForDataReady', 'waitForDataReady', 'GetFriendsOnline', 'LoadCharacter', 'loadCharacter', 'GetUserIdFromNameAsync', 'GetNameFromUserIdAsync', 'HttpGet', 'PostAsync', 'GetAsync', '__invokeServer', '__invokeClient', 'RequestAsync', 'GetAssetThumbnailAsync', 'GetGroupsAsync', 'GetGroupInfoAsync', 'UserOwnsGamePassAsync', 'GetRobuxBalance', 'PerformPurchase', 'PlayerHasPass']);
 
-const ENGINE_FLAGS = new Set([]);
+const ENGINE_FLAGS = new Set(['RCCUseMarketplaceApiClient2', 'EnableGamePassFunctions']);
 const CAS_METHODS = ['BindAction', 'BindActionToInputTypes', 'UnbindAction', 'UnbindAllActions', 'GetAllBoundActionInfo', 'GetBoundActionInfo', 'SetTitle', 'SetImage', 'SetDescription', 'SetPosition', 'CallFunction', 'FireActionButtonFoundSignal', 'GetButton'];
 const CAS_SIDE = new Set(CAS_METHODS);
 const TWEEN_SIDE = new Set(['TweenPosition', 'tweenPosition', 'TweenSize', 'tweenSize', 'TweenSizeAndPosition', 'tweenSizeAndPosition']);
@@ -485,6 +487,9 @@ export class ScriptHost {
       const r = dm.create('RenderSettings', g);
       r.props.set('Name', 'Rendering');
       for (const n of ['Network', 'Physics', 'Diagnostics', 'Game']) dm.create('Instance', g).props.set('Name', n);
+      try {
+        dm.create('GameSettings', g).props.set('Name', 'Game Options');
+      } catch {}
       this._globalSettings = g;
     }
     return this._globalSettings;
@@ -493,8 +498,12 @@ export class ScriptHost {
   log(kind, msg, id) {
     const inst = id ? this.inst(id) : null;
     this.logs(kind, String(msg), inst ? inst.fullName() : null);
+    const mt = kind === 'error' ? 3 : kind === 'warn' ? 2 : 0;
+    if (!this.logHistory) this.logHistory = [];
+    this.logHistory.push({ m: String(msg).slice(0, 2000), t: Math.floor(Date.now() / 1000), k: mt });
+    if (this.logHistory.length > 500) this.logHistory.shift();
     const ls = this.dm.services.get('LogService');
-    if (ls && this.dm.hasListener(ls, 'MessageOut')) this.dm.emit(ls, 'MessageOut', String(msg), T.e('MessageType', kind === 'error' ? 3 : kind === 'warn' ? 2 : 0));
+    if (ls && this.dm.hasListener(ls, 'MessageOut')) this.dm.emit(ls, 'MessageOut', String(msg), T.e('MessageType', mt));
   }
 
   inst(id) {
@@ -799,6 +808,7 @@ export class ScriptHost {
           this.unimplemented.add(key);
           this.logs('warn', `${key} is not implemented in this client`, null);
         }
+        this.noteUnimplemented('method', key);
         return ['ok'];
       }
       return ['err', `${method} is not a valid member of ${inst.ClassName}`];
@@ -807,7 +817,12 @@ export class ScriptHost {
     }
   }
 
+  noteUnimplemented(kind, name) {
+    if (this.env.unimplemented) this.env.unimplemented(kind, String(name));
+  }
+
   jsNew(cls, parentId) {
+    if (!isCreatable(cls) && !CLASSES.has(cls) && /^[A-Z][A-Za-z0-9]{2,60}$/.test(cls)) this.noteUnimplemented('class', cls);
     if (!isCreatable(cls)) return `Unable to create an Instance of type "${cls}"`;
     if (this.env.canCreate && !this.env.canCreate(cls)) return `Unable to create an Instance of type "${cls}"`;
     const inst = this.dm.create(cls, null);
@@ -961,7 +976,10 @@ function buildMethods(host) {
 
   def('GetService getService service', 'DataModel', (i, [name]) => {
     const s = dm.service(String(name));
-    if (!s) throw new Error(`'${name}' is not a valid Service name`);
+    if (!s) {
+      if (/^[A-Z][A-Za-z0-9]{2,60}$/.test(String(name))) host.noteUnimplemented('service', name);
+      throw new Error(`'${name}' is not a valid Service name`);
+    }
     return s;
   });
   def('FindService findService', 'DataModel', (i, [name]) => {
@@ -1087,6 +1105,9 @@ function buildMethods(host) {
   def('GetUserIdFromNameAsync', 'Players', (p, [n]) => (env.userIdFromName ? env.userIdFromName(String(n)).then((v) => [v]) : Promise.resolve([0])));
   def('GetNameFromUserIdAsync', 'Players', (p, [u]) => (env.nameFromUserId ? env.nameFromUserId(+u).then((v) => [v]) : Promise.resolve(['Player'])));
   def('Chat', 'Players', (p, [msg]) => { if (env.chat) env.chat(null, String(msg)); return null; });
+  def('ApplySpecificImpulse', 'SkateboardPlatform', (b, [v]) => { if (env.boardImpulse && Array.isArray(v)) env.boardImpulse(b, v); return null; });
+  def('GetButton getButton', 'SkateboardController', (c, [btn]) => !!(c.data && c.data.buttons && c.data.buttons[btn | 0]));
+  def('BindButton bindButton UnbindButton unbindButton', 'SkateboardController', () => null);
   def('SetChatStyle', 'Players', () => null);
 
   def('LoadCharacter loadCharacter', 'Player', (pl) => (env.loadCharacter ? Promise.resolve(env.loadCharacter(pl)).then(() => []) : Promise.resolve([])));
@@ -1186,10 +1207,38 @@ function buildMethods(host) {
   def('IsLegal', 'BadgeService', () => true);
 
   const deepDict = (o) => (o && typeof o === 'object' && !Array.isArray(o) && !(o instanceof Typed) && !(o instanceof Instance) ? T.dict(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, deepDict(v)]))) : o);
-  def('GetProductInfo', 'MarketplaceService', (s, [id]) => Promise.resolve([env.productInfo ? deepDict(env.productInfo(+id || 0)) : T.list([])]));
-  def('PromptPurchase PromptProductPurchase PromptGamePassPurchase', 'MarketplaceService', () => null);
-  def('PlayerOwnsAsset', 'MarketplaceService', () => Promise.resolve([false]));
-  def('PlayerHasPass', 'GamePassService', () => false);
+  const infoKind = (raw) => {
+    const v = raw && raw.tag === 'e' ? raw.v[1] : typeof raw === 'number' ? raw : 0;
+    return v === 1 ? 'product' : v === 2 ? 'gamepass' : 'asset';
+  };
+  const userIdOf = (pl) => (pl && pl instanceof Instance && pl.ClassName === 'Player' ? +pl.props.get('userId') || 0 : +pl || 0);
+  def('GetProductInfo', 'MarketplaceService', (s, [id], raw) => {
+    const kind = infoKind(raw[1]);
+    if (env.productInfoAsync) return env.productInfoAsync(+id || 0, kind).then((info) => {
+      if (!info) throw new Error('Invalid ' + (kind === 'product' ? 'product' : 'asset') + ' id');
+      return [deepDict(info)];
+    });
+    return Promise.resolve([env.productInfo ? deepDict(env.productInfo(+id || 0)) : T.list([])]);
+  });
+  def('PromptPurchase', 'MarketplaceService', (s, [pl, id, equip]) => { if (!(pl instanceof Instance) || pl.ClassName !== 'Player') throw new Error('Argument 1 missing or nil'); if (env.prompt) env.prompt(pl, 'asset', +id || 0, !!equip); return null; });
+  def('PromptProductPurchase', 'MarketplaceService', (s, [pl, id, equip]) => { if (!(pl instanceof Instance) || pl.ClassName !== 'Player') throw new Error('Argument 1 missing or nil'); if (env.prompt) env.prompt(pl, 'product', +id || 0, !!equip); return null; });
+  def('PromptGamePassPurchase', 'MarketplaceService', (s, [pl, id]) => { if (!(pl instanceof Instance) || pl.ClassName !== 'Player') throw new Error('Argument 1 missing or nil'); if (env.prompt) env.prompt(pl, 'gamepass', +id || 0, false); return null; });
+  def('PlayerOwnsAsset', 'MarketplaceService', (s, [pl, id]) => (env.ownsAsset ? env.ownsAsset(userIdOf(pl), +id || 0).then((v) => [!!v]) : Promise.resolve([false])));
+  def('UserOwnsGamePassAsync', 'MarketplaceService', (s, [uid, id]) => (env.ownsAsset ? env.ownsAsset(+uid || 0, +id || 0).then((v) => [!!v]) : Promise.resolve([false])));
+  def('PlayerHasPass', 'GamePassService', (s, [pl, id]) => (env.ownsAsset ? env.ownsAsset(userIdOf(pl), +id || 0).then((v) => [!!v]) : Promise.resolve([false])));
+  def('PlayerCanMakePurchases', 'MarketplaceService', (s, [pl]) => userIdOf(pl) > 0 && !!env.purchase);
+  def('GetRobuxBalance', 'MarketplaceService', () => (env.balance ? env.balance().then((v) => [+v || 0]) : Promise.resolve([0])));
+  def('PerformPurchase', 'MarketplaceService', (s, [, id, price], raw) => {
+    if (!env.purchase) return Promise.reject(new Error('Purchases are not available here'));
+    const kind = infoKind(raw[0]);
+    return env.purchase(kind === 'product' ? 'product' : 'asset', +id || 0, Math.round(+price || 0)).then((r) => [deepDict(r || { success: false, status: 'Error' })]);
+  });
+  def('SignalPromptPurchaseFinished', 'MarketplaceService', (s, [pl, id, ok], raw) => { if (env.purchaseFinished) env.purchaseFinished('asset', raw[0], +id || 0, !!ok); return null; });
+  def('SignalPromptGamePassPurchaseFinished', 'MarketplaceService', (s, [pl, id, ok], raw) => { if (env.purchaseFinished) env.purchaseFinished('gamepass', raw[0], +id || 0, !!ok); return null; });
+  def('SignalPromptProductPurchaseFinished', 'MarketplaceService', (s, [uid, id, ok], raw) => { if (env.purchaseFinished) env.purchaseFinished('product', raw[0], +id || 0, !!ok); return null; });
+  def('SignalClientPurchaseSuccess', 'MarketplaceService', (s, [receipt, uid, id]) => { if (env.receiptClaimed) env.receiptClaimed(String(receipt), +id || 0); return null; });
+  def('ReportAssetSale ReportRobuxUpsellStarted', 'MarketplaceService', () => null);
+  def('__receiptResult', 'MarketplaceService', (s, [token, res]) => { if (env.receiptResult) env.receiptResult(+token || 0, String(res == null ? '' : res)); return null; });
   def('Teleport TeleportToSpawnByName TeleportToPlaceInstance', 'TeleportService', (s, [placeId, player]) => { if (env.teleport) env.teleport(+placeId, player); return null; });
   def('SetTeleportGui GetTeleportSetting SetTeleportSetting', 'TeleportService', () => null);
   def('Preload', 'ContentProvider', () => null);
@@ -1270,11 +1319,17 @@ function buildMethods(host) {
   def('IsTouchDevice', 'GuiService', () => !!(env.touch && env.touch()));
   def('GetCoreGuiEnabled', 'StarterGui', () => true);
   def('SetCoreGuiEnabled SetCore', 'StarterGui', () => null);
-  def('GetLogHistory', 'LogService', () => T.list([]));
+  def('GetLogHistory', 'LogService', () => T.list((host.logHistory || []).map((h) => T.dict({ message: h.m, timestamp: h.t, messageType: T.e('MessageType', h.k) }))));
+  def('GetHttpResultHistory', 'LogService', () => T.list([]));
+  def('RequestServerHttpResult RequestHttpResultApproved ExecuteScript', 'LogService', () => null);
+  def('RequestServerOutput', 'LogService', () => { if (env.requestServerOutput) env.requestServerOutput(); return null; });
   def('Chat chat', 'Players', (p, [msg]) => { if (env.chat) env.chat(null, String(msg ?? ''), 'all'); return null; });
   def('TeamChat teamChat', 'Players', (p, [msg]) => { if (env.chat) env.chat(null, String(msg ?? ''), 'team'); return null; });
   def('WhisperChat', 'Players', (p, [msg, target]) => { if (env.chat) env.chat(target || null, String(msg ?? ''), 'whisper'); return null; });
-  def('ReportAbuse', 'Players', () => null);
+  def('ReportAbuse', 'Players', (ps, [target, reason, text]) => {
+    if (env.reportAbuse) env.reportAbuse(target && target.ClassName === 'Player' ? target : null, String(reason ?? ''), String(text ?? ''));
+    return null;
+  });
   def('GetUseCoreScriptHealthBar', 'Players', () => true);
   def('SetOldSchoolBackpack', 'LocalBackpack', () => null);
   def('GetOldSchoolBackpack', 'LocalBackpack', () => false);
@@ -1282,7 +1337,7 @@ function buildMethods(host) {
   def('RevokeFriendship', 'Player', (pl, [other]) => { if (env.friendRequest && other) env.friendRequest(pl, other, false); return null; });
   def('GetFriendStatus', 'Player', (pl, [other]) => T.e('FriendStatus', env.friendStatus && other ? env.friendStatus(pl, other) : 1));
   def('SetSuperSafeChat SetUnder13 SetMembershipType SetAccountAge', 'Player', () => null);
-  def('SignalPromptProductPurchaseFinished SignalPromptPurchaseFinished SignalClientPurchaseSuccess SignalServerLuaDialogClosed', 'MarketplaceService', () => null);
+  def('SignalServerLuaDialogClosed', 'MarketplaceService', () => null);
   def('TeleportCancel', 'TeleportService', () => null);
   def('HttpGetAsync HttpPostAsync', 'DataModel', () => Promise.reject(new Error('Http requests are not enabled')));
   installMethods2018(def, host, { T, multi, Instance });
@@ -1418,7 +1473,7 @@ function buildComputed(host) {
     const b = brick(p.props.get('BrickColor'));
     return T.c3([b.r, b.g, b.b]);
   });
-  def('Torso', 'Humanoid', (h) => (h.parent ? h.parent.findChild('Torso') || h.parent.findChild('HumanoidRootPart') : null));
+  def('Torso', 'Humanoid', (h) => (h.parent ? (h.dm && h.dm.era === 2018 ? h.parent.findChild('HumanoidRootPart') || h.parent.findChild('Torso') : h.parent.findChild('Torso') || h.parent.findChild('HumanoidRootPart')) : null));
   def('LeftLeg', 'Humanoid', (h) => (h.parent ? h.parent.findChild('Left Leg') : null));
   def('RightLeg', 'Humanoid', (h) => (h.parent ? h.parent.findChild('Right Leg') : null));
   def('NumPlayers numPlayers', 'Players', (p) => p.children.filter((c) => c.ClassName === 'Player').length);

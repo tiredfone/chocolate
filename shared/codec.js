@@ -19,7 +19,7 @@ function isDefault(p, v) {
     for (let i = 0; i < d.length; i++) if (d[i] !== v[i]) return false;
     return true;
   }
-  return d === v || (p.type === 'Ref' && v == null);
+  return d === v || (p.type === 'number' && typeof d === 'number' && Math.fround(d) === Math.fround(v)) || (p.type === 'Ref' && v == null);
 }
 
 export function hiddenProp(inst, name, forOwner) {

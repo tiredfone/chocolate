@@ -761,7 +761,7 @@ E.input = function(io, processed, kind)
       local hit, name = dispatchCAS(io, state)
       if hit then E.held[key] = name; sunk = true end
     end
-  elseif not processed and kind == "c" and io.UserInputType ~= Enum.UserInputType.MouseMovement then
+  elseif not processed and kind == "c" then
     local hit = dispatchCAS(io, state)
     if hit then sunk = true end
   end
@@ -971,6 +971,25 @@ LM.GetSortedAsync = function(self, id, asc, size)
 end
 
 LM.GetAssetThumbnailAsync = function(self, id, ...) return callAsync(id, "GetAssetThumbnailAsync", ...) end
+LM.UserOwnsGamePassAsync = function(self, id, ...) return callAsync(id, "UserOwnsGamePassAsync", ...) end
+LM.GetRobuxBalance = function(self, id, ...) return callAsync(id, "GetRobuxBalance", ...) end
+LM.PerformPurchase = function(self, id, ...) return callAsync(id, "PerformPurchase", ...) end
+if R.SIDE == "server" then
+  local mps = call(0, "GetService", "MarketplaceService")
+  local mpsId = mps and idOf[mps]
+  if mpsId then
+    makeSignal(mpsId, "__Receipt"):connect(function(token, info)
+      local f = R.invokeHandlers[mpsId .. ":ProcessReceipt"]
+      if not f then
+        call(mpsId, "__receiptResult", token, "NoHandler")
+        return
+      end
+      local ok, r = ypcall(f, info)
+      if not ok then R.JS_LOG("error", "ProcessReceipt: " .. tostring(r), 0) end
+      call(mpsId, "__receiptResult", token, ok and tostring(r) or "Error")
+    end)
+  end
+end
 LM.ReadVoxels = function(self, id, region, res)
   local mats, occs, size = call(id, "__ReadVoxels", region, res)
   local sx, sy, sz = size.X, size.Y, size.Z

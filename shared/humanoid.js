@@ -1,5 +1,5 @@
 import * as C from './cframe.js';
-import { GRAVITY } from './physics.js';
+import { waterSurface } from './terrain.js';
 
 const A = (x, y, z, rx, ry, rz) => C.mul(C.cf(x, y, z), C.angles(rx, ry, rz));
 const PI = Math.PI;
@@ -29,18 +29,40 @@ export function gripOf(tool) {
 }
 
 const LANDED_DELAY = 0.5;
+const CHARACTER_MASS = 9.8;
 export function rootOf(model) {
   return model ? model.findChild('Torso') || model.findChild('HumanoidRootPart') : null;
 }
 
-export const STATES = { idle: 0, walk: 1, jump: 2, fall: 3, sit: 4, climb: 5, dead: 6, stand: 7 };
+export const STATES = { idle: 0, walk: 1, jump: 2, fall: 3, sit: 4, climb: 5, dead: 6, stand: 7, swim: 8 };
 export const STATE_NAMES = Object.fromEntries(Object.entries(STATES).map(([k, v]) => [v, k]));
+
+let humanoidMemo = null;
+export function withHumanoidMemo(fn) {
+  const prev = humanoidMemo;
+  humanoidMemo = new Map();
+  try {
+    return fn();
+  } finally {
+    humanoidMemo = prev;
+  }
+}
+
+function humanoidOf(m) {
+  if (!humanoidMemo) return m.findChildOfClass('Humanoid');
+  let h = humanoidMemo.get(m);
+  if (h === undefined) {
+    h = m.findChildOfClass('Humanoid');
+    humanoidMemo.set(m, h);
+  }
+  return h;
+}
 
 export function liveCharacterOf(part) {
   for (let m = part.parent; m; m = m.parent) {
     if (m.ClassName === 'Model' || m.ClassName === 'Workspace') {
       if (m.ClassName === 'Workspace') return null;
-      const h = m.findChildOfClass('Humanoid');
+      const h = humanoidOf(m);
       if (h && rootOf(m) && m.findChild('Head') && h.props.get('Health') > 0 && !(m.data && m.data.dead)) {
         const torso = rootOf(m);
         if (torso.props.get('Anchored')) return null;
@@ -129,6 +151,30 @@ export function setMotor(model, name, desired, maxVel) {
   j.props.set('MaxVelocity', maxVel);
 }
 
+export const LIMB_MOTORS = ['Right Shoulder', 'Left Shoulder', 'Right Hip', 'Left Hip'];
+
+export function readLimbAngles(model) {
+  const torso = model.findChild('Torso');
+  if (!torso) return null;
+  const out = [];
+  for (const name of LIMB_MOTORS) {
+    const j = torso.findChild(name);
+    out.push(j && j.isA('Motor') ? Math.round((+j.props.get('CurrentAngle') || 0) * 1000) / 1000 : 0);
+  }
+  return out;
+}
+
+export function applyLimbAngles(model, angles) {
+  const torso = model.findChild('Torso');
+  if (!torso || !Array.isArray(angles)) return;
+  LIMB_MOTORS.forEach((name, i) => {
+    const a = +angles[i];
+    if (!Number.isFinite(a)) return;
+    const j = torso.findChild(name);
+    if (j && j.isA('Motor')) j.props.set('CurrentAngle', Math.max(-7, Math.min(7, a)));
+  });
+}
+
 export function stepMotors(model, dt) {
   const torso = model.findChild('Torso');
   if (!torso) return;
@@ -152,6 +198,14 @@ export function animate(model, state, speed, t, holdingTool) {
     setMotor(model, 'Left Shoulder', ls, 0.5);
     setMotor(model, 'Right Hip', rh, 0.5);
     setMotor(model, 'Left Hip', lh, 0.5);
+    return;
+  }
+  if (state === STATES.swim) {
+    const sw = (speed > 0.5 ? 0.9 : 0.25) * Math.sin(t * (speed > 0.5 ? 7 : 2));
+    setMotor(model, 'Right Shoulder', holdingTool ? PI / 2 : PI - sw, 0.4);
+    setMotor(model, 'Left Shoulder', -(PI - sw), 0.4);
+    setMotor(model, 'Right Hip', sw * 0.6, 0.4);
+    setMotor(model, 'Left Hip', -sw * 0.6, 0.4);
     return;
   }
   if (state === STATES.sit) {
@@ -227,6 +281,62 @@ export class Controller {
     this.kcc.setSlideEnabled(true);
     this.kcc.setNormalNudgeFactor(0.01);
     this.pos = [cf[0], cf[1] - this.off, cf[2]];
+    this.rot = { x: 0, y: 0, z: 0, w: 1 };
+    this.rotCF = C.cf();
+  }
+
+  bodyLift(dt) {
+    this.liftAge = (this.liftAge || 0) + dt;
+    if (this.liftAge < 0.1 && this.liftValue !== undefined) return this.liftValue;
+    this.liftAge = 0;
+    let fy = 0, mass = 0, forces = false;
+    for (const d of this.model.descendants()) {
+      if (d.ClassName === 'BodyForce') {
+        const f = d.props.get('Force');
+        if (f && d.parent && d.parent.isA('BasePart')) {
+          fy += f[1];
+          forces = true;
+        }
+      } else if (d.isA('BasePart')) {
+        const sz = d.props.get('Size');
+        if (sz) mass += sz[0] * sz[1] * sz[2] * 0.7;
+      }
+    }
+    this.liftValue = forces && mass > 0 ? fy / mass : 0;
+    return this.liftValue;
+  }
+
+  era2018() {
+    return !!(this.hum && this.hum.dm && this.hum.dm.era === 2018);
+  }
+
+  foot(dx, dz) {
+    if (!this.era2018()) return [dx, dz];
+    const v = C.vector(this.rotCF, dx, 0, dz);
+    return [v[0], v[2]];
+  }
+
+  turnBox() {
+    if (!this.era2018()) return;
+    const yaw = C.rotOnly(this.yawCF);
+    const q = C.toQuat(yaw);
+    const rot = { x: q[0], y: q[1], z: q[2], w: q[3] };
+    if (Math.abs(rot.x * this.rot.x + rot.y * this.rot.y + rot.z * this.rot.z + rot.w * this.rot.w) > 0.99999) return;
+    const R = this.R;
+    if (!this.probe) this.probe = { inner: new R.Cuboid(0.95, 2.4, 0.45), outer: new R.Cuboid(1, 2.45, 0.5) };
+    const base = this.filter();
+    let blocked = false;
+    this.ph.world.intersectionsWithShape({ x: this.pos[0], y: this.pos[1] + 0.1, z: this.pos[2] }, rot, this.probe.inner, () => {
+      blocked = true;
+      return false;
+    }, R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body, (c) => {
+      const r = this.ph.byHandle.get(c.handle);
+      return r && r.solidProxy ? false : base(c);
+    });
+    if (blocked) return;
+    this.rot = rot;
+    this.rotCF = yaw;
+    this.body.setNextKinematicRotation(rot);
   }
 
   destroy() {
@@ -241,6 +351,13 @@ export class Controller {
     this.body.setTranslation({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, true);
     this.yawCF = flatYaw(cf);
     this.vel = [0, 0, 0];
+    if (this.era2018()) {
+      const yaw = C.rotOnly(this.yawCF);
+      const q = C.toQuat(yaw);
+      this.rot = { x: q[0], y: q[1], z: q[2], w: q[3] };
+      this.rotCF = yaw;
+      this.body.setRotation(this.rot, true);
+    }
   }
 
   filter() {
@@ -268,7 +385,10 @@ export class Controller {
     for (const dy of [-0.8, 0, 1.5, 3]) {
       const o = [origin[0], origin[1] + dy, origin[2]];
       const r = this.ph.raycast(o, [dir[0] * 1.6, 0, dir[2] * 1.6], [this.model], (q) => !liveCharacterOf(q));
-      if (r.part && r.part.ClassName === 'TrussPart') return true;
+      if (r.part && r.part.ClassName === 'TrussPart') {
+        this.ledgeTop = undefined;
+        return true;
+      }
     }
     return this.ledgeAhead(dir);
   }
@@ -277,12 +397,18 @@ export class Controller {
     const reach = 1.7;
     const foot = this.pos[1] - 2.5;
     let prev = Infinity;
+    const minRise = this.state === STATES.climb && this.ledgeTop !== undefined ? 0.3 : 2.6;
+    let lastHit = -Infinity;
     for (let k = 0; k <= 22; k++) {
       const y = foot + k * 0.25;
       const r = this.ph.raycast([this.pos[0], y, this.pos[2]], [dir[0] * reach, 0, dir[2] * reach], [this.model], (q) => q.ClassName !== 'Terrain' && q.props.get('CanCollide') && !liveCharacterOf(q));
       const facing = r.part && Math.abs(r.normal[1]) < 0.35 && r.normal[0] * dir[0] + r.normal[2] * dir[2] < -0.5;
       const d = facing ? Math.hypot(r.point[0] - this.pos[0], r.point[2] - this.pos[2]) : Infinity;
-      if (k * 0.25 >= 2.6 && prev <= reach && d > prev + 0.8) return true;
+      if (d < Infinity) lastHit = y;
+      if (k * 0.25 >= minRise && prev <= reach && d > prev + 0.8) {
+        this.ledgeTop = lastHit + 0.25;
+        return true;
+      }
       prev = d;
     }
     return false;
@@ -297,7 +423,7 @@ export class Controller {
       return r && r.solidProxy ? false : base(c);
     };
     if (!this.probe) this.probe = { inner: new R.Cuboid(0.95, 2.4, 0.45), outer: new R.Cuboid(1, 2.45, 0.5) };
-    const rot = { x: 0, y: 0, z: 0, w: 1 };
+    const rot = this.rot;
     let inside = false;
     world.intersectionsWithShape({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, rot, this.probe.inner, () => {
       inside = true;
@@ -321,7 +447,7 @@ export class Controller {
     if (!this.probe) this.probe = { inner: new R.Cuboid(0.95, 2.4, 0.45), outer: new R.Cuboid(1, 2.45, 0.5) };
     const skip = new Set();
     const push = [0, 0];
-    this.ph.world.intersectionsWithShape({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, { x: 0, y: 0, z: 0, w: 1 }, this.probe.inner, (c) => {
+    this.ph.world.intersectionsWithShape({ x: this.pos[0], y: this.pos[1], z: this.pos[2] }, this.rot, this.probe.inner, (c) => {
       const rec = this.ph.byHandle.get(c.handle);
       if (!rec || !rec.solidProxy || rec.character === this.model) return true;
       skip.add(c.handle);
@@ -343,10 +469,20 @@ export class Controller {
     return [push[0] * 10 * dt, push[1] * 10 * dt];
   }
 
+  characterMover() {
+    for (const name of ['HumanoidRootPart', 'Torso', 'UpperTorso']) {
+      const part = this.model.findChild(name);
+      if (!part) continue;
+      for (const c of part.children) if (c.ClassName === 'BodyVelocity' && !c.destroyed) return c;
+    }
+    return null;
+  }
+
   feetOnGround() {
     const p = this.pos;
     const from = p[1] - 2.3;
-    for (const [dx, dz] of [[0, 0], [0.9, 0.4], [-0.9, 0.4], [0.9, -0.4], [-0.9, -0.4]]) {
+    for (const [ox, oz] of [[0, 0], [0.9, 0.4], [-0.9, 0.4], [0.9, -0.4], [-0.9, -0.4]]) {
+      const [dx, dz] = this.foot(ox, oz);
       const r = this.ph.raycast([p[0] + dx, from, p[2] + dz], [0, -0.55, 0], [this.model], (q) => q.props.get('CanCollide'));
       if (r.part && r.normal[1] > 0.5) return true;
     }
@@ -357,7 +493,8 @@ export class Controller {
     const p = this.pos;
     const from = p[1] - 2.15;
     let top = -Infinity;
-    for (const [dx, dz] of [[0, 0], [0.95, 0.45], [-0.95, 0.45], [0.95, -0.45], [-0.95, -0.45]]) {
+    for (const [ox, oz] of [[0, 0], [0.95, 0.45], [-0.95, 0.45], [0.95, -0.45], [-0.95, -0.45]]) {
+      const [dx, dz] = this.foot(ox, oz);
       const r = this.ph.raycast([p[0] + dx, from, p[2] + dz], [0, -0.6, 0], [this.model], (q) => q.props.get('CanCollide'));
       if (!r.part || r.normal[1] < 0.99) return false;
       top = Math.max(top, r.point[1]);
@@ -368,8 +505,19 @@ export class Controller {
     return true;
   }
 
+  applySlope() {
+    const e18 = this.hum.dm && this.hum.dm.era === 2018;
+    const a = e18 ? Math.max(0, Math.min(89, +this.hum.props.get('MaxSlopeAngle'))) : 60;
+    const deg = Number.isFinite(a) ? a : e18 ? 89 : 60;
+    if (deg === this.slopeDeg) return;
+    this.slopeDeg = deg;
+    this.kcc.setMaxSlopeClimbAngle((deg * Math.PI) / 180);
+    this.kcc.setMinSlopeSlideAngle((Math.max(75, deg + 0.5) * Math.PI) / 180);
+  }
+
   update(dt, input) {
     const hum = this.hum;
+    this.applySlope();
     this.unstick();
     const ws = hum.props.get('WalkSpeed');
     const move = input.move || [0, 0, 0];
@@ -383,22 +531,51 @@ export class Controller {
     else this.jumpHeldFor = Math.max(0, (this.jumpHeldFor || 0) - dt);
     const wantJump = this.jumpHeldFor > 0 && !platform;
     if (hum.props.get('Jump')) hum.dm.setProp(hum, 'Jump', false, { local: true });
-    const climbing = !platform && this.climbCheck(dir);
+    const moving = !platform && this.climbCheck(dir);
+    const holding = !moving && !platform && !wantJump && ml <= 1e-3 && this.state === STATES.climb && hum.dm && hum.dm.era === 2018 && this.climbDir && this.climbCheck(this.climbDir);
+    const climbing = moving || holding;
     let fell = false;
-    if (climbing) {
+    let swimming = false;
+    this.waterTop = null;
+    if (!climbing && !platform && this.ph.terrainData) {
+      const surf = waterSurface(this.ph.terrainData, this.pos[0], this.pos[1], this.pos[2]);
+      if (surf !== null && surf - (this.pos[1] - 2.45) > (this.swimming ? 3.4 : 4.2)) {
+        swimming = true;
+        this.waterTop = surf;
+      }
+    }
+    this.swimming = swimming;
+    if (holding) {
+      this.vel[1] = 0;
+      this.state = STATES.climb;
+    } else if (climbing) {
       this.vel[1] = ws * 0.7;
       this.state = STATES.climb;
       this.climbDir = dir;
     } else if (this.state === STATES.climb && ml > 1e-3 && !platform && this.climbDir && dir[0] * this.climbDir[0] + dir[2] * this.climbDir[2] > 0.5) {
-      this.vel[1] = Math.max(this.vel[1], Math.sqrt(2 * GRAVITY * 2.4));
+      const ledgeHop = this.ledgeTop !== undefined;
+      const rise = ledgeHop ? Math.min(2.4, Math.max(0.3, this.ledgeTop - (this.pos[1] - 2.5) + 0.2)) : 2.4;
+      const up = Math.sqrt(2 * this.ph.gravity * rise);
+      this.vel[1] = ledgeHop ? up : Math.max(this.vel[1], up);
+      this.ledgeTop = undefined;
+    } else if (swimming) {
+      const surf = this.waterTop;
+      const target = surf - (wantJump ? 0.9 : 1.5);
+      const lim = ws * 0.6;
+      const want = Math.max(-lim, Math.min(lim, (target - this.pos[1]) * 4));
+      this.vel[1] += (want - this.vel[1]) * Math.min(1, dt * 6);
+      this.vel[0] *= 0.8;
+      this.vel[2] *= 0.8;
+      this.jumped = false;
+      this.jumpHeldFor = 0;
     } else {
-      this.vel[1] -= GRAVITY * dt;
+      this.vel[1] -= (this.ph.gravity - this.bodyLift(dt)) * dt;
       fell = true;
       this.jumpCooldown = Math.max(0, this.jumpCooldown - dt);
       const e18 = hum.dm && hum.dm.era === 2018;
-      const footing = e18 ? (this.grounded && this.feetOnGround()) || (!this.jumped && (this.sinceGround || 0) < 0.12) : this.grounded;
+      const footing = e18 ? (this.grounded && this.feetOnGround()) || (!this.jumped && (this.sinceGround || 0) < 0.12) : this.grounded || (!this.jumped && (this.sinceGround || 0) < 0.12);
       if (footing && wantJump && (e18 || this.landedFor > LANDED_DELAY) && this.jumpCooldown <= 0 && this.vel[1] <= 0) {
-        this.vel[1] = (hum.props.get('JumpPower') || 50) - GRAVITY * dt;
+        this.vel[1] = (hum.props.get('JumpPower') || 50) - this.ph.gravity * dt;
         this.grounded = false;
         this.jumped = true;
         this.landedFor = 0;
@@ -406,9 +583,20 @@ export class Controller {
         this.jumpHeldFor = 0;
       }
     }
-    const settle = this.grounded && this.vel[1] <= 0 && !climbing;
+    const bv = platform ? null : this.characterMover();
+    if (bv) {
+      const tv = bv.props.get('Velocity') || [0, 0, 0], mf = bv.props.get('MaxForce') || [0, 0, 0];
+      for (let k = 0; k < 3; k++) {
+        if (!(mf[k] > 0)) continue;
+        const acc = (mf[k] / CHARACTER_MASS) * dt;
+        this.vel[k] += Math.max(-acc, Math.min(acc, tv[k] - this.vel[k]));
+      }
+      if (this.vel[1] > 0) this.grounded = false;
+    }
+    const settle = this.grounded && this.vel[1] <= 0 && !climbing && !swimming;
     const sep = this.separate(dt);
-    const desired = { x: this.vel[0] * dt + sep[0], y: settle ? 0 : (this.vel[1] + (fell ? 0.5 * GRAVITY * dt : 0)) * dt, z: this.vel[2] * dt + sep[1] };
+    const wallHold = moving && this.ledgeTop !== undefined;
+    const desired = { x: (wallHold ? 0 : this.vel[0] * dt) + sep[0], y: settle ? 0 : (this.vel[1] + (fell ? 0.5 * this.ph.gravity * dt : 0)) * dt, z: (wallHold ? 0 : this.vel[2] * dt) + sep[1] };
     this.kcc.computeColliderMovement(this.collider, desired, this.R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.filter());
     const mvd = this.kcc.computedMovement();
     let grounded = this.kcc.computedGrounded();
@@ -423,8 +611,10 @@ export class Controller {
       this.sinceGround = 0;
       this.jumped = false;
     } else this.sinceGround = (this.sinceGround || 0) + dt;
-    this.landedFor = grounded && this.vel[1] <= 0 ? this.landedFor + dt : 0;
-    if (!climbing) {
+    this.airFor = grounded && this.vel[1] <= 0 ? 0 : (this.airFor || 0) + dt;
+    this.landedFor = grounded && this.vel[1] <= 0 ? this.landedFor + dt : this.airFor > 0.15 || this.jumped ? 0 : this.landedFor;
+    if (swimming) this.state = STATES.swim;
+    else if (!climbing) {
       if (grounded) this.state = ml > 1e-3 && speed > 0 ? STATES.walk : STATES.idle;
       else this.state = this.vel[1] > 0 ? STATES.jump : STATES.fall;
     }
@@ -436,7 +626,18 @@ export class Controller {
       const target = C.lookAt(0, 0, 0, dir[0], 0, dir[2]);
       this.yawCF = C.lerp(C.rotOnly(this.yawCF), target, Math.min(1, dt * 12));
     }
-    const cf = C.withPos(this.yawCF, this.pos[0], this.pos[1] + this.off, this.pos[2]);
+    this.turnBox();
+    let drop = 0;
+    if (this.era2018() && grounded && this.vel[1] <= 0 && !climbing && !platform && !swimming) {
+      const hit = this.ph.raycast([this.pos[0], this.pos[1] - 1, this.pos[2]], [0, -4, 0], [this.model], (q) => q.props.get('CanCollide'));
+      if (hit.part && hit.part.ClassName === 'Terrain' && hit.normal[1] > 0.5) {
+        const gap = this.pos[1] - 2.49 - hit.point[1];
+        if (gap > 0.02 && gap < 1.6) drop = gap;
+      }
+    }
+    this.drop = (this.drop || 0) + (drop - (this.drop || 0)) * Math.min(1, dt * 15);
+    if (this.drop < 0.005) this.drop = 0;
+    const cf = C.withPos(this.yawCF, this.pos[0], this.pos[1] + this.off - this.drop, this.pos[2]);
     return { cf, vel: [mvd.x / dt, mvd.y / dt, mvd.z / dt], state: this.state };
   }
 }
@@ -818,17 +1019,28 @@ export function attachAccessory(dm, model, acc) {
   handle.props.set('Anchored', false);
 }
 
+export function gripArm(model) {
+  return model && model.findChild ? model.findChild('Right Arm') || model.findChild('RightHand') : null;
+}
+
+function gripC0(arm) {
+  if (arm.props.get('Name') !== 'RightHand') return RIGHT_GRIP_C0.slice();
+  const att = arm.findChild('RightGripAttachment');
+  const cf = att && att.props.get('CFrame');
+  return Array.isArray(cf) && cf.length === 12 ? cf.slice() : A(0, -0.15, 0, -PI / 2, 0, 0);
+}
+
 export function syncGrip(dm, tool) {
   const model = tool.parent;
   const handle = tool.findChild('Handle');
-  const arm = model && model.findChild && model.findChild('Right Arm');
+  const arm = gripArm(model);
   const w = arm && arm.findChild('RightGrip');
   if (!w || !handle || w.props.get('Part1') !== handle) return;
   dm.setProp(w, 'C1', gripOf(tool).slice());
 }
 
 export function gripWeld(dm, model, tool) {
-  const arm = model.findChild('Right Arm');
+  const arm = gripArm(model);
   const handle = tool.findChild('Handle');
   if (!arm || !handle || !handle.isA('BasePart')) return null;
   const old = arm.findChild('RightGrip');
@@ -837,7 +1049,7 @@ export function gripWeld(dm, model, tool) {
   w.props.set('Name', 'RightGrip');
   w.props.set('Part0', arm);
   w.props.set('Part1', handle);
-  w.props.set('C0', RIGHT_GRIP_C0.slice());
+  w.props.set('C0', gripC0(arm));
   w.props.set('C1', gripOf(tool).slice());
   for (const o of dm.observers) if (o.created) o.created(w);
   dm.setParent(w, arm);

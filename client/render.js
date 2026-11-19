@@ -14,6 +14,8 @@ const MATERIAL_KIND = {
   848: 'brick', 864: 'pebble', 880: 'cobblestone', 1040: 'corrodedmetal', 1056: 'diamondplate', 1072: 'foil', 1088: 'metal', 1280: 'grass',
   1296: 'sand', 1312: 'fabric', 1536: 'ice', 1568: 'glass',
 };
+const BUCKET_CAP = 1024;
+const LOOSE_BATCH_MIN = 256;
 const SURFACE_TEX = { 1: 'glue', 2: 'weld', 3: 'studs', 4: 'inlet', 5: 'universal' };
 const SURFACE_ROW = { studs: 0, inlet: 1, weld: 2, glue: 3, universal: 4 };
 const SKY_2012 = ['rt', 'lf', 'up', 'dn', 'bk', 'ft'].map((f) => `rbxasset://sky/null_plainsky512_${f}.jpg`);
@@ -57,6 +59,44 @@ export function applyCF(obj, cf) {
   obj.scale.set(1, 1, 1);
 }
 
+function mergeItems(items) {
+  let n = 0;
+  for (const it of items) for (const g of it.groups) n += g.count;
+  const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2), tp = new Float32Array(n * 3);
+  let o = 0;
+  const nm = new THREE.Matrix3(), va = new THREE.Vector3();
+  for (const it of items) {
+    nm.getNormalMatrix(it.m);
+    const g = it.geo;
+    const P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv, T = g.attributes.tpos, I = g.index;
+    for (const gr of it.groups) {
+      for (let k = gr.start; k < gr.start + gr.count; k++) {
+        const i = I ? I.getX(k) : k;
+        va.set(P.getX(i), P.getY(i), P.getZ(i)).applyMatrix4(it.m);
+        pos[o * 3] = va.x; pos[o * 3 + 1] = va.y; pos[o * 3 + 2] = va.z;
+        va.set(N.getX(i), N.getY(i), N.getZ(i)).applyMatrix3(nm).normalize();
+        nrm[o * 3] = va.x; nrm[o * 3 + 1] = va.y; nrm[o * 3 + 2] = va.z;
+        uv[o * 2] = U ? U.getX(i) : 0; uv[o * 2 + 1] = U ? U.getY(i) : 0;
+        if (T) { tp[o * 3] = T.getX(i); tp[o * 3 + 1] = T.getY(i); tp[o * 3 + 2] = T.getZ(i); }
+        o++;
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.setAttribute('tpos', new THREE.BufferAttribute(tp, 3));
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+function cfMatrix(cf) {
+  return new THREE.Matrix4().set(cf[3], cf[4], cf[5], cf[0], cf[6], cf[7], cf[8], cf[1], cf[9], cf[10], cf[11], cf[2], 0, 0, 0, 1);
+}
+
+const ASM_EFFECTS = new Set(['Fire', 'Smoke', 'Sparkles', 'PointLight', 'SpotLight', 'SurfaceLight', 'ForceField']);
+
 function boxGeometry(sx, sy, sz) {
   const g = new THREE.BoxGeometry(sx, sy, sz);
   const uv = g.attributes.uv;
@@ -65,6 +105,28 @@ function boxGeometry(sx, sy, sz) {
     const i = f * 4 + k;
     uv.setXY(i, uv.getX(i) * dims[f][0], uv.getY(i) * dims[f][1]);
   }
+  return g;
+}
+
+function studUvGeometry(geo) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const P = g.attributes.position;
+  const uv = new Float32Array(P.count * 2);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i + 2 < P.count; i += 3) {
+    a.fromBufferAttribute(P, i);
+    b.fromBufferAttribute(P, i + 1);
+    c.fromBufferAttribute(P, i + 2);
+    const n = b.clone().sub(a).cross(c.clone().sub(a));
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    const axis = ax >= ay && ax >= az ? 0 : ay >= az ? 1 : 2;
+    for (let j = 0; j < 3; j++) {
+      const x = P.getX(i + j), y = P.getY(i + j), z = P.getZ(i + j);
+      uv[(i + j) * 2] = axis === 0 ? z : x;
+      uv[(i + j) * 2 + 1] = axis === 1 ? z : y;
+    }
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   return g;
 }
 
@@ -210,7 +272,12 @@ export class Renderer {
     this.hidden = new Set();
     this.localTransparency = new Map();
     this.buckets = new Map();
+    this.looseCount = 0;
     this.bucketsDirty = new Set();
+    this.asmIndex = new Map();
+    this.asms = new Map();
+    this.asmDirty = new Set();
+    this.asmMoved = new Set();
     this.setupLighting();
     preloadParticles();
     this.atlases = new CharacterAtlases(r);
@@ -246,7 +313,15 @@ export class Renderer {
       this.sun.castShadow = shadows;
       this.r.shadowMap.needsUpdate = true;
     }
-    const size = q === 0 || q >= 8 ? 2048 : 1024;
+    const high = q === 0 || q >= 8;
+    const maxTex = this.r.capabilities.maxTextureSize || 2048;
+    const size = Math.min(maxTex, high ? 4096 : q >= 4 ? 2048 : 1024);
+    const half = high ? 200 : 150;
+    const sc = this.sun.shadow.camera;
+    if (sc.right !== half) {
+      sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half;
+      sc.updateProjectionMatrix();
+    }
     if (this.sun.shadow.mapSize.x !== size) {
       this.sun.shadow.mapSize.set(size, size);
       if (this.sun.shadow.map) {
@@ -272,9 +347,9 @@ export class Renderer {
     this.scene.add(this.ambient);
     this.sun = new THREE.DirectionalLight(0xffffff, 1.9);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.mapSize.set(4096, 4096);
     const sc = this.sun.shadow.camera;
-    sc.left = -90; sc.right = 90; sc.top = 90; sc.bottom = -90; sc.near = 1; sc.far = 600;
+    sc.left = -200; sc.right = 200; sc.top = 200; sc.bottom = -200; sc.near = 1; sc.far = 700;
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.14;
     this.scene.add(this.sun);
@@ -469,6 +544,13 @@ export class Renderer {
     if (inst.isA('BasePart')) {
       if (!v) return;
       if (name === 'CFrame') {
+        const ra = this.asms.get(inst.id);
+        if (ra) this.asmMoved.add(ra);
+        if (v.asm && !ra) {
+          v.asm.check.add(v);
+          applyCF(v.group, inst.props.get('CFrame'));
+          return;
+        }
         if (v.batched) {
           v.dynamic = true;
           this.rebuild(inst);
@@ -485,8 +567,14 @@ export class Renderer {
       } else if (['Size', 'BrickColor', 'Color', 'MeshId', 'TextureID', 'LocalTransparencyModifier', 'Transparency', 'Reflectance', 'Material', 'Shape', ...FACE_PROPS].includes(name)) {
         if (v.batched) v.dynamic = true;
         this.rebuild(inst);
+      } else if (name === 'Anchored' && v.asm) {
+        v.noAsm = true;
+        this.rebuild(inst);
       } else if (name === 'Anchored' && !inst.props.get('Anchored') && v.batched) {
         v.dynamic = true;
+        this.rebuild(inst);
+      } else if ((name === 'Velocity' || name === 'RotVelocity') && !v.batched && !v.asm && v.loose && this.canRestBatch(inst) && Array.isArray(old) && (old[0] || old[1] || old[2])) {
+        v.dynamic = false;
         this.rebuild(inst);
       }
       return;
@@ -506,6 +594,10 @@ export class Renderer {
       const group = new THREE.Group();
       group.matrixAutoUpdate = true;
       const v = { part: inst, group, children: [], target: null, effects: [] };
+      if (!inst.props.get('Anchored')) {
+        v.loose = true;
+        this.looseCount++;
+      }
       this.visuals.set(inst, v);
       this.scene.add(group);
       applyCF(group, inst.props.get('CFrame'));
@@ -521,6 +613,7 @@ export class Renderer {
     const v = this.visuals.get(inst);
     if (!v) return;
     this.visuals.delete(inst);
+    if (v.loose) this.looseCount--;
     this.smooth.delete(v);
     this.unbatch(v);
     if (v.group) {
@@ -574,10 +667,11 @@ export class Renderer {
       let geo;
       if (part.ClassName === 'WedgePart') geo = wedgeGeometry(...size);
       else if (part.ClassName === 'CornerWedgePart') geo = cornerWedgeGeometry(...size);
-      else if (shape === 0) geo = new THREE.SphereGeometry(Math.min(...size) / 2, 24, 16);
+      else if (shape === 0) geo = studUvGeometry(new THREE.SphereGeometry(Math.min(...size) / 2, 24, 16));
       else if (shape === 2) {
         geo = new THREE.CylinderGeometry(Math.min(size[1], size[2]) / 2, Math.min(size[1], size[2]) / 2, size[0], 24);
         geo.rotateZ(Math.PI / 2);
+        geo = studUvGeometry(geo);
       } else geo = boxGeometry(...size);
       texPosAttribute(geo);
       let mats;
@@ -591,14 +685,17 @@ export class Renderer {
       }
     }
     if (body) {
+      const worn = !!part.parent && (part.parent.ClassName === 'Hat' || part.parent.ClassName === 'Accessory' || part.parent.ClassName === 'Accoutrement') && part.props.get('Name') === 'Handle';
       body.traverse((o) => {
-        o.castShadow = transp < 0.5 && !o.userData.overlay;
+        o.castShadow = transp < 0.5 && !o.userData.overlay && !worn;
         o.receiveShadow = true;
       });
       body.userData.part = part;
       v.body = body;
       if (transp >= 1) body.visible = false;
-      if (!meshInst && !part.isA('PartOperation') && part.ClassName !== 'MeshPart' && body.geometry && transp < 1 && this.batchable(v)) this.batch(v, body);
+      const plain = !meshInst && !part.isA('PartOperation') && part.ClassName !== 'MeshPart' && body.geometry && transp < 1;
+      if (plain && this.asmJoin(v, body)) {
+      } else if (plain && this.batchable(v)) this.batch(v, body);
       else v.group.add(body);
     }
     if (!meshInst || this.isHeadMesh(meshInst)) this.buildDecals(v, part, size, meshInst);
@@ -664,9 +761,17 @@ export class Renderer {
 
   batchable(v) {
     const p = v.part;
-    if (v.dynamic || !p.props.get('Anchored') || this.localTransparency.has(p)) return false;
+    if (v.dynamic || this.localTransparency.has(p)) return false;
+    if (!p.props.get('Anchored') && !this.canRestBatch(p)) return false;
     if (p.parent && p.parent.ClassName === 'Model' && p.parent.findChildOfClass('Humanoid')) return false;
     return true;
+  }
+
+  canRestBatch(p) {
+    if (this.looseCount < LOOSE_BATCH_MIN || p.props.get('Anchored')) return false;
+    const a = p.props.get('Velocity'), b = p.props.get('RotVelocity');
+    if (a[0] || a[1] || a[2] || b[0] || b[1] || b[2]) return false;
+    return !(p.parent && p.parent.ClassName === 'Model' && p.parent.findChildOfClass('Humanoid'));
   }
 
   batch(v, body) {
@@ -679,10 +784,15 @@ export class Renderer {
     for (const g of groups) {
       const mat = mats ? mats[g.materialIndex] : body.material;
       if (!mat) continue;
-      let b = this.buckets.get(mat);
+      let list = this.buckets.get(mat);
+      if (!list) {
+        list = [];
+        this.buckets.set(mat, list);
+      }
+      let b = list.find((x) => x.parts.size < BUCKET_CAP || x.parts.has(v));
       if (!b) {
         b = { mat, parts: new Map(), mesh: null };
-        this.buckets.set(mat, b);
+        list.push(b);
       }
       if (!b.parts.has(v)) b.parts.set(v, []);
       b.parts.get(v).push(g);
@@ -692,6 +802,7 @@ export class Renderer {
   }
 
   unbatch(v) {
+    if (v.asm) this.asmLeave(v);
     if (!v.batched) return;
     v.batched = false;
     for (const b of v.batchMats || []) {
@@ -710,45 +821,198 @@ export class Renderer {
       b.mesh = null;
     }
     if (!b.parts.size) {
-      this.buckets.delete(b.mat);
+      const list = this.buckets.get(b.mat);
+      if (list) {
+        const i = list.indexOf(b);
+        if (i >= 0) list.splice(i, 1);
+        if (!list.length) this.buckets.delete(b.mat);
+      }
       return;
     }
-    let n = 0;
-    for (const [, groups] of b.parts) for (const g of groups) n += g.count;
-    const pos = new Float32Array(n * 3), nrm = new Float32Array(n * 3), uv = new Float32Array(n * 2), tp = new Float32Array(n * 3);
-    let o = 0;
-    const m = new THREE.Matrix4(), nm = new THREE.Matrix3(), va = new THREE.Vector3();
+    const items = [];
     for (const [v, groups] of b.parts) {
       const cf = v.part.props.get('CFrame');
-      m.set(cf[3], cf[4], cf[5], cf[0], cf[6], cf[7], cf[8], cf[1], cf[9], cf[10], cf[11], cf[2], 0, 0, 0, 1);
-      nm.getNormalMatrix(m);
-      const g = v.batchGeo;
-      const P = g.attributes.position, N = g.attributes.normal, U = g.attributes.uv, T = g.attributes.tpos, I = g.index;
-      for (const gr of groups) {
-        for (let k = gr.start; k < gr.start + gr.count; k++) {
-          const i = I ? I.getX(k) : k;
-          va.set(P.getX(i), P.getY(i), P.getZ(i)).applyMatrix4(m);
-          pos[o * 3] = va.x; pos[o * 3 + 1] = va.y; pos[o * 3 + 2] = va.z;
-          va.set(N.getX(i), N.getY(i), N.getZ(i)).applyMatrix3(nm).normalize();
-          nrm[o * 3] = va.x; nrm[o * 3 + 1] = va.y; nrm[o * 3 + 2] = va.z;
-          uv[o * 2] = U ? U.getX(i) : 0; uv[o * 2 + 1] = U ? U.getY(i) : 0;
-          if (T) { tp[o * 3] = T.getX(i); tp[o * 3 + 1] = T.getY(i); tp[o * 3 + 2] = T.getZ(i); }
-          o++;
-        }
-      }
+      items.push({ geo: v.batchGeo, groups, m: new THREE.Matrix4().set(cf[3], cf[4], cf[5], cf[0], cf[6], cf[7], cf[8], cf[1], cf[9], cf[10], cf[11], cf[2], 0, 0, 0, 1) });
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geo.setAttribute('tpos', new THREE.BufferAttribute(tp, 3));
-    geo.computeBoundingSphere();
+    const geo = mergeItems(items);
     const mesh = new THREE.Mesh(geo, b.mat);
     mesh.castShadow = !b.mat.transparent || b.mat.opacity > 0.5;
     mesh.receiveShadow = true;
     mesh.matrixAutoUpdate = false;
     b.mesh = mesh;
     this.scene.add(mesh);
+  }
+
+  setAssemblies(adds, dels) {
+    const touched = new Set();
+    const drop = (r) => {
+      const asm = this.asms.get(r);
+      if (!asm) return;
+      this.asms.delete(r);
+      this.asmDirty.delete(asm);
+      this.asmMoved.delete(asm);
+      for (const m of asm.meshes) {
+        this.scene.remove(m);
+        m.geometry.dispose();
+      }
+      asm.meshes = [];
+      for (const v of [...asm.members.keys()]) {
+        this.asmLeave(v);
+        v.noAsm = false;
+        touched.add(v.part.id);
+      }
+      for (const id of asm.ids) {
+        if (this.asmIndex.get(id) === r) this.asmIndex.delete(id);
+        touched.add(id);
+      }
+    };
+    for (const r of dels) drop(r);
+    for (const [r, d] of adds) {
+      drop(r);
+      const ids = [];
+      let id = 0;
+      for (const x of d) {
+        id += x;
+        ids.push(id);
+      }
+      this.asms.set(r, { root: r, ids, members: new Map(), meshes: [], check: new Set() });
+      for (const i of ids) {
+        this.asmIndex.set(i, r);
+        touched.add(i);
+      }
+    }
+    for (const id of touched) {
+      const part = this.dm.byId.get(id);
+      const v = part && this.visuals.get(part);
+      if (!v) continue;
+      v.noAsm = false;
+      this.rebuild(part);
+    }
+  }
+
+  asmEligible(v) {
+    const p = v.part;
+    if (v.noAsm || p.props.get('Anchored') || this.localTransparency.has(p)) return false;
+    if (p.parent && p.parent.ClassName === 'Model' && p.parent.findChildOfClass('Humanoid')) return false;
+    for (const c of p.children) if (c.isA('Decal') || c.isA('DataModelMesh') || ASM_EFFECTS.has(c.ClassName)) return false;
+    return true;
+  }
+
+  asmJoin(v, body) {
+    if (!this.asmIndex.size) return false;
+    const part = v.part;
+    const rid = this.asmIndex.get(part.id);
+    if (rid === undefined) return false;
+    const asm = this.asms.get(rid);
+    const rootPart = this.dm.byId.get(rid);
+    if (!asm || !rootPart || !this.asmEligible(v)) return false;
+    const geo = body.geometry;
+    const mats = Array.isArray(body.material) ? body.material : null;
+    const groups = geo.groups.length ? geo.groups : [{ start: 0, count: geo.index ? geo.index.count : geo.attributes.position.count, materialIndex: 0 }];
+    const entries = [];
+    for (const g of groups) {
+      const mat = mats ? mats[g.materialIndex] : body.material;
+      if (mat) entries.push({ mat, g });
+    }
+    const local = cfMatrix(rootPart.props.get('CFrame')).invert().multiply(cfMatrix(part.props.get('CFrame')));
+    asm.members.set(v, { geo, entries, local });
+    v.asm = asm;
+    this.asmDirty.add(asm);
+    return true;
+  }
+
+  asmLeave(v) {
+    const asm = v.asm;
+    if (!asm) return;
+    v.asm = null;
+    const m = asm.members.get(v);
+    asm.members.delete(v);
+    asm.check.delete(v);
+    if (m && m.geo && !m.geo.userData.shared) m.geo.dispose();
+    if (this.asms.get(asm.root) === asm) this.asmDirty.add(asm);
+  }
+
+  asmBuild(asm) {
+    for (const m of asm.meshes) {
+      this.scene.remove(m);
+      m.geometry.dispose();
+    }
+    asm.meshes = [];
+    const rootPart = this.dm.byId.get(asm.root);
+    if (!rootPart || !this.visuals.has(rootPart)) {
+      for (const v of [...asm.members.keys()]) {
+        v.noAsm = true;
+        this.rebuild(v.part);
+      }
+      return;
+    }
+    const byMat = new Map();
+    for (const [, m] of asm.members) {
+      for (const e of m.entries) {
+        let list = byMat.get(e.mat);
+        if (!list) byMat.set(e.mat, (list = []));
+        list.push({ geo: m.geo, groups: [e.g], m: m.local });
+      }
+    }
+    for (const [mat, items] of byMat) {
+      const mesh = new THREE.Mesh(mergeItems(items), mat);
+      mesh.castShadow = !mat.transparent || mat.opacity > 0.5;
+      mesh.receiveShadow = true;
+      asm.meshes.push(mesh);
+      this.scene.add(mesh);
+    }
+    asm.check.clear();
+    this.asmSync(asm);
+  }
+
+  asmSync(asm) {
+    const rv = this.visuals.get(this.dm.byId.get(asm.root));
+    for (const m of asm.meshes) {
+      if (!rv) {
+        m.visible = false;
+        continue;
+      }
+      m.visible = true;
+      m.position.copy(rv.group.position);
+      m.quaternion.copy(rv.group.quaternion);
+    }
+  }
+
+  asmVerify(asm) {
+    const rootPart = this.dm.byId.get(asm.root);
+    const rm = cfMatrix(rootPart.props.get('CFrame'));
+    const e = new THREE.Matrix4();
+    const out = [];
+    for (const v of asm.check) {
+      const m = asm.members.get(v);
+      if (!m) continue;
+      e.multiplyMatrices(rm, m.local);
+      const a = e.elements, b = cfMatrix(v.part.props.get('CFrame')).elements;
+      const dist = Math.hypot(m.local.elements[12], m.local.elements[13], m.local.elements[14]);
+      let bad = Math.hypot(a[12] - b[12], a[13] - b[13], a[14] - b[14]) > 0.05 + 0.004 * dist;
+      for (let i = 0; i < 11 && !bad; i++) if (i % 4 !== 3 && Math.abs(a[i] - b[i]) > 0.02) bad = true;
+      if (bad) out.push(v);
+    }
+    asm.check.clear();
+    for (const v of out) {
+      v.noAsm = true;
+      this.rebuild(v.part);
+    }
+  }
+
+  asmStep() {
+    for (const asm of [...this.asmMoved]) {
+      if (this.asmDirty.has(asm)) continue;
+      this.asmSync(asm);
+      const rv = this.visuals.get(this.dm.byId.get(asm.root));
+      if (!rv || !this.smooth.has(rv)) this.asmMoved.delete(asm);
+    }
+    for (const asm of this.asms.values()) if (asm.check.size && !this.asmDirty.has(asm)) this.asmVerify(asm);
+    if (this.asmDirty.size) {
+      const list = [...this.asmDirty];
+      this.asmDirty.clear();
+      for (const asm of list) if (this.asms.get(asm.root) === asm) this.asmBuild(asm);
+    }
   }
 
   isHeadMesh(m) {
@@ -765,26 +1029,46 @@ export class Renderer {
     mesh.userData.part = part;
     holder.add(mesh);
     const tex = part.props.get('TextureID');
-    if (tex) {
+    const model = part.parent;
+    const limb = !!(model && model.findChildOfClass && model.findChildOfClass('Humanoid') && R15_LIMBS.has(part.props.get('Name')) && part.props.get('Name') !== 'Head');
+    let over = null;
+    if (limb) {
+      const t = this.r15Atlases.get(model, part.props.get('Name'));
+      if (t) {
+        mat.color.setRGB(1, 1, 1);
+        mat.map = t;
+      }
+    }
+    if (tex && limb) {
+      const om = new Material2012({ color: rawColor(1, 1, 1), ks: 0.3, exp: 30, transparent: true, opacity: 1 - transp, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+      om.visible = false;
+      over = new THREE.Mesh(mesh.geometry, om);
+      over.userData.part = part;
+      over.userData.overlay = true;
+      mesh.add(over);
+      loadTexture(tex).then((t) => {
+        if (!t) return;
+        om.map = t;
+        om.visible = true;
+      });
+    } else if (tex) {
       loadTexture(tex).then((t) => {
         if (!t) return;
         mat.color.setRGB(1, 1, 1);
         mat.setAlphaTest(0.1);
         mat.map = t;
       });
-    } else {
-      const model = part.parent;
-      if (model && model.findChildOfClass('Humanoid') && R15_LIMBS.has(part.props.get('Name')) && part.props.get('Name') !== 'Head') {
-        const t = this.r15Atlases.get(model, part.props.get('Name'));
-        if (t) {
-          mat.color.setRGB(1, 1, 1);
-          mat.map = t;
-        }
-      }
     }
     const url = part.props.get('MeshId');
     if (url) loadMesh(url).then((g) => {
-      if (!g) return;
+      if (!g) {
+        if (mesh.geometry && !mesh.geometry.getAttribute('position')) {
+          const box = boxGeometry(size[0], size[1], size[2]);
+          texPosAttribute(box);
+          mesh.geometry = box;
+        }
+        return;
+      }
       g.userData.shared = true;
       if (!g.boundingBox) g.computeBoundingBox();
       const bb = g.boundingBox;
@@ -792,11 +1076,13 @@ export class Renderer {
       mesh.scale.set(size[0] / (ext[0] || 1), size[1] / (ext[1] || 1), size[2] / (ext[2] || 1));
       mesh.position.set(-(bb.max.x + bb.min.x) / 2 * mesh.scale.x, -(bb.max.y + bb.min.y) / 2 * mesh.scale.y, -(bb.max.z + bb.min.z) / 2 * mesh.scale.z);
       mesh.geometry = g;
+      if (over) over.geometry = g;
     });
     else {
       const box = boxGeometry(size[0], size[1], size[2]);
       texPosAttribute(box);
       mesh.geometry = box;
+      if (over) over.geometry = box;
     }
     return holder;
   }
@@ -918,7 +1204,10 @@ export class Renderer {
       const face = d.props.get('Face');
       const tex = d.props.get('Texture');
       if (!tex) continue;
-      const transp = d.props.get('Transparency');
+      const own = +d.props.get('Transparency') || 0;
+      const lt = this.localTransparency.has(part) ? this.localTransparency.get(part) : this.world.era === 2018 && part.props.has('LocalTransparencyModifier') ? +part.props.get('LocalTransparencyModifier') || 0 : 0;
+      const transp = lt > 0 ? 1 - (1 - own) * (1 - lt) : own;
+      if (transp >= 1) continue;
       const dc = d.props.get('Color3') || [1, 1, 1];
       const mat = new Material2012({ color: rawColor(dc[0], dc[1], dc[2]), ks: Math.min(1, (d.props.get('Specular') || 0) * 0.5), exp: d.props.get('Shiny') || 20, transparent: true, opacity: 1 - transp, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
       mat.visible = false;
@@ -933,6 +1222,7 @@ export class Renderer {
         const off = meshInst.props.get('Offset');
         mesh.position.set(off[0], off[1], off[2]);
         mesh.scale.setScalar(1.002);
+        mesh.receiveShadow = true;
         v.group.add(mesh);
       } else {
         const dims = [[size[2], size[1]], [size[0], size[2]], [size[0], size[1]], [size[2], size[1]], [size[0], size[2]], [size[0], size[1]]][face] || [1, 1];
@@ -953,6 +1243,7 @@ export class Renderer {
           const uv = geo.attributes.uv;
           for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * dims[0]) / u, (uv.getY(i) * dims[1]) / w);
         }
+        mesh.receiveShadow = true;
         v.group.add(mesh);
       }
       loadTexture(tex, { repeat: isTexture }).then((t) => {
@@ -1038,9 +1329,13 @@ export class Renderer {
           line.userData.key = s.join(',');
           v.group.add(line);
         }
-        const b = brick(inst.props.get('Color'));
-        mat.color.copy(srgb(b.r, b.g, b.b));
-        line.visible = true;
+        const c3 = this.world.era === 2018 ? inst.props.get('Color3') : null;
+        if (Array.isArray(c3)) mat.color.copy(srgb(c3[0], c3[1], c3[2]));
+        else {
+          const b = brick(inst.props.get('Color'));
+          mat.color.copy(srgb(b.r, b.g, b.b));
+        }
+        line.visible = inst.props.get('Transparency') < 1;
         applyCF(v.group, a.props.get('CFrame'));
       },
     };
@@ -1133,6 +1428,7 @@ export class Renderer {
       }
       if (g.position.distanceToSquared(tp) < 1e-6) this.smooth.delete(v);
     }
+    if (this.asms.size) this.asmStep();
     if (this.bucketsDirty.size) {
       for (const b of this.bucketsDirty) this.rebuildBucket(b);
       this.bucketsDirty.clear();
@@ -1147,8 +1443,21 @@ export class Renderer {
     this.skyDome.position.copy(cam);
     if (this.sunDir) {
       const d = LIGHTS.lamp0Dir.value;
-      this.sun.position.set(cam.x + d.x * 300, cam.y + d.y * 300, cam.z + d.z * 300);
-      this.sun.target.position.set(cam.x, cam.y, cam.z);
+      const sc = this.sun.shadow.camera;
+      const texel = (sc.right - sc.left) / (this.sun.shadow.mapSize.x || 2048);
+      const dl = Math.hypot(d.x, d.y, d.z) || 1;
+      const dx = d.x / dl, dy = d.y / dl, dz = d.z / dl;
+      let rx = -dz, ry = 0, rz = dx;
+      let rl = Math.hypot(rx, ry, rz);
+      if (rl < 1e-4) { rx = 1; ry = 0; rz = 0; rl = 1; }
+      rx /= rl; ry /= rl; rz /= rl;
+      const ux = dy * rz - dz * ry, uy = dz * rx - dx * rz, uz = dx * ry - dy * rx;
+      const a = Math.round((cam.x * rx + cam.y * ry + cam.z * rz) / texel) * texel;
+      const b = Math.round((cam.x * ux + cam.y * uy + cam.z * uz) / texel) * texel;
+      const c = cam.x * dx + cam.y * dy + cam.z * dz;
+      const cx = rx * a + ux * b + dx * c, cy = ry * a + uy * b + dy * c, cz = rz * a + uz * b + dz * c;
+      this.sun.position.set(cx + dx * 300, cy + dy * 300, cz + dz * 300);
+      this.sun.target.position.set(cx, cy, cz);
       const s = this.sunDir;
       if (this.sunSprite) {
         this.sunSprite.position.set(cam.x + s[0] * 1800, cam.y + s[1] * 1800, cam.z + s[2] * 1800);

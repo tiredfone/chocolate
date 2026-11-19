@@ -56,12 +56,14 @@ export class Physics {
     this.dm = dm;
     this.R = RAPIER;
     this.simulate = opts.simulate !== false;
+    this.gravity = GRAVITY;
     this.world = new RAPIER.World({ x: 0, y: -GRAVITY, z: 0 });
     this.world.timestep = STEP;
     this.events = new RAPIER.EventQueue(true);
     this.parts = new Map();
     this.byHandle = new Map();
     this.assemblies = new Set();
+    this.asmEpoch = 0;
     this.dirty = new Set();
     this.autoJoints = new Map();
     this.hinges = new Map();
@@ -70,6 +72,7 @@ export class Physics {
     this.hingesDirty = false;
     this.fixedBody = null;
     this.vehicleSeats = new Set();
+    this.skateboards = new Set();
     this.joints = new Set();
     this.movers = new Set();
     this.touching = new Map();
@@ -130,8 +133,15 @@ export class Physics {
     }
   }
 
+  setGravity(g) {
+    const v = Number.isFinite(+g) ? +g : GRAVITY;
+    this.gravity = v;
+    this.world.gravity = { x: 0, y: -v, z: 0 };
+  }
+
   attachWorkspace(ws) {
     this.ws = ws;
+    this.setGravity(ws.props.get('Gravity') ?? GRAVITY);
     for (const d of ws.descendants()) this.enter(d);
     if (this.simulate) this.autoJoinAll();
     this.loaded = true;
@@ -179,6 +189,10 @@ export class Physics {
 
   changed(inst, name, old, opts) {
     if (opts && opts.physics) return;
+    if (name === 'Gravity' && inst === this.ws) {
+      this.setGravity(inst.props.get('Gravity'));
+      return;
+    }
     if (name === 'CollisionGroups' && inst === this.ws) {
       this.refreshGroups();
       return;
@@ -219,6 +233,7 @@ export class Physics {
       if (inst.ClassName === 'Terrain') return;
       if (!this.parts.has(inst) && !this.excluded(inst)) this.addPart(inst);
       if (inst.ClassName === 'VehicleSeat' && this.parts.has(inst)) this.vehicleSeats.add(inst);
+      if (inst.ClassName === 'SkateboardPlatform' && this.parts.has(inst)) this.skateboards.add(inst);
     } else if (inst.isA('JointInstance')) {
       this.enterJoint(inst);
     } else if (inst.isA('BodyMover')) {
@@ -229,6 +244,7 @@ export class Physics {
   leave(inst) {
     if (inst.isA('BasePart')) {
       this.vehicleSeats.delete(inst);
+      this.skateboards.delete(inst);
       this.removePart(inst);
     }
     else if (inst.isA('JointInstance')) this.leaveJoint(inst);
@@ -590,6 +606,60 @@ export class Physics {
     }
   }
 
+  boardImpulse(part, dv) {
+    const body = this.parts.get(part)?.asm?.body;
+    if (!body) return;
+    const v = body.linvel();
+    body.setLinvel({ x: v.x + (+dv[0] || 0), y: v.y + (+dv[1] || 0), z: v.z + (+dv[2] || 0) }, true);
+  }
+
+  boardGrounded(board) {
+    const cf = board.props.get('CFrame');
+    const r = this.raycast([cf[0], cf[1], cf[2]], [0, -2.2, 0], [board.parent || board], (q) => q.props.get('CanCollide') && !(board.parent && q.isDescendantOf(board.parent)));
+    return !!r.part;
+  }
+
+  driveSkateboards(dt) {
+    for (const board of this.skateboards) {
+      if (!board.props.get('ControllingHumanoid')) {
+        if (board.data && board.data.moveState !== undefined) board.data.moveState = undefined;
+        continue;
+      }
+      const body = this.parts.get(board)?.asm?.body;
+      if (!body) continue;
+      const cf = board.props.get('CFrame');
+      let fx = -cf[5], fz = -cf[11];
+      const fl = Math.hypot(fx, fz) || 1;
+      fx /= fl;
+      fz /= fl;
+      const rx = -fz, rz = fx;
+      const th = board.props.get('Throttle') | 0, st = board.props.get('Steer') | 0;
+      const v = body.linvel();
+      const grounded = this.boardGrounded(board);
+      let fwd = v.x * fx + v.z * fz;
+      let side = v.x * rx + v.z * rz;
+      if (grounded) {
+        if (th > 0) fwd = Math.min(40, fwd + 22 * dt);
+        else if (th < 0) fwd = fwd > 0 ? Math.max(0, fwd - 45 * dt) : Math.max(-8, fwd - 10 * dt);
+        else fwd -= Math.sign(fwd) * Math.min(Math.abs(fwd), 2.5 * dt);
+        if (board.props.get('StickyWheels') !== false) side *= Math.max(0, 1 - 12 * dt);
+      }
+      body.setLinvel({ x: fx * fwd + rx * side, y: v.y, z: fz * fwd + rz * side }, true);
+      const av = body.angvel();
+      const yaw = grounded ? -st * (1.2 + Math.min(1.6, Math.abs(fwd) / 20)) * (fwd < -0.5 ? -1 : 1) : av.y;
+      const keep = board.props.get('StickyWheels') !== false && grounded ? 0.6 : 1;
+      body.setAngvel({ x: av.x * keep, y: yaw, z: av.z * keep }, true);
+      const speed = Math.hypot(v.x, v.z);
+      const state = !grounded ? 4 : th > 0 ? 2 : th < 0 ? (speed > 1 ? 3 : 0) : speed > 1 ? 1 : 0;
+      board.data = board.data || {};
+      if (board.data.moveState !== state) {
+        const old = board.data.moveState ?? 0;
+        board.data.moveState = state;
+        if (this.onBoardState) this.onBoardState(board, state, old);
+      }
+    }
+  }
+
   breakJoints(part) {
     this.dropAuto(part);
     this.dropHinges(part);
@@ -654,12 +724,23 @@ export class Physics {
     return out;
   }
 
+  explicitHinge(part) {
+    const keys = this.hingesOf.get(part);
+    if (!keys) return false;
+    for (const k of keys) {
+      const h = this.hinges.get(k);
+      if (h && h.inst) return true;
+    }
+    return false;
+  }
+
   makeJoints(parts) {
     if (!parts.length) return;
     const g = this.buildGrid();
     for (const p of parts) {
+      if (this.explicitHinge(p)) continue;
       for (const o of this.gridNeighbours(g, p)) {
-        if (o === p) continue;
+        if (o === p || this.explicitHinge(o)) continue;
         const f = this.faceContact(p, o, true);
         if (!f) continue;
         const sp = surfaceOf(p, f[0]), so = surfaceOf(o, f[1]);
@@ -700,6 +781,11 @@ export class Physics {
       explicit.add(j.props.get('Part0'));
       explicit.add(j.props.get('Part1'));
     }
+    for (const h of this.hinges.values()) {
+      if (!h.inst) continue;
+      explicit.add(h.a);
+      explicit.add(h.b);
+    }
     this.makeJoints(loose.filter((p) => !explicit.has(p)));
   }
 
@@ -722,12 +808,17 @@ export class Physics {
   faceContact(a, b, deep = false) {
     const ca = a.props.get('CFrame'), cb = b.props.get('CFrame');
     const sa = a.props.get('Size'), sb = b.props.get('Size');
+    const NB = [];
+    for (let fb = 0; fb < 6; fb++) {
+      const [axB, sgB] = FACE_AXES[fb];
+      NB.push([cb[3 + axB] * sgB, cb[6 + axB] * sgB, cb[9 + axB] * sgB]);
+    }
     for (let fa = 0; fa < 6; fa++) {
       const [axA, sgA] = FACE_AXES[fa];
       const na = [ca[3 + axA] * sgA, ca[6 + axA] * sgA, ca[9 + axA] * sgA];
       for (let fb = 0; fb < 6; fb++) {
         const [axB, sgB] = FACE_AXES[fb];
-        const nb = [cb[3 + axB] * sgB, cb[6 + axB] * sgB, cb[9 + axB] * sgB];
+        const nb = NB[fb];
         if (na[0] * nb[0] + na[1] * nb[1] + na[2] * nb[2] > -0.999) continue;
         const pa = sa[axA] / 2, pb = sb[axB] / 2;
         const ctrA = [ca[0] + na[0] * pa, ca[1] + na[1] * pa, ca[2] + na[2] * pa];
@@ -820,6 +911,7 @@ export class Physics {
   destroyAssembly(asm) {
     if (!this.assemblies.has(asm)) return;
     this.assemblies.delete(asm);
+    this.asmEpoch++;
     for (const p of asm.parts) {
       const rec = this.parts.get(p);
       if (rec && rec.asm === asm) rec.asm = null;
@@ -871,6 +963,7 @@ export class Physics {
     }
     const asm = { parts: new Set(parts), anchored, root, body: null, sleeping: false };
     this.assemblies.add(asm);
+    this.asmEpoch++;
     if (anchored || parts.length === 0) {
       for (const p of parts) {
         const rec = this.parts.get(p);
@@ -928,6 +1021,31 @@ export class Physics {
   }
 
   applyMovers(dt) {
+    if (!this.forced) this.forced = new Set();
+    for (const b of this.forced) {
+      if (this.world.bodies.contains(b.handle)) {
+        b.resetForces(false);
+        b.resetTorques(false);
+      }
+    }
+    this.forced.clear();
+    if (this.loads && this.loads.size) {
+      const now = Date.now();
+      for (const [key, l] of this.loads) {
+        if (now - l.at > 250 || !this.world.bodies.contains(l.body.handle)) {
+          this.loads.delete(key);
+          continue;
+        }
+        l.body.addForceAtPoint({ x: 0, y: -l.mass * this.gravity, z: 0 }, { x: l.point[0], y: l.point[1], z: l.point[2] }, true);
+        this.forced.add(l.body);
+      }
+    }
+    if (this.impacts && this.impacts.length) {
+      for (const h of this.impacts) {
+        if (this.world.bodies.contains(h.body.handle)) h.body.applyImpulseAtPoint({ x: 0, y: -h.impulse, z: 0 }, { x: h.point[0], y: h.point[1], z: h.point[2] }, true);
+      }
+      this.impacts.length = 0;
+    }
     for (const m of this.movers) {
       if (m.destroyed || !m.parent) {
         this.movers.delete(m);
@@ -942,23 +1060,27 @@ export class Physics {
       if (cls === 'BodyVelocity') {
         const tv = m.props.get('Velocity'), mf = m.props.get('MaxForce');
         const lim = (k, d) => Math.max(-mf[k] * dt, Math.min(mf[k] * dt, d));
-        const g = GRAVITY * dt * mass;
+        const g = this.gravity * dt * mass;
         body.applyImpulse({ x: lim(0, (tv[0] - v.x) * mass), y: lim(1, (tv[1] - v.y) * mass + g) , z: lim(2, (tv[2] - v.z) * mass) }, true);
       } else if (cls === 'BodyPosition') {
         const tp = m.props.get('Position'), mf = m.props.get('MaxForce');
-        const P = m.props.get('P'), D = m.props.get('D');
+        const P = Math.max(0, m.props.get('P')), D = Math.max(0, m.props.get('D'));
         const pos = body.translation();
-        const f = [P * (tp[0] - pos.x) - D * v.x, P * (tp[1] - pos.y) - D * v.y + mass * GRAVITY * (mf[1] > mass * GRAVITY ? 1 : 0), P * (tp[2] - pos.z) - D * v.z];
-        const lim = (k) => Math.max(-mf[k], Math.min(mf[k], f[k])) * dt;
-        const imp = { x: lim(0), y: lim(1), z: lim(2) };
-        const maxImp = mass * 2000 * dt;
-        imp.x = Math.max(-maxImp, Math.min(maxImp, imp.x));
-        imp.y = Math.max(-maxImp, Math.min(maxImp, imp.y));
-        imp.z = Math.max(-maxImp, Math.min(maxImp, imp.z));
-        body.applyImpulse(imp, true);
+        const err = [tp[0] - pos.x, tp[1] - pos.y, tp[2] - pos.z];
+        const vel = [v.x, v.y, v.z];
+        const k = P / Math.max(1e-6, mass), c = D / Math.max(1e-6, mass);
+        const lift = mf[1] > mass * this.gravity ? mass * this.gravity : 0;
+        const f = [0, 1, 2].map((i) => {
+          const want = (vel[i] + dt * k * err[i]) / (1 + dt * c + dt * dt * k);
+          const fi = mass * (want - vel[i]) / dt + (i === 1 ? lift : 0);
+          return Math.max(-mf[i], Math.min(mf[i], fi));
+        });
+        body.addForce({ x: f[0], y: f[1], z: f[2] }, true);
+        this.forced.add(body);
       } else if (cls === 'BodyForce') {
         const f = m.props.get('Force');
-        body.applyImpulse({ x: f[0] * dt, y: f[1] * dt, z: f[2] * dt }, true);
+        body.addForce({ x: f[0], y: f[1], z: f[2] }, true);
+        this.forced.add(body);
       } else if (cls === 'BodyThrust') {
         const f = m.props.get('Force'), loc = m.props.get('Location');
         const cf = rec.part.props.get('CFrame');
@@ -967,21 +1089,33 @@ export class Physics {
         body.applyImpulseAtPoint({ x: wf[0] * dt, y: wf[1] * dt, z: wf[2] * dt }, { x: wp[0], y: wp[1], z: wp[2] }, true);
       } else if (cls === 'BodyGyro') {
         const target = m.props.get('CFrame'), mt = m.props.get('MaxTorque');
-        const P = m.props.get('P'), D = m.props.get('D');
+        if (mt[0] + mt[1] + mt[2] <= 0) continue;
+        const P = Math.max(0, m.props.get('P')), D = Math.max(0, m.props.get('D'));
         const cur = rec.part.props.get('CFrame');
         const err = C.mul(C.rotOnly(target), C.inv(C.rotOnly(cur)));
         const q = C.toQuat(err);
-        let ang = 2 * Math.acos(Math.max(-1, Math.min(1, q[3])));
-        if (ang > Math.PI) ang -= 2 * Math.PI;
+        if (q[3] < 0) { q[0] = -q[0]; q[1] = -q[1]; q[2] = -q[2]; q[3] = -q[3]; }
+        const ang = 2 * Math.acos(Math.max(-1, Math.min(1, q[3])));
         const s = Math.sqrt(Math.max(1e-9, 1 - q[3] * q[3]));
-        const axis = [q[0] / s, q[1] / s, q[2] / s];
+        const rot = ang > 1e-6 ? [q[0] / s * ang, q[1] / s * ang, q[2] / s * ang] : [0, 0, 0];
         const w = body.angvel();
-        const inertia = mass * 2;
-        const tq = [0, 1, 2].map((k) => {
-          const raw = (P * axis[k] * ang - D * [w.x, w.y, w.z][k]) * 0.01 * inertia;
-          return Math.max(-mt[k], Math.min(mt[k], raw)) * dt;
-        });
-        if (mt[0] + mt[1] + mt[2] > 0) body.applyTorqueImpulse({ x: tq[0], y: tq[1], z: tq[2] }, true);
+        const wv = [w.x, w.y, w.z];
+        const want = [0, 1, 2].map((i) => (wv[i] + dt * P * rot[i]) / (1 + dt * D + dt * dt * P) - wv[i]);
+        const r = body.rotation();
+        const bq = [r.x, r.y, r.z, r.w];
+        const conj = [-bq[0], -bq[1], -bq[2], bq[3]];
+        const qrot = (qq, vv) => {
+          const [x, y, z, ww] = qq;
+          const tx = 2 * (y * vv[2] - z * vv[1]), ty = 2 * (z * vv[0] - x * vv[2]), tz = 2 * (x * vv[1] - y * vv[0]);
+          return [vv[0] + ww * tx + (y * tz - z * ty), vv[1] + ww * ty + (z * tx - x * tz), vv[2] + ww * tz + (x * ty - y * tx)];
+        };
+        const I = body.principalInertia();
+        const dl = qrot(conj, want);
+        const tl = [dl[0] * I.x, dl[1] * I.y, dl[2] * I.z];
+        const tw = qrot(bq, tl);
+        const tq = [0, 1, 2].map((i) => Math.max(-mt[i], Math.min(mt[i], tw[i] / dt)));
+        body.addTorque({ x: tq[0], y: tq[1], z: tq[2] }, true);
+        this.forced.add(body);
       } else if (cls === 'BodyAngularVelocity') {
         const tv = m.props.get('AngularVelocity'), mt = m.props.get('MaxTorque');
         const w = body.angvel();
@@ -1009,6 +1143,7 @@ export class Physics {
     while (this.acc >= STEP) {
       this.applyMovers(STEP);
       if (this.vehicleSeats.size) this.driveVehicles();
+      if (this.skateboards.size) this.driveSkateboards(STEP);
       this.world.step(this.events, this.pushHooks());
       this.acc -= STEP;
       this.drainEvents();
@@ -1058,7 +1193,19 @@ export class Physics {
   }
 
   touchingParts(part) {
-    return [...(this.touching.get(part) || [])];
+    const out = new Set(this.touching.get(part) || []);
+    const rec = this.parts.get(part);
+    const col = rec && rec.collider;
+    if (col && this.world) {
+      try {
+        this.world.intersectionsWithShape(col.translation(), col.rotation(), col.shape, (c) => {
+          const r = this.byHandle.get(c.handle);
+          if (r && r.part && r.part !== part && !r.terrain && !r.solidProxy && !r.character && !r.noRay) out.add(r.part);
+          return true;
+        }, undefined, undefined, col);
+      } catch {}
+    }
+    return [...out];
   }
 
   writeBack() {
@@ -1114,6 +1261,38 @@ export class Physics {
     const out = [];
     for (const asm of this.assemblies) if (asm.body && !asm.body.isSleeping()) out.push(asm);
     return out;
+  }
+
+  looseBodyUnder(model, cf) {
+    const r = this.raycast([cf[0], cf[1] - 2.0, cf[2]], [0, -1.6, 0], [model], (q) => q.props.get('CanCollide'));
+    if (!r.part || r.normal[1] < 0.3) return null;
+    const rec = this.parts.get(r.part);
+    const body = rec && rec.asm && rec.asm.body;
+    if (!body || !body.isDynamic()) return null;
+    return { body, point: r.point };
+  }
+
+  setLoad(model, cf, mass) {
+    if (!this.simulate) return;
+    if (!this.loads) this.loads = new Map();
+    const under = this.looseBodyUnder(model, cf);
+    if (!under) {
+      this.loads.delete(model);
+      return;
+    }
+    this.loads.set(model, { body: under.body, point: under.point, mass, at: Date.now() });
+  }
+
+  clearLoad(model) {
+    if (this.loads) this.loads.delete(model);
+  }
+
+  addImpact(model, cf, impulse) {
+    if (!this.simulate || !(impulse > 0)) return;
+    const under = this.looseBodyUnder(model, cf);
+    if (!under) return;
+    if (!this.impacts) this.impacts = [];
+    this.impacts.push({ body: under.body, point: under.point, impulse });
   }
 
   raycast(origin, dir, ignore = [], filter = null) {

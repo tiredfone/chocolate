@@ -30,7 +30,7 @@ function parseAttrs(s) {
   return out;
 }
 
-function tree(src, start, end) {
+export function tree(src, start, end) {
   const root = { tag: '#', attrs: {}, kids: [], text: '' };
   const stack = [root];
   let i = start;
@@ -209,6 +209,7 @@ const ROT = {
   0x1f: [0, 1, 0, 0, 0, -1, -1, 0, 0], 0x20: [0, 0, 1, 0, 1, 0, -1, 0, 0], 0x22: [0, -1, 0, 0, 0, 1, -1, 0, 0], 0x23: [0, 0, -1, 0, -1, 0, -1, 0, 0],
 };
 
+const BINARY_PROPS = new Set(['ChocolateTerrain', 'MeshData', 'ChildData']);
 const CONTENT_PROPS = new Set(['MeshId', 'TextureId', 'TextureID', 'Texture', 'ShirtTemplate', 'PantsTemplate', 'Graphic', 'SoundId', 'Image',
   'SkyboxBk', 'SkyboxDn', 'SkyboxFt', 'SkyboxLf', 'SkyboxRt', 'SkyboxUp', 'MoonTextureId', 'SunTextureId', 'AnimationId', 'LinkedSource']);
 
@@ -281,11 +282,17 @@ function parseBinary(bytes) {
       switch (ty) {
         case 1: {
           vals = [];
+          const binary = BINARY_PROPS.has(pn);
           for (let i = 0; i < n; i++) {
             const l = u32(data, q); q += 4;
-            vals.push(td.decode(data.subarray(q, q + l))); q += l;
+            if (binary) {
+              let s = '';
+              for (let k = 0; k < l; k += 8192) s += String.fromCharCode.apply(null, data.subarray(q + k, q + Math.min(l, k + 8192)));
+              vals.push(`<BinaryString name="${pn}">${btoa(s)}</BinaryString>`);
+            } else vals.push(td.decode(data.subarray(q, q + l)));
+            q += l;
           }
-          t = CONTENT_PROPS.has(pn) ? 'Content' : 'string';
+          t = binary ? 'raw' : CONTENT_PROPS.has(pn) ? 'Content' : 'string';
           break;
         }
         case 2: vals = Array.from(data.subarray(q, q + n), (b) => b !== 0); t = 'bool'; break;

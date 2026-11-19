@@ -331,6 +331,11 @@ export function installMethods2018(def, host, { T, multi, Instance }) {
   def('IsVibrationSupported IsMotorSupported', 'HapticService', () => false);
   def('SetMotor', 'HapticService', () => null);
   def('GetMotor', 'HapticService', () => 0);
+  def('GetPlatformId', 'PlatformService', () => '');
+  def('PopupProfileUI PopupGameInviteUI', 'PlatformService', () => null);
+  def('BeginGetPMPCreatorId', 'PlatformService', () => 1);
+  def('BeginCheckXboxPrivilege', 'PlatformService', () => T.dict({ PrivilegeCheckResult: 'NoIssue' }));
+  def('BeginPlatformStorePurchase', 'PlatformService', () => -1);
   def('GetTextSize', 'TextService', (s, [text, size, font, frame], raw) => {
     const f = raw[2] && raw[2].tag === 'e' ? raw[2].v[1] : font | 0;
     const v = env.measureText ? env.measureText(String(text ?? ''), +size || 14, f, frame || [1e9, 1e9]) : null;
@@ -431,19 +436,52 @@ export function installMethods2018(def, host, { T, multi, Instance }) {
   def('PreloadAsync', 'ContentProvider', () => null);
   def('GetLocalPlayerTeleportData', 'TeleportService', () => null);
   def('GetTotalMemoryUsageMb', 'Stats', () => 120);
+  def('ReportInGoogleAnalytics', 'DataModel', () => null);
+  def('GetValue', 'StatsItem', (it) => (it.data && typeof it.data.value === 'number' ? it.data.value : 0));
+  def('GetValueString', 'StatsItem', (it) => String(it.data && typeof it.data.value === 'number' ? it.data.value : 0));
   def('GetMemoryUsageMbForTag', 'Stats', () => 0);
   def('ReportCounter TrackEvent SetRBXEvent SetRBXEventStream UpdateHeartbeatObject ReportInfluxSeries ReleaseRBXEventStream ReportStats', 'AnalyticsService', () => null);
   def('GetSessionId', 'AnalyticsService', () => '');
-  def('GetAsync PostAsync RequestAsync', 'HttpRbxApiService', () => Promise.reject(new Error('HTTP 403 (Forbidden)')));
+  def('GetAsync PostAsync RequestAsync', 'HttpRbxApiService', (svc, [url]) => (/canmanage/i.test(String(url)) ? Promise.resolve([JSON.stringify({ Success: true, CanManage: !!(env.canManage && env.canManage()) })]) : Promise.reject(new Error('HTTP 403 (Forbidden)'))));
   def('GetCameraYInvertValue', 'UserGameSettings', (g) => (g.props.get('CameraYInverted') ? -1 : 1));
   def('SetCameraYInvertVisible SetGamepadCameraSensitivityVisible SetCameraYInvertValue', 'UserGameSettings', () => null);
   def('GetOnboardingCompleted', 'UserGameSettings', () => true);
   def('SetOnboardingCompleted', 'UserGameSettings', () => null);
   def('IsUserFeatureEnabled', 'UserSettings', () => false);
   def('GetService', 'UserSettings', (u, [name]) => (String(name) === 'UserGameSettings' ? u.findChild('GameSettings') : null));
-  def('GetRegisteredComputerCameraMovementModes GetRegisteredTouchCameraMovementModes', 'PlayerScripts', () => T.list(Object.values(ENUMS.ComputerCameraMovementMode || {}).slice(0, 3).map((v) => T.e('ComputerCameraMovementMode', v))));
-  def('GetRegisteredComputerMovementModes GetRegisteredTouchMovementModes', 'PlayerScripts', () => T.list([]));
-  def('RegisterComputerCameraMovementMode RegisterComputerMovementMode RegisterTouchCameraMovementMode RegisterTouchMovementMode ClearComputerCameraMovementModes ClearComputerMovementModes ClearTouchCameraMovementModes ClearTouchMovementModes', 'PlayerScripts', () => null);
+  const MODE_KINDS = { ComputerCameraMovementMode: 'ComputerCamera', ComputerMovementMode: 'Computer', TouchCameraMovementMode: 'TouchCamera', TouchMovementMode: 'Touch' };
+  const modeStore = new Map();
+  const modeList = (ps, type) => {
+    const key = (ps && ps.id) || ps;
+    let m = modeStore.get(key);
+    if (!m) modeStore.set(key, (m = {}));
+    return (m[type] = m[type] || []);
+  };
+  const modeValue = (type, a) => {
+    if (typeof a === 'number') return a | 0;
+    if (typeof a === 'string') return (ENUMS[type] || {})[a] ?? null;
+    if (Array.isArray(a)) return a[1] | 0;
+    if (a && a.tag === 'e') return a.v[1] | 0;
+    if (a && a.tag === 's') return (ENUMS[type] || {})[a.v] ?? null;
+    return a && typeof a.v === 'number' ? a.v | 0 : null;
+  };
+  for (const [type, kind] of Object.entries(MODE_KINDS)) {
+    def('Register' + kind + 'MovementMode', 'PlayerScripts', (ps, [a]) => {
+      const v = modeValue(type, a);
+      const list = modeList(ps, type);
+      if (v !== null && !list.includes(v)) list.push(v);
+      return null;
+    });
+    def('Clear' + kind + 'MovementModes', 'PlayerScripts', (ps) => {
+      modeList(ps, type).length = 0;
+      return null;
+    });
+    def('GetRegistered' + kind + 'MovementModes', 'PlayerScripts', (ps) => {
+      let list = modeList(ps, type);
+      if (!list.length && type.endsWith('CameraMovementMode')) list = Object.values(ENUMS[type] || {}).slice(0, 3);
+      return T.list(list.map((v) => T.e(type, v)));
+    });
+  }
   def('GetPlayingAnimationTracks', 'Animator', (a) => T.list(env.playingTracks && a.parent ? env.playingTracks(a.parent) : []));
   def('LoadAnimation', 'Animator', (a, [anim]) => {
     const hum = a.parent && a.parent.isA('Humanoid') ? a.parent : null;
@@ -467,7 +505,7 @@ export function installMethods2018(def, host, { T, multi, Instance }) {
   def('GetFInt GetFastInt', 'GlobalSettings', () => 0);
 }
 
-export const FLAGS_2018 = new Set([]);
+export const FLAGS_2018 = new Set(['DebugDisableLogServiceExecuteScript']);
 
 export function installComputed2018(def, host, { T }) {
   const dm = host.dm;

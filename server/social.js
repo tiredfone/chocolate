@@ -1,7 +1,15 @@
 import { config, siteUrl } from './config.js';
 
-export async function social(action, data) {
-  const url = siteUrl('social');
+export function report(data) {
+  return post('report', data);
+}
+
+export function social(action, data) {
+  return post('social', { action, ...data });
+}
+
+async function post(endpointName, body) {
+  const url = siteUrl(endpointName);
   const key = String(config.key || '');
   if (!url || !key) return null;
   const ctl = new AbortController();
@@ -11,7 +19,7 @@ export async function social(action, data) {
       method: 'POST',
       signal: ctl.signal,
       headers: { 'User-Agent': config.userAgent || 'Chocolate/26.12-preview', 'Content-Type': 'application/json', 'X-Chocolate-Key': key },
-      body: JSON.stringify({ action, ...data }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) return null;
     const j = await r.json();

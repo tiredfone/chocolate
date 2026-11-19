@@ -2,6 +2,7 @@ import * as C from '../shared/cframe.js';
 import { isCreatable, isService, ENUMS } from '../shared/classes.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { writePlace, writeModel } from '../shared/rbxlx.js';
+import { xmlToBinary } from '../shared/rbxlbin.js';
 import { endpointUrl, assetBytes } from '../client/assets.js';
 import { UI, SELECTION_MENU, el, setClassIconSheet } from './ui.js';
 import { UI2018 } from './ui2018.js';
@@ -12,7 +13,9 @@ import { Extras } from './extras.js';
 import { solid, shapeOf } from './csgops.js';
 import { StudioLua, analysisPane } from './lua.js';
 import { Debugger } from './debug.js';
+import { McpBridge } from './mcp-bridge.js';
 import { TerrainTools } from './terrain.js';
+import { Assistant } from './assistant.js';
 import { Gui } from '../client/gui.js';
 
 const TOOLS = ['drag', 'axis', 'resize', 'lock', 'anchor', 'paint', 'dropper', 'material', 'move', 'rotate', 'size', 'surface0', 'surface1', 'surface2', 'surface3', 'surface4', 'surface5', 'surface6', 'surface7', 'surface10'];
@@ -115,6 +118,8 @@ export class Studio {
     this.terrainTools = new TerrainTools(this);
     this.lua = new StudioLua(this);
     this.debugger = new Debugger(this);
+    this.mcp = new McpBridge(this);
+    this.assistant = new Assistant(this);
     this.pluginIcons = new Map();
     if (this.lua.installed().length) setTimeout(() => this.lua.loadPlugins().catch((e) => this.print('Plugins could not start: ' + e.message, 'err')), 500);
     this.ui.tab('place', cfg.placeName || 'Place', () => this.showDoc('place'));
@@ -374,6 +379,7 @@ export class Studio {
       case 'playsolo': return !!endpointUrl('play', this.cfg.placeId) && !this.playStarting;
       case 'stop': return !!this.playing;
       case 'runscript': case 'analysis': case 'plugins': return true;
+      case 'mcp': return this.mcp.available;
       case 'dbg:into': case 'dbg:over': case 'dbg:out': case 'dbg:continue': return !!(this.debugger && this.debugger.paused);
       case 'dbg:pause': return !!this.playing && !(this.debugger && this.debugger.paused);
       case 'gotoerror': return !!(this.debugger && this.debugger.lastError);
@@ -394,6 +400,7 @@ export class Studio {
     if (id.startsWith('grid:')) return this.grid === +id.slice(5);
     if (id.startsWith('view:')) return this.ui.paneOpen(id.slice(5));
     if (id === 'joints') return !!this.manualJoints;
+    if (id === 'mcp') return this.mcp.enabled;
     if (id === 'snap:move') return this.grid > 0;
     if (id === 'snap:rotate') return this.rotateGrid > 0;
     if (id === 'view:commandbar') return !!(this.ui.commandBar && !this.ui.commandBar.hidden);
@@ -415,6 +422,9 @@ export class Studio {
         this.grid = +id.slice(5);
         return this.refreshUI();
       }
+      if (id === 'mcp') return await this.mcp.showPanel();
+      if (id === 'resetlayout') return this.ui.dock.reset();
+      if (id === 'view:assistant') return this.assistant.toggle(), this.refreshUI();
       if (id === 'view:commandbar') {
         if (this.ui.commandBar) this.ui.commandBar.hidden = !this.ui.commandBar.hidden;
         this.resized();
@@ -461,9 +471,7 @@ export class Studio {
         case 'copy': return this.copy(sel);
         case 'paste': return this.paste(null);
         case 'pasteinto': return this.paste(sel[0] || null);
-        case 'duplicate':
-          this.copy(sel);
-          return this.paste(null, true);
+        case 'duplicate': return this.duplicate(sel);
         case 'selectall': return this.select(this.dm.services.get('Workspace').children.filter((c) => c.ClassName !== 'Camera' && c.ClassName !== 'Terrain'));
         case 'selectchildren': return this.select(sel.flatMap((s) => s.children));
         case 'group': return this.group(sel);
@@ -735,6 +743,19 @@ export class Studio {
     this.refreshUI();
   }
 
+  duplicate(list) {
+    list = list.filter((i) => !isService(i.ClassName) && i.parent && !list.some((o) => o !== i && i.isDescendantOf(o)));
+    if (!list.length) return;
+    const made = [];
+    for (const i of list) {
+      const c = this.freshClone(i);
+      if (!c) continue;
+      this.dm.setParent(c, i.parent);
+      made.push(c);
+    }
+    if (made.length) this.add(made, 'Duplicate');
+  }
+
   paste(into, inPlace = false) {
     if (!this.clipboard) return;
     const ws = this.dm.services.get('Workspace');
@@ -831,7 +852,23 @@ export class Studio {
     }
   }
 
-  insertObject(cls, into) {
+  dropToolboxItem(item, at) {
+    if (item.cls) return this.insertObject(item.cls, undefined, at || undefined);
+    if (item.id) return this.insertAsset(item.id, item.name, at || undefined).catch((e) => this.print(String(e.message || e), 'err'));
+  }
+
+  dropPoint(e) {
+    const hit = this.view.pick(e);
+    if (hit && hit.part && hit.point) return [hit.point[0], hit.point[1], hit.point[2]];
+    const ray = this.view.ray(e);
+    if (ray.direction.y < -1e-4) {
+      const k = -ray.origin.y / ray.direction.y;
+      if (k > 0 && k < 5000) return [ray.origin.x + ray.direction.x * k, 0, ray.origin.z + ray.direction.z * k];
+    }
+    return null;
+  }
+
+  insertObject(cls, into, at) {
     if (!isCreatable(cls)) return;
     const ws = this.dm.services.get('Workspace');
     const sel = [...this.selection][0];
@@ -843,14 +880,22 @@ export class Studio {
     if (inst.isA('BasePart')) {
       const c = this.view.cam;
       const dir = c.getWorldDirection(new (c.position.constructor)());
-      const hit = this.ph.raycast([c.position.x, c.position.y, c.position.z], [dir.x * 500, dir.y * 500, dir.z * 500], []);
+      const hit = at ? { part: true, point: at } : this.ph.raycast([c.position.x, c.position.y, c.position.z], [dir.x * 500, dir.y * 500, dir.z * 500], []);
       const p = hit.part ? hit.point : [this.view.focus.x, this.view.focus.y, this.view.focus.z];
       const s = inst.props.get('Size');
       const g = this.grid || 0;
       const snapv = (v) => (g ? Math.round(v / g) * g : v);
       this.setPropRaw(inst, 'CFrame', C.cf(snapv(p[0]), p[1] + s[1] / 2, snapv(p[2])));
-      const b = boundsOf([inst]);
-      this.setPropRaw(inst, 'CFrame', C.cf(snapv(p[0]), this.dropHeight(b) + s[1] / 2, snapv(p[2])));
+      if (!at) {
+        const b = boundsOf([inst]);
+        this.setPropRaw(inst, 'CFrame', C.cf(snapv(p[0]), this.dropHeight(b) + s[1] / 2, snapv(p[2])));
+      }
+    }
+    if (cls === 'SpawnLocation') {
+      const decal = this.dm.create('Decal', inst);
+      decal.props.set('Name', 'Decal');
+      decal.props.set('Texture', 'rbxasset://textures/SpawnLocation.png');
+      decal.props.set('Face', 1);
     }
     this.dm.setParent(inst, parent);
     this.add([inst], `Insert ${cls}`);
@@ -1015,6 +1060,18 @@ export class Studio {
     const p = m ? assetBytes(+m[1]).then((b) => URL.createObjectURL(new Blob([b]))).catch(() => null) : Promise.resolve(/^https?:|^data:/.test(icon) ? icon : null);
     this.pluginIcons.set(icon, p);
     return p;
+  }
+
+  async installPlugin(id, name) {
+    const lua = this.lua;
+    const list = lua.installed();
+    if (list.some((p) => +p.id === +id)) return this.print(`${name} is already installed`, 'info');
+    const entry = { id: +id, name: String(name || `Plugin ${id}`).slice(0, 60) };
+    await lua.ensure();
+    await lua.loadPlugin(entry);
+    list.push(entry);
+    lua.saveInstalled(list);
+    this.ui.refreshPlugins();
   }
 
   async managePlugins() {
@@ -1201,7 +1258,7 @@ export class Studio {
     return this.insertAsset(n);
   }
 
-  async insertAsset(n, label) {
+  async insertAsset(n, label, at) {
     this.print(`Loading ${label || 'model ' + n}...`);
     const bytes = await assetBytes(n);
     const head = new TextDecoder().decode(bytes.subarray(0, 8));
@@ -1215,7 +1272,8 @@ export class Studio {
     if (parts.length) {
       const b = boundsOf(parts);
       const f = this.view.focus;
-      this.translate(tops, [f.x - b.center[0], this.dropHeight(b) - b.min[1], f.z - b.center[2]], false);
+      if (at) this.translate(tops, [at[0] - b.center[0], at[1] - b.min[1], at[2] - b.center[2]], false);
+      else this.translate(tops, [f.x - b.center[0], this.dropHeight(b) - b.min[1], f.z - b.center[2]], false);
     }
     this.add(tops, 'Insert Model');
     this.print(`Inserted ${label || 'model ' + n}`, 'info');
@@ -1528,12 +1586,17 @@ export class Studio {
     this.ui.status('Saving...');
     this.print('Saving place...');
     const xml = writePlace(this.dm);
-    const r = await fetch(url, {
+    let packed = null;
+    if (this.cfg.binarySave) { try { packed = xmlToBinary(xml); } catch {} }
+    const send = () => fetch(url, {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/xml', 'X-CSRF-Token': this.cfg.csrf || '' },
-      body: xml,
-    }).catch((e) => ({ ok: false, statusText: e.message, json: async () => ({}) }));
+      headers: { 'Content-Type': packed ? 'application/octet-stream' : 'application/xml', 'X-CSRF-Token': this.cfg.csrf || '' },
+      body: packed || xml,
+    }).catch((e) => ({ ok: false, status: 0, statusText: e.message, json: async () => ({}) }));
+    let r = await send();
+    if (r.status === 403 && (await this.refreshCsrf())) r = await send();
+    if (r.status === 401) r = { ok: false, statusText: 'You were logged out. Log in again in another tab, then save.', json: async () => ({}) };
     const res = await r.json().catch(() => ({}));
     if (r.ok && res.success !== false) {
       this.dirty = false;
@@ -1547,6 +1610,20 @@ export class Studio {
     this.print('Save failed: ' + msg, 'err');
     this.ui.alert('Save failed', msg);
     return false;
+  }
+
+  async refreshCsrf() {
+    const url = endpointUrl('csrf');
+    if (!url) return false;
+    try {
+      const r = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      const j = await r.json();
+      if (!j || !j.token) return false;
+      this.cfg.csrf = j.token;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async playSolo() {

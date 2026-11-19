@@ -77,4 +77,4 @@ node tools/corescripts2018.mjs touch
 node tools/e2e2018.mjs 621
 ```
 
-All must finish with no `error` lines apart from the known `PerformanceStatsManagerScript` one (`touch.mjs` currently fails on its own stub world lacking `emitMouse`). Restart the game server if `shared/` or `server/` changed.
+All must finish with no `error` lines (`touch.mjs` currently fails on its own stub world lacking `emitMouse`). Restart the game server if `shared/` or `server/` changed.

@@ -233,21 +233,50 @@ export class Explorer {
         }, 550);
       }
     });
+    const scroller = () => {
+      for (let el = this.tree; el && el !== document.body; el = el.parentElement) {
+        const oy = getComputedStyle(el).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return el;
+      }
+      return null;
+    };
+    const markDrop = (x, y) => {
+      for (const n of this.tree.querySelectorAll('.drop')) n.classList.remove('drop');
+      const over = document.elementFromPoint(x, y)?.closest('.st-node');
+      if (over && this.tree.contains(over)) over.classList.add('drop');
+    };
+    const autoScroll = () => {
+      if (!press || !press.dragging) return;
+      const sc = scroller();
+      if (sc) {
+        const r = sc.getBoundingClientRect();
+        const edge = Math.min(32, r.height / 4);
+        let dy = 0;
+        if (press.cy > r.bottom - edge) dy = Math.min(24, (press.cy - (r.bottom - edge)) / 2 + 2);
+        else if (press.cy < r.top + edge) dy = -Math.min(24, ((r.top + edge) - press.cy) / 2 + 2);
+        if (dy) {
+          sc.scrollTop += dy;
+          markDrop(press.cx, Math.max(r.top + 2, Math.min(r.bottom - 2, press.cy)));
+        }
+      }
+      press.raf = requestAnimationFrame(autoScroll);
+    };
     this.tree.addEventListener('pointermove', (e) => {
       if (!press || press.id !== e.pointerId || e.pointerType === 'touch') return;
+      press.cx = e.clientX;
+      press.cy = e.clientY;
       if (!press.dragging && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
         press.dragging = true;
         if (!this.app.selection.has(press.inst)) this.app.select([press.inst]);
+        try { this.tree.setPointerCapture(e.pointerId); } catch {}
+        press.raf = requestAnimationFrame(autoScroll);
       }
-      if (press.dragging) {
-        for (const x of this.tree.querySelectorAll('.drop')) x.classList.remove('drop');
-        const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('.st-node');
-        if (over) over.classList.add('drop');
-      }
+      if (press.dragging) markDrop(e.clientX, e.clientY);
     });
     const end = (e) => {
       if (!press || press.id !== e.pointerId) return;
       clearTimeout(press.long);
+      if (press.raf) cancelAnimationFrame(press.raf);
       const p = press;
       press = null;
       for (const x of this.tree.querySelectorAll('.drop')) x.classList.remove('drop');
@@ -474,8 +503,8 @@ export class Toolbox {
     const box = el('div', 'st-toolbox', body);
     const top = el('div', 'st-tb-top', box);
     this.set = el('select', null, top);
-    const sets = [['free', 'Free Models'], ['mine', 'My Models'], ['basic', 'Basic Objects']];
-    if (!endpointUrl('studioToolbox', app.cfg.placeId)) sets.splice(0, 2);
+    const sets = [['free', 'Free Models'], ['mine', 'My Models'], ['plugins', 'Plugins'], ['basic', 'Basic Objects']];
+    if (!endpointUrl('studioToolbox', app.cfg.placeId)) sets.splice(0, 3);
     for (const [v, t] of sets) {
       const o = el('option', null, this.set, t);
       o.value = v;
@@ -530,7 +559,7 @@ export class Toolbox {
       el('div', 'st-tb-empty', this.list, 'The toolbox could not be loaded.');
       return;
     }
-    if (!data.items.length && this.page === 1) el('div', 'st-tb-empty', this.list, set === 'mine' ? 'You have no models yet.' : 'No models found.');
+    if (!data.items.length && this.page === 1) el('div', 'st-tb-empty', this.list, set === 'mine' ? 'You have no models yet.' : set === 'plugins' ? 'No plugins found.' : 'No models found.');
     for (const it of data.items) {
       const cell = el('div', 'st-tb-item', this.list);
       cell.title = `${it.name}\nby ${it.creator}`;
@@ -540,7 +569,18 @@ export class Toolbox {
       img.draggable = false;
       if (it.thumb) img.src = it.thumb;
       el('div', 'st-tb-name', cell, it.name);
+      if (set === 'plugins') {
+        cell.title += '\nClick to install';
+        cell.addEventListener('click', () => this.app.installPlugin(it.id, it.name).catch((e) => this.app.print(String(e.message || e), 'err')));
+        continue;
+      }
       cell.addEventListener('click', () => this.app.insertAsset(it.id, it.name).catch((e) => this.app.print(String(e.message || e), 'err')));
+      cell.draggable = true;
+      cell.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('application/x-studio-toolbox', JSON.stringify({ id: it.id, name: it.name }));
+        e.dataTransfer.setData('text/plain', it.name);
+      });
     }
     this.page++;
     this.more.hidden = !data.more;
@@ -554,6 +594,12 @@ export class Toolbox {
       ic.style.cssText = classIconStyle(classIcon(c)) + ';width:16px;height:16px';
       el('span', null, row, c);
       row.addEventListener('click', () => this.app.insertObject(c));
+      row.draggable = true;
+      row.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('application/x-studio-toolbox', JSON.stringify({ cls: c }));
+        e.dataTransfer.setData('text/plain', c);
+      });
     }
   }
 }

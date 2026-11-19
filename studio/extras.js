@@ -85,6 +85,9 @@ export class Extras {
     this.frames = 0;
     this.fpsT = 0;
     this.fps = 0;
+    if (app.era === 2018) setTimeout(() => {
+      if (!this.toggles.has('uieditor') && app.gui && app.gui.overlay) this.toggleUiEditor(true);
+    }, 0);
     this.statsT = 0;
     this.markT = 0;
     this.autosaveTimer = setInterval(() => this.autosave(), 30000);
@@ -196,7 +199,7 @@ export class Extras {
     }
   }
 
-  toggleUiEditor() {
+  toggleUiEditor(quiet = false) {
     const app = this.app;
     const ov = app.gui.overlay;
     if (this.toggles.has('uieditor')) {
@@ -204,64 +207,266 @@ export class Extras {
       ov.classList.remove('st-uiedit');
       if (this.uiOff) this.uiOff();
       this.uiOff = null;
+      if (this.uiBox) this.uiBox.style.display = 'none';
       for (const e of ov.querySelectorAll('.st-uisel')) e.classList.remove('st-uisel');
       return app.refreshUI();
     }
     this.toggles.add('uieditor');
     ov.classList.add('st-uiedit');
+    if (!this.uiBox) {
+      const box = document.createElement('div');
+      box.className = 'st-uibox';
+      for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+        const k = document.createElement('div');
+        k.className = 'st-uihandle st-uih-' + h;
+        k.dataset.h = h;
+        box.appendChild(k);
+      }
+      ov.appendChild(box);
+      this.uiBox = box;
+    }
+    const guiAt = (x, y) => {
+      for (const hit of document.elementsFromPoint(x, y)) {
+        if (!ov.contains(hit) || hit.closest('.st-uibox')) continue;
+        const n = hit.closest('.ch-g');
+        const i = n && app.gui.elInst ? app.gui.elInst.get(n) : null;
+        if (i && i.isA && i.isA('GuiObject')) return i;
+      }
+      return null;
+    };
     const down = (e) => {
       if (e.button !== 0 || !app.gui.elInst) return;
-      let node = null, inst = null;
-      for (const hit of document.elementsFromPoint(e.clientX, e.clientY)) {
-        if (!ov.contains(hit)) continue;
-        const n = hit.closest('.ch-g');
-        const i = n ? app.gui.elInst.get(n) : null;
-        if (i && i.isA && i.isA('GuiObject')) {
-          node = n;
-          inst = i;
-          break;
-        }
-      }
+      const handle = e.target.closest && e.target.closest('.st-uihandle');
+      let inst = handle ? this.uiTarget() : guiAt(e.clientX, e.clientY);
       if (!inst) return;
       e.preventDefault();
       e.stopPropagation();
-      app.select([inst]);
-      const r = node.getBoundingClientRect();
-      const resize = e.clientX > r.right - 12 && e.clientY > r.bottom - 12;
-      const pos0 = inst.props.get('Position').slice(), size0 = inst.props.get('Size').slice();
-      const sx = e.clientX, sy = e.clientY;
-      node.setPointerCapture(e.pointerId);
-      const move = (ev) => {
-        const snap = (v) => (ev.shiftKey ? Math.round(v / 10) * 10 : Math.round(v));
-        const dx = ev.clientX - sx, dy = ev.clientY - sy;
-        if (resize) app.setPropRaw(inst, 'Size', [size0[0], snap(size0[1] + dx), size0[2], snap(size0[3] + dy)]);
-        else app.setPropRaw(inst, 'Position', [pos0[0], snap(pos0[1] + dx), pos0[2], snap(pos0[3] + dy)]);
-      };
-      const up = () => {
-        node.removeEventListener('pointermove', move);
-        node.removeEventListener('pointerup', up);
-        const key = resize ? 'Size' : 'Position';
-        const before = resize ? size0 : pos0, after = inst.props.get(key).slice();
-        if (before.some((v, i) => v !== after[i])) app.record(resize ? 'Resize GUI' : 'Move GUI', () => app.setPropRaw(inst, key, before.slice()), () => app.setPropRaw(inst, key, after.slice()));
-        app.selectionChanged();
-      };
-      node.addEventListener('pointermove', move);
-      node.addEventListener('pointerup', up);
+      if (!handle && !app.selection.has(inst)) app.select([inst]);
+      this.uiDrag(inst, handle ? handle.dataset.h : null, e);
+    };
+    const key = (e) => {
+      const inst = this.uiTarget();
+      if (!inst || !e.key.startsWith('Arrow')) return;
+      const a = document.activeElement;
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const step = e.shiftKey ? 10 : 1;
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+      const before = inst.props.get('Position').slice();
+      const after = [before[0], before[1] + dx, before[2], before[3] + dy];
+      app.setPropRaw(inst, 'Position', after);
+      app.record('Move GUI', () => app.setPropRaw(inst, 'Position', before.slice()), () => app.setPropRaw(inst, 'Position', after.slice()));
+      app.selectionChanged();
+    };
+    const dbl = (e) => {
+      const inst = guiAt(e.clientX, e.clientY);
+      if (!inst || !inst.props.has('Text')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.uiEditText(inst);
     };
     ov.addEventListener('pointerdown', down, true);
-    this.uiOff = () => ov.removeEventListener('pointerdown', down, true);
-    app.print('UI Editor on: drag StarterGui objects in the viewport to move them, drag their bottom-right corner to resize, hold Shift to snap to 10 pixels', 'info');
+    ov.addEventListener('dblclick', dbl, true);
+    document.addEventListener('keydown', key, true);
+    this.uiOff = () => {
+      ov.removeEventListener('pointerdown', down, true);
+      ov.removeEventListener('dblclick', dbl, true);
+      document.removeEventListener('keydown', key, true);
+      if (this.uiTextEnd) this.uiTextEnd(true);
+      this.uiGuides(null, null);
+    };
+    if (!quiet) app.print('UI Editor on: click StarterGui objects in the viewport to select them, drag to move, drag a handle to resize, arrow keys nudge, hold Shift to snap to 10 pixels, hold Alt to stop snapping to the middle and edges, double-click text to edit it', 'info');
     app.refreshUI();
+  }
+
+  uiEditText(inst) {
+    const app = this.app;
+    const n = app.gui.nodes && app.gui.nodes.get(inst);
+    if (!n || !n.el) return;
+    if (this.uiTextEnd) this.uiTextEnd(false);
+    const ov = app.gui.overlay;
+    const r = n.el.getBoundingClientRect(), o = ov.getBoundingClientRect();
+    const ta = document.createElement('textarea');
+    ta.className = 'st-uitext';
+    ta.spellcheck = false;
+    ta.value = String(inst.props.get('Text') ?? '');
+    Object.assign(ta.style, { left: r.left - o.left + 'px', top: r.top - o.top + 'px', width: Math.max(60, r.width) + 'px', height: Math.max(24, r.height) + 'px' });
+    const before = ta.value;
+    const finish = (cancel) => {
+      if (this.uiTextEnd !== finish) return;
+      this.uiTextEnd = null;
+      ta.remove();
+      if (cancel || inst.destroyed) return;
+      const after = ta.value;
+      if (after === before) return;
+      app.setPropRaw(inst, 'Text', after);
+      app.record('Edit Text', () => app.setPropRaw(inst, 'Text', before), () => app.setPropRaw(inst, 'Text', after));
+      app.selectionChanged();
+    };
+    this.uiTextEnd = finish;
+    ta.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(true); }
+      else if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); finish(false); }
+    });
+    for (const t of ['keyup', 'keypress', 'pointerdown', 'dblclick']) ta.addEventListener(t, (ev) => ev.stopPropagation());
+    ta.addEventListener('blur', () => finish(false));
+    ov.appendChild(ta);
+    ta.focus();
+    ta.select();
+  }
+
+  uiGuides(x, y) {
+    const ov = this.app.gui.overlay;
+    if (!this.uiGuideEls) {
+      if (x == null && y == null) return;
+      const v = document.createElement('div'), h = document.createElement('div');
+      v.className = 'st-uiguide st-uiguide-v';
+      h.className = 'st-uiguide st-uiguide-h';
+      ov.append(v, h);
+      this.uiGuideEls = [v, h];
+    }
+    const [v, h] = this.uiGuideEls;
+    const pr = this.uiGuideRect;
+    v.style.display = x == null || !pr ? 'none' : 'block';
+    h.style.display = y == null || !pr ? 'none' : 'block';
+    if (pr && x != null) Object.assign(v.style, { left: x + 'px', top: pr.top + 'px', height: pr.height + 'px' });
+    if (pr && y != null) Object.assign(h.style, { top: y + 'px', left: pr.left + 'px', width: pr.width + 'px' });
+  }
+
+  uiTarget() {
+    const app = this.app;
+    for (const inst of app.selection) if (inst.isA && inst.isA('GuiObject') && !inst.destroyed) return inst;
+    return null;
+  }
+
+  uiParentSize(inst) {
+    const p = inst.parent;
+    const abs = p && p.props.has('AbsoluteSize') ? p.props.get('AbsoluteSize') : null;
+    if (Array.isArray(abs) && abs[0] > 0 && abs[1] > 0) return abs;
+    const r = this.app.gui.overlay.getBoundingClientRect();
+    return [r.width || 1, r.height || 1];
+  }
+
+  uiDrag(inst, handle, e) {
+    const app = this.app;
+    const pos0 = inst.props.get('Position').slice(), size0 = inst.props.get('Size').slice();
+    const ap = inst.props.has('AnchorPoint') ? inst.props.get('AnchorPoint') || [0, 0] : [0, 0];
+    const [pw, ph] = this.uiParentSize(inst);
+    const sx = e.clientX, sy = e.clientY;
+    const useScale = (scale, offset) => offset === 0 && scale !== 0;
+    const apply = (v, i, delta, parent, snap) => {
+      const out = v.slice();
+      if (useScale(v[i], v[i + 1])) {
+        out[i] = v[i] + delta / parent;
+        if (snap) out[i] = Math.round(out[i] * 100) / 100;
+      } else {
+        out[i + 1] = v[i + 1] + delta;
+        out[i + 1] = snap ? Math.round(out[i + 1] / 10) * 10 : Math.round(out[i + 1]);
+      }
+      return out;
+    };
+    const target = e.target;
+    try { target.setPointerCapture(e.pointerId); } catch {}
+    const ov = app.gui.overlay, o = ov.getBoundingClientRect();
+    const node = app.gui.nodes && app.gui.nodes.get(inst);
+    const pnode = inst.parent && app.gui.nodes && app.gui.nodes.get(inst.parent);
+    const r0 = node && node.el ? node.el.getBoundingClientRect() : null;
+    const prr = pnode && pnode.el && pnode.el.getBoundingClientRect().width > 0 ? pnode.el.getBoundingClientRect() : o;
+    this.uiGuideRect = { left: prr.left - o.left, top: prr.top - o.top, width: prr.width, height: prr.height };
+    const SNAP = 6;
+    const snapAxis = (start, size, pStart, pSize, d) => {
+      const lines = [[pStart + pSize / 2, start + size / 2], [pStart, start], [pStart + pSize, start + size]];
+      let best = null;
+      for (const [line, at] of lines) {
+        const off = line - (at + d);
+        if (Math.abs(off) <= SNAP && (!best || Math.abs(off) < Math.abs(best.off))) best = { off, line };
+      }
+      return best;
+    };
+    const move = (ev) => {
+      let dx = ev.clientX - sx, dy = ev.clientY - sy;
+      const snap = ev.shiftKey;
+      if (!handle) {
+        let gx = null, gy = null;
+        if (r0 && !ev.altKey) {
+          const bx = snapAxis(r0.left, r0.width, prr.left, prr.width, dx);
+          const by = snapAxis(r0.top, r0.height, prr.top, prr.height, dy);
+          if (bx) { dx += bx.off; gx = bx.line - o.left; }
+          if (by) { dy += by.off; gy = by.line - o.top; }
+        }
+        this.uiGuides(gx, gy);
+        let p = apply(pos0, 0, dx, pw, snap && gx == null);
+        p = apply(p, 2, dy, ph, snap && gy == null);
+        app.setPropRaw(inst, 'Position', p);
+        this.markUiSelection();
+        return;
+      }
+      if (r0 && !ev.altKey) {
+        let gx = null, gy = null;
+        if (handle.includes('e')) { const b = snapAxis(r0.right, 0, prr.left, prr.width, dx); if (b) { dx += b.off; gx = b.line - o.left; } }
+        if (handle.includes('w')) { const b = snapAxis(r0.left, 0, prr.left, prr.width, dx); if (b) { dx += b.off; gx = b.line - o.left; } }
+        if (handle.includes('s')) { const b = snapAxis(r0.bottom, 0, prr.top, prr.height, dy); if (b) { dy += b.off; gy = b.line - o.top; } }
+        if (handle.includes('n')) { const b = snapAxis(r0.top, 0, prr.top, prr.height, dy); if (b) { dy += b.off; gy = b.line - o.top; } }
+        this.uiGuides(gx, gy);
+      }
+      let dw = 0, dh = 0, mx = 0, my = 0;
+      if (handle.includes('e')) { dw = dx; mx = dx * ap[0]; }
+      if (handle.includes('w')) { dw = -dx; mx = dx * (1 - ap[0]); }
+      if (handle.includes('s')) { dh = dy; my = dy * ap[1]; }
+      if (handle.includes('n')) { dh = -dy; my = dy * (1 - ap[1]); }
+      let sz = apply(size0, 0, dw, pw, snap);
+      sz = apply(sz, 2, dh, ph, snap);
+      let p = apply(pos0, 0, mx, pw, false);
+      p = apply(p, 2, my, ph, false);
+      app.setPropRaw(inst, 'Size', sz);
+      app.setPropRaw(inst, 'Position', p);
+      this.markUiSelection();
+    };
+    const up = () => {
+      this.uiGuides(null, null);
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', up);
+      target.removeEventListener('pointercancel', up);
+      const pos1 = inst.props.get('Position').slice(), size1 = inst.props.get('Size').slice();
+      const changed = pos0.some((v, i) => v !== pos1[i]) || size0.some((v, i) => v !== size1[i]);
+      if (changed) {
+        app.record(handle ? 'Resize GUI' : 'Move GUI', () => {
+          app.setPropRaw(inst, 'Position', pos0.slice());
+          app.setPropRaw(inst, 'Size', size0.slice());
+        }, () => {
+          app.setPropRaw(inst, 'Position', pos1.slice());
+          app.setPropRaw(inst, 'Size', size1.slice());
+        });
+      }
+      app.selectionChanged();
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', up);
+    target.addEventListener('pointercancel', up);
   }
 
   markUiSelection() {
     const app = this.app;
     if (!app.gui.elInst) return;
     for (const e of app.gui.overlay.querySelectorAll('.st-uisel')) e.classList.remove('st-uisel');
-    for (const inst of app.selection) {
-      const n = app.gui.nodes && app.gui.nodes.get(inst);
-      if (n && n.el) n.el.classList.add('st-uisel');
+    const inst = this.uiTarget();
+    const n = inst && app.gui.nodes && app.gui.nodes.get(inst);
+    if (!this.uiBox) return;
+    if (!n || !n.el || !n.el.isConnected || n.el.offsetParent === null) {
+      this.uiBox.style.display = 'none';
+      return;
     }
+    n.el.classList.add('st-uisel');
+    const r = n.el.getBoundingClientRect(), o = app.gui.overlay.getBoundingClientRect();
+    const st = this.uiBox.style;
+    st.display = 'block';
+    st.left = r.left - o.left + 'px';
+    st.top = r.top - o.top + 'px';
+    st.width = r.width + 'px';
+    st.height = r.height + 'px';
   }
 
   playUrl(url) {

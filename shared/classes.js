@@ -36,6 +36,8 @@ export const ENUMS = {
   UserInputType: { MouseButton1: 0, MouseButton2: 1, MouseButton3: 2, MouseWheel: 3, MouseMovement: 4, Touch: 7, Keyboard: 8, Focus: 9, None: 18 },
   UserInputState: { Begin: 0, Change: 1, End: 2, Cancel: 3, None: 4 },
   Controller: { None: 0, Player: 7, KeyboardRight: 1, KeyboardLeft: 2, Joypad1: 3, Joypad2: 4, Chase: 5, Flee: 6 },
+  MoveState: { Stopped: 0, Coasting: 1, Pushing: 2, Stopping: 3, AirFree: 4 },
+  Button: { Jump: 32, Dismount: 33 },
   LeftRight: { Left: 0, Center: 1, Right: 2 },
   ChatMode: { Menu: 0, TextAndMenu: 1 },
   MembershipType: { None: 0, BuildersClub: 1, TurboBuildersClub: 2, OutrageousBuildersClub: 3 },
@@ -71,7 +73,7 @@ const ENUM_PROPS = {
   MeshType: 'MeshType', Font: 'Font', FontSize: 'FontSize', TextXAlignment: 'TextXAlignment', TextYAlignment: 'TextYAlignment',
   SizeConstraint: 'SizeConstraint', CameraType: 'CameraType', BinType: 'BinType', ScaleType: 'ScaleType', BodyPart: 'BodyPart',
   UserInputType: 'UserInputType', UserInputState: 'UserInputState', MembershipType: 'MembershipType', ChatMode: 'ChatMode',
-  Purpose: 'DialogPurpose', Tone: 'DialogTone', ExplosionType: 'ExplosionType', Controller: 'Controller', Face: 'NormalId',
+  Purpose: 'DialogPurpose', Tone: 'DialogTone', ExplosionType: 'ExplosionType', Controller: 'Controller', Face: 'NormalId', TargetSurface: 'NormalId',
 };
 
 const GUI_OBJECT = 'Active:bool=false BackgroundColor3:C3=0.639,0.635,0.647 BackgroundTransparency:number=0 BorderColor3:C3=0.106,0.165,0.208 BorderSizePixel:int=1 ClipsDescendants:bool=false Draggable:bool=false Position:UD2 Size:UD2 SizeConstraint:enum=0 Visible:bool=true ZIndex:int=1';
@@ -98,6 +100,7 @@ const DEFS = {
   },
   StarterGui: { base: 'Instance', service: true, props: 'ResetPlayerGuiOnSpawn:bool=true ShowDevelopmentGui:bool=true' },
   StarterPack: { base: 'Instance', service: true },
+  PlatformService: { base: 'Instance', service: true, era: 2018 },
   StarterPlayer: { base: 'Instance', service: true },
   StarterPlayerScripts: { base: 'Instance' },
   StarterCharacterScripts: { base: 'Instance' },
@@ -125,7 +128,7 @@ const DEFS = {
   CoreGui: { base: 'Instance', service: true, props: 'Version:int=7' },
   LogService: { base: 'Instance', service: true },
   UserSettings: { base: 'Instance', abstract: true },
-  UserGameSettings: { base: 'Instance', abstract: true, props: 'SavedQualityLevel:enum=0 ControlMode:enum=0 VideoUploadPromptBehavior:enum=1 MouseSensitivity:number=1 CameraMode:enum=0' },
+  UserGameSettings: { base: 'Instance', abstract: true, props: 'FramerateCap:int=60 SavedQualityLevel:enum=0 ControlMode:enum=0 VideoUploadPromptBehavior:enum=1 MouseSensitivity:number=1 CameraMode:enum=0' },
   GlobalSettings: { base: 'Instance', abstract: true },
   RenderSettings: { base: 'Instance', abstract: true, props: 'QualityLevel:enum=0 EnableFRM:bool=true AutoFRMLevel:int=0' },
   UserInputService: { base: 'Instance', service: true, props: 'TouchEnabled:bool=false KeyboardEnabled:bool=true MouseEnabled:bool=true AccelerometerEnabled:bool=false GyroscopeEnabled:bool=false GamepadEnabled:bool=false ModalEnabled:bool=false' },
@@ -178,7 +181,8 @@ const DEFS = {
   TrussPart: { base: 'BasePart', props: 'Style:enum=0' },
   Seat: { base: 'Part', props: 'Disabled:bool=false Occupant:Ref' },
   VehicleSeat: { base: 'BasePart', props: 'Disabled:bool=false HeadsUpDisplay:bool=true MaxSpeed:number=25 Steer:int=0 Throttle:int=0 Torque:number=10 TurnSpeed:number=1 Occupant:Ref' },
-  SkateboardPlatform: { base: 'Part', props: 'Steer:int=0 Throttle:int=0 StickyWheels:bool=true' },
+  SkateboardPlatform: { base: 'Part', props: 'Steer:int=0 Throttle:int=0 StickyWheels:bool=true Controller:Ref ControllingHumanoid:Ref' },
+  SkateboardController: { base: 'Instance', props: 'Steer:int=0 Throttle:int=0' },
   SpawnLocation: { base: 'Part', props: 'AllowTeamChangeOnTouch:bool=false Duration:int=10 Enabled:bool=true Neutral:bool=true TeamColor:BC=194' },
   FlagStand: { base: 'Part', props: 'TeamColor:BC=194' },
   Platform: { base: 'Part' },
@@ -326,7 +330,19 @@ for (const [name, def] of Object.entries(DEFS2018)) {
   for (let c = DEFS[name] ? DEFS[name].base : def.base; c && chainOf(c); c = chainOf(c).base) for (const tok of (chainOf(c).props || '').split(/\s+/)) if (tok) have.add(tok.split(':')[0].toLowerCase());
   const mine = DEFS[name];
   if (mine) for (const tok of (mine.props || '').split(/\s+/)) if (tok) have.add(tok.split(':')[0].toLowerCase());
-  const extra = props.filter((tok) => !have.has(tok.split(':')[0].toLowerCase()));
+  const inherited = [];
+  if (mine && mine.base !== def.base) {
+    for (let c = def.base; c && DEFS2018[c]; c = DEFS2018[c].base) {
+      for (const tok of (DEFS2018[c].props || '').split(' ')) {
+        const pn = tok.split(':')[0];
+        if (tok && !SKIP2018.has(c + '.' + pn) && !seen.has(pn.toLowerCase())) {
+          seen.add(pn.toLowerCase());
+          inherited.push(tok);
+        }
+      }
+    }
+  }
+  const extra = [...props, ...inherited].filter((tok) => !have.has(tok.split(':')[0].toLowerCase()));
   for (const tok of extra) ERA2018_PROPS.add(name + '.' + tok.split(':')[0]);
   if (!mine) {
     DEFS[name] = { base: def.base, props: extra.join(' '), abstract: def.abstract, service: def.service, era: 2018 };
