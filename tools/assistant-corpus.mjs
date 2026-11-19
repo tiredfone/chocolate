@@ -137,6 +137,10 @@ function score(s) {
 
 function gameSnippets() {
   let games = [];
+  if (!process.argv.includes('--with-games')) {
+    log('game snippets skipped (pass --with-games to include them)');
+    return 0;
+  }
   try {
     games = JSON.parse(execFileSync('php', [path.join(here, 'assistant-games.php')], { encoding: 'utf8', maxBuffer: 16 << 20 }));
   } catch (e) {

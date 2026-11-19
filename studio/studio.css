@@ -1305,7 +1305,7 @@ html, body {
 }
 
 
-@media (max-width: 900px), (pointer: coarse) and (hover: none) {
+@media (pointer: coarse) and (hover: none) {
   html, body {
     font-size: 13px;
   }

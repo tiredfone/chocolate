@@ -317,7 +317,7 @@ export class UI {
   }
 
   mobile() {
-    return window.matchMedia('(max-width: 900px), (pointer: coarse) and (hover: none)').matches;
+    return window.matchMedia('(pointer: coarse) and (hover: none)').matches;
   }
 
   layout() {
