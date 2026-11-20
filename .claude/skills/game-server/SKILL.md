@@ -45,7 +45,7 @@ Client `mkt` requests (`client/world.js` `market`) reach `case 'mkt'` in `game.j
 Restart is allowed any time, but it kicks everyone, so look first.
 
 1. `curl -s http://127.0.0.1:4201/status` and check players.
-2. PID: `ps -eo pid,args | awk '$2=="node" && $3 ~ /chocolate\/server\/main.js$/ {print $1}'`. Never `pgrep -f` (it matches your own shell).
+2. PID: `ps -eo pid,args | awk '$2=="node" && $3 ~ /html\/chocolate\/server\/main.js$/ {print $1}'`. Never `pgrep -f` (it matches your own shell).
 3. Stop it, then start as `fone`: `su fone -s /bin/sh -c 'cd /var/www/html/chocolate && setsid nohup sh server/start.sh > /tmp/chocolate-server.log 2>&1 < /dev/null &'`.
 4. Check `/status` again and `/tmp/chocolate-server.log`.
 

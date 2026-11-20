@@ -33,7 +33,7 @@ Use the Agent tool with `model: "sonnet"` and `run_in_background: true`. A subag
    - There is no browser on the server; ask the agent to say plainly what it couldn't check.
 5. **Restarting Chocolate:**
    - Changes under server/ or shared/ need a restart: check `curl -s http://127.0.0.1:4201/status` has no players.
-   - Find the PID with `ps -eo pid,args | awk '$2=="node" && $3 ~ /chocolate\/server\/main.js$/ {print $1}'`. Never `pgrep -f`: it matches the agent's own shell.
+   - Find the PID with `ps -eo pid,args | awk '$2=="node" && $3 ~ /html\/chocolate\/server\/main.js$/ {print $1}'`. Never `pgrep -f`: it matches the agent's own shell.
    - Then start it again: `su fone -s /bin/sh -c 'cd /var/www/html/chocolate && setsid nohup sh server/start.sh > /tmp/chocolate-server.log 2>&1 < /dev/null &'`.
 6. **Trello, when cards are involved:**
    - Give the card IDs and the Completed list ID, and tell it to load the tools with ToolSearch `select:mcp__claude_ai_Trello__trelloWriteCard,mcp__claude_ai_Trello__trelloReadList`.
