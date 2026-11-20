@@ -250,7 +250,7 @@ const KIND_TYPE = { property: 'property', method: 'method', event: 'event', chil
 const mode = { value: 'auto', era: 2012 };
 
 function resolvedTheme() {
-  return mode.value === 'auto' ? (document.querySelector('.st-2018') || mode.era === 2018 ? 'dark' : 'light') : mode.value;
+  return mode.value === 'auto' ? (document.documentElement.classList.contains('st-dark') ? 'dark' : 'light') : mode.value;
 }
 
 export function setEditorTheme(value) {
