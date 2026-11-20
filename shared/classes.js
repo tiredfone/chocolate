@@ -441,6 +441,7 @@ export function canonicalProp(cls, name) {
   if (a && c.all.has(a)) return a;
   const up = name.charAt(0).toUpperCase() + name.slice(1);
   if (c.all.has(up)) return up;
+  if (name.length > 8 && name.endsWith('Internal') && c.all.has(name.slice(0, -8))) return name.slice(0, -8);
   if (name === 'Content') return c.chainSet.has('PartOperation') && c.all.has('AssetId') ? 'AssetId' : null;
   if (name.length > 7 && name.endsWith('Content')) {
     const base = name.slice(0, -7);

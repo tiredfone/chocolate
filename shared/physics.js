@@ -7,7 +7,7 @@ export const GRAVITY = 196.2;
 const STEP = 1 / 60;
 const CHARACTER_PUSH_MASS = 150;
 const JOINABLE = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
-const RIGID_JOINTS = new Set(['Weld', 'ManualWeld', 'ManualGlue', 'Snap', 'Glue', 'Motor', 'Motor6D', 'VelocityMotor']);
+const RIGID_JOINTS = new Set(['WeldConstraint', 'Weld', 'ManualWeld', 'ManualGlue', 'Snap', 'Glue', 'Motor', 'Motor6D', 'VelocityMotor']);
 const HINGE_JOINTS = new Set(['Rotate', 'RotateP', 'RotateV']);
 
 function quatOf(cf) {
@@ -167,7 +167,7 @@ export class Physics {
         if (!had && this.parts.has(x) && !x.props.get('Anchored') && this.autoJoinEnabled()) this.pendingJoin.add(x);
       } else this.leave(x);
     }
-    if (inst.isA('JointInstance') || inst.isA('BodyMover')) this.enter(inst);
+    if (inst.isA('JointInstance') || inst.ClassName === 'WeldConstraint' || inst.isA('BodyMover')) this.enter(inst);
   }
 
   destroyed(inst) {
@@ -188,7 +188,7 @@ export class Physics {
   }
 
   changed(inst, name, old, opts) {
-    if (opts && opts.physics) return;
+    if (opts && (opts.physics || opts.weld)) return;
     if (name === 'Gravity' && inst === this.ws) {
       this.setGravity(inst.props.get('Gravity'));
       return;
@@ -220,8 +220,8 @@ export class Physics {
         rec.collider.setFriction(inst.props.get('Friction'));
         rec.collider.setRestitution(inst.props.get('Elasticity') * 0.3);
       }
-    } else if (inst.isA('JointInstance')) {
-      if (name === 'Part0' || name === 'Part1' || name === 'C0' || name === 'C1') {
+    } else if (inst.isA('JointInstance') || inst.ClassName === 'WeldConstraint') {
+      if (name === 'Part0' || name === 'Part1' || name === 'C0' || name === 'C1' || name === 'Enabled') {
         this.leaveJoint(inst, old, name);
         if (this.inWorld(inst)) this.enterJoint(inst);
       }
@@ -234,7 +234,7 @@ export class Physics {
       if (!this.parts.has(inst) && !this.excluded(inst)) this.addPart(inst);
       if (inst.ClassName === 'VehicleSeat' && this.parts.has(inst)) this.vehicleSeats.add(inst);
       if (inst.ClassName === 'SkateboardPlatform' && this.parts.has(inst)) this.skateboards.add(inst);
-    } else if (inst.isA('JointInstance')) {
+    } else if (inst.isA('JointInstance') || inst.ClassName === 'WeldConstraint') {
       this.enterJoint(inst);
     } else if (inst.isA('BodyMover')) {
       if (inst.parent && inst.parent.isA('BasePart')) this.movers.add(inst);
@@ -247,7 +247,7 @@ export class Physics {
       this.skateboards.delete(inst);
       this.removePart(inst);
     }
-    else if (inst.isA('JointInstance')) this.leaveJoint(inst);
+    else if (inst.isA('JointInstance') || inst.ClassName === 'WeldConstraint') this.leaveJoint(inst);
     else if (inst.isA('BodyMover')) this.movers.delete(inst);
   }
 
@@ -262,6 +262,7 @@ export class Physics {
       return;
     }
     if (!RIGID_JOINTS.has(j.ClassName)) return;
+    if (j.ClassName === 'WeldConstraint' && j.props.get('Enabled') === false) return;
     const a = j.props.get('Part0'), b = j.props.get('Part1');
     if (!a || !b || a === b) return;
     if (!this.inWorld(j) && !this.inWorld(a)) return;
@@ -978,9 +979,11 @@ export class Physics {
     this.assemblies.add(asm);
     this.asmEpoch++;
     if (anchored || parts.length === 0) {
+      const inv0 = parts.length > 1 ? C.inv(root.props.get('CFrame')) : null;
       for (const p of parts) {
         const rec = this.parts.get(p);
         rec.asm = asm;
+        rec.local = inv0 ? C.mul(inv0, p.props.get('CFrame')) : null;
         if (!rec.collider) this.makeCollider(rec);
       }
       return asm;
@@ -1027,6 +1030,21 @@ export class Physics {
         this.writing = false;
       }
       return;
+    }
+    if (asm && asm.anchored && asm.parts.size > 1 && rec.local && (!opts || !opts.model)) {
+      const rootCF = C.mul(cf, C.inv(rec.local));
+      for (const p of asm.parts) {
+        if (p === part) continue;
+        const r = this.parts.get(p);
+        if (!r || !r.local) continue;
+        const ncf = C.mul(rootCF, r.local);
+        this.dm.setProp(p, 'CFrame', ncf, { weld: true });
+        if (r.collider) {
+          const f = r.rot ? C.mul(ncf, r.rot) : ncf;
+          r.collider.setTranslation({ x: f[0], y: f[1], z: f[2] });
+          r.collider.setRotation(quatOf(f));
+        }
+      }
     }
     const full = rec.rot ? C.mul(cf, rec.rot) : cf;
     rec.collider.setTranslation({ x: full[0], y: full[1], z: full[2] });

@@ -163,6 +163,28 @@ if (process.env.SHIFT) {
     dm.emit(uis, '__Input', io, false, 'b');
   }, (+(process.env.SECONDS || 8) - 3) * 1000);
 }
+if (process.env.KEYS) {
+  for (const spec of process.env.KEYS.split(',')) {
+    const [sec, code, state] = spec.split(':');
+    setTimeout(() => {
+      const uis = dm.services.get('UserInputService');
+      const io = dm.create('InputObject', null);
+      io.props.set('UserInputType', 8);
+      io.props.set('KeyCode', +code);
+      io.props.set('UserInputState', +(state || 0));
+      dm.emit(uis, '__Input', io, false, 'b');
+    }, +sec * 1000);
+  }
+}
+if (process.env.CLICKCD) {
+  const [sec, pattern] = process.env.CLICKCD.split(':');
+  setTimeout(() => {
+    const cds = game.dm.root.descendants().filter((d) => d.ClassName === 'ClickDetector' && d.fullName().includes(pattern));
+    console.log('clickdetectors matching', pattern, cds.length);
+    const pl = game.dm.services.get('Players').children.find((c) => c.ClassName === 'Player');
+    if (cds[0]) game.dm.emit(cds[0], 'MouseClick', pl);
+  }, +sec * 1000);
+}
 if (process.env.CLICKS) {
   for (const spec of process.env.CLICKS.split(',')) {
     const [sec, name, evt] = spec.split(':');
