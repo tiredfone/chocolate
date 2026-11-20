@@ -46,3 +46,42 @@ export function rapierGroups(table, id) {
   if (id >= 16 || table.groups.some((g) => g.id >= 16)) filter = 0xffff;
   return ((bit(id) & 0xffff) << 16) | (filter & 0xffff);
 }
+
+export function groupsFromData(raw) {
+  let bytes = null;
+  if (raw instanceof Uint8Array) bytes = raw;
+  else {
+    let s = String(raw || '');
+    const m = /<BinaryString[^>]*>([^<]*)<\/BinaryString>/i.exec(s);
+    if (m) s = m[1];
+    s = s.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/\s+/g, '');
+    if (!s) return '';
+    try {
+      const bin = atob(s);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    } catch {
+      return '';
+    }
+  }
+  if (!bytes || bytes.length < 2) return '';
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const count = bytes[1];
+  let o = 2;
+  const groups = [];
+  for (let i = 0; i < count && o + 7 <= bytes.length; i++) {
+    const id = bytes[o];
+    const maskLen = bytes[o + 1];
+    o += 2;
+    if (maskLen !== 4 || o + 5 > bytes.length) return '';
+    const mask = dv.getInt32(o, true);
+    o += 4;
+    const nameLen = bytes[o++];
+    if (o + nameLen > bytes.length) return '';
+    let name = '';
+    for (let k = 0; k < nameLen; k++) name += String.fromCharCode(bytes[o + k]);
+    o += nameLen;
+    if (id < MAX_COLLISION_GROUPS) groups.push({ name, id, mask });
+  }
+  return groups.length ? serializeGroups(groups) : '';
+}

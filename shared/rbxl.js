@@ -1,3 +1,4 @@
+import { groupsFromData } from './collisiongroups.js';
 const MAX_INSTANCES = 200000;
 const MAX_DEPTH = 256;
 
@@ -434,7 +435,21 @@ function legacyFont(f) {
   return base;
 }
 
+function fillCollisionGroups(nodes) {
+  for (const n of nodes) {
+    if ((n.cls || n.ClassName) !== 'Workspace' || !n.props) continue;
+    const cur = n.props.get('CollisionGroups');
+    if (cur && String(cur.v || '').trim()) continue;
+    const data = n.props.get('CollisionGroupData');
+    if (!data) continue;
+    const str = groupsFromData(data.v);
+    if (str) n.props.set('CollisionGroups', { t: 'string', v: str });
+  }
+  return nodes;
+}
+
 function fillLegacyFonts(nodes) {
+  fillCollisionGroups(nodes);
   const stack = nodes.slice();
   while (stack.length) {
     const n = stack.pop();
