@@ -1093,6 +1093,38 @@ export class Gui {
     }
   }
 
+  billboardVisible(bb, ad, at, cam, now, budget) {
+    if (!this.world.physics) return true;
+    if (!this.bbSight) this.bbSight = new WeakMap();
+    let st = this.bbSight.get(bb);
+    if (!st) {
+      st = { t: -1e9, clear: true, blocked: 0 };
+      this.bbSight.set(bb, st);
+    }
+    if (now - st.t < 90 || budget.n <= 0) return st.clear;
+    budget.n--;
+    st.t = now;
+    const o = [cam.position.x, cam.position.y, cam.position.z];
+    const d = [at[0] - o[0], at[1] - o[1], at[2] - o[2]];
+    const len = Math.hypot(d[0], d[1], d[2]);
+    if (len < 0.5) {
+      st.clear = true;
+      st.blocked = 0;
+      return true;
+    }
+    const k = Math.max(0, len - 0.3) / len;
+    const model = ad.parent && ad.parent.isA('Model') ? ad.parent : null;
+    const ig = [ad, model && model.findChildOfClass('Humanoid') ? model : null, this.world.player && this.world.player.props.get('Character')];
+    const hit = this.world.physics.raycast(o, [d[0] * k, d[1] * k, d[2] * k], ig, (q) => q.props.get('Transparency') < 0.95);
+    if (hit && hit.part) {
+      if (++st.blocked >= 2) st.clear = false;
+    } else {
+      st.blocked = 0;
+      st.clear = true;
+    }
+    return st.clear;
+  }
+
   updateBillboards() {
     const ws = this.dm.services.get('Workspace');
     const pg = this.world.player && this.world.player.findChildOfClass('PlayerGui');
@@ -1109,6 +1141,8 @@ export class Gui {
     scan(pg);
     this.bbList = this.bbWorld.concat(list);
     const live = new Set();
+    const now = performance.now();
+    const budget = { n: 12 };
     for (const bb of this.bbList) {
       if (bb.destroyed) continue;
       const ad = bb.props.get('Adornee') || (bb.parent && bb.parent.isA('BasePart') ? bb.parent : null);
@@ -1127,6 +1161,13 @@ export class Gui {
         at[1] += basis[i].y * loc[i];
         at[2] += basis[i].z * loc[i];
       }
+      const ewo = bb.props.get('ExtentsOffsetWorldSpace');
+      if (ewo) {
+        at[0] += ewo[0] * as[0] / 2;
+        at[1] += ewo[1] * as[1] / 2;
+        at[2] += ewo[2] * as[2] / 2;
+      }
+      const cam = this.renderer.camera;
       const p = this.project(at);
       const node = this.nodeFor(bb, this.billboards);
       node.billboard = true;
@@ -1135,7 +1176,20 @@ export class Gui {
         node.el.style.display = 'none';
         continue;
       }
-      const cam = this.renderer.camera;
+      const maxd = +bb.props.get('MaxDistance');
+      if (maxd > 0 && Number.isFinite(maxd) && maxd < 1e8 && Math.hypot(at[0] - cam.position.x, at[1] - cam.position.y, at[2] - cam.position.z) > maxd) {
+        node.el.style.display = 'none';
+        continue;
+      }
+      const hideFrom = bb.props.get('PlayerToHideFrom');
+      if (hideFrom && hideFrom === this.world.player) {
+        node.el.style.display = 'none';
+        continue;
+      }
+      if (!bb.props.get('AlwaysOnTop') && !this.billboardVisible(bb, ad, at, cam, now, budget)) {
+        node.el.style.display = 'none';
+        continue;
+      }
       const dist = Math.max(0.1, cam.position.distanceTo({ x: cf[0], y: cf[1], z: cf[2] }));
       const pxPerStud = this.overlay.clientHeight / (2 * dist * Math.tan((cam.fov * Math.PI) / 360));
       const sz = bb.props.get('Size');
