@@ -343,16 +343,20 @@ function parseBinary(bytes) {
         }
         case 26: vals = []; for (let i = 0; i < n; i++) vals.push([data[q + i] / 255, data[q + n + i] / 255, data[q + 2 * n + i] / 255]); t = 'C3'; break;
         case 34: {
-          const kinds = raw(data, q, n, 4);
-          let r = q + n * 4;
-          const cnt = u32(data, r); r += 4;
+          const cnt = u32(data, q + n * 4);
+          let kinds = raw(data, q, n, 4);
+          const okKinds = (ks) => ks.every((k) => k <= 3) && ks.filter((k) => k === 1).length === cnt;
+          if (!okKinds(kinds)) {
+            const plain = [];
+            for (let i = 0; i < n; i++) plain.push(u32(data, q + i * 4));
+            if (okKinds(plain)) kinds = plain;
+          }
+          let r = q + n * 4 + 4;
           const uris = [];
           for (let i = 0; i < cnt; i++) { const l = u32(data, r); r += 4; uris.push(td.decode(data.subarray(r, r + l))); r += l; }
           let u = 0;
           vals = kinds.map((k) => (k === 1 ? uris[u++] || '' : ''));
           t = 'Content';
-          const base = pn.endsWith('Content') ? pn.slice(0, -7) : null;
-          if (base && CONTENT_PROPS.has(base)) for (let i = 0; i < n; i++) if (vals[i] && !list[i].props.has(base)) list[i].props.set(base, { t, v: vals[i] });
           break;
         }
         case 32: {

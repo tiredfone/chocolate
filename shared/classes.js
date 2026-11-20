@@ -441,8 +441,19 @@ export function canonicalProp(cls, name) {
   if (a && c.all.has(a)) return a;
   const up = name.charAt(0).toUpperCase() + name.slice(1);
   if (c.all.has(up)) return up;
+  if (name === 'Content') return c.chainSet.has('PartOperation') && c.all.has('AssetId') ? 'AssetId' : null;
+  if (name.length > 7 && name.endsWith('Content')) {
+    const base = name.slice(0, -7);
+    for (const cand of CONTENT_LEGACY[name] || [base]) if (c.all.has(cand)) return cand;
+  }
   return null;
 }
+
+const CONTENT_LEGACY = {
+  AudioContent: ['SoundId'], MeshContent: ['MeshId'], AnimationContent: ['AnimationId'], TextureContent: ['TextureId', 'TextureID', 'Texture'],
+  BaseTextureContent: ['BaseTextureId'], OverlayTextureContent: ['OverlayTextureId'], MoonTextureContent: ['MoonTextureId'], SunTextureContent: ['SunTextureId'],
+  CursorIconContent: ['CursorIcon'],
+};
 
 export function propInfo(cls, name) {
   const c = CLASSES.get(cls);

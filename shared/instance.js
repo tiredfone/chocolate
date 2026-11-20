@@ -298,8 +298,22 @@ export class DataModel {
         inst.fileProps = new Map();
       }
       const hasBrick = node.props.has('BrickColor');
+      const shadow = new Set();
+      for (const [rawName, pv] of node.props) {
+        if (pv.t !== 'Content' || !rawName.endsWith('Content')) continue;
+        const legacy = canonicalProp(inst.ClassName, rawName);
+        if (!legacy || legacy === rawName) continue;
+        const other = node.props.get(legacy);
+        if (!other) continue;
+        shadow.add(!other.v && pv.v ? legacy : rawName);
+      }
       for (const [rawName, pv] of node.props) {
         if (rawName === 'Parent' || rawName === 'ClassName') continue;
+        if (shadow.has(rawName)) {
+          if (!inst.extra) inst.extra = new Map();
+          inst.extra.set(rawName, pv);
+          continue;
+        }
         if (pv.t === 'raw') {
           if (!inst.extra) inst.extra = new Map();
           inst.extra.set(rawName, pv);
