@@ -351,3 +351,54 @@ export function completions(text, caret, ctx) {
   });
   return uniq.length ? { from: start, to: caret, word, items: uniq.slice(0, 200) } : null;
 }
+
+export function describeAt(text, pos, ctx) {
+  let a = pos, b = pos;
+  while (a > 0 && /\w/.test(text[a - 1])) a--;
+  while (b < text.length && /\w/.test(text[b])) b++;
+  const word = text.slice(a, b);
+  if (!word || /^\d/.test(word)) return null;
+  const before = text.slice(0, a);
+  if (inStringOrComment(before)) return null;
+  const sepM = /([.:])\s*$/.exec(before);
+  const full = { ...ctx, text: before, full: text };
+  if (sepM) {
+    const baseText = before.slice(0, before.length - sepM[0].length);
+    const exprM = /([A-Za-z_][\w]*(?:\s*(?:[.:]\s*[A-Za-z_]\w*\s*(?:\((?:[^()]|\([^()]*\))*\))?|\[\s*(?:"[^"]*"|'[^']*')\s*\]))*)\s*$/.exec(baseText);
+    const target = exprM && resolveExpr(exprM[1], full);
+    if (!target) return null;
+    if (target.lib) return LIBS[target.lib].includes(word) ? { from: a, to: b, title: `${target.lib}.${word}`, note: `${target.lib} library` } : null;
+    if (target.enums) return ENUMS[word] ? { from: a, to: b, title: `Enum.${word}`, note: `${Object.keys(ENUMS[word]).length} items` } : null;
+    if (target.enumType) return ENUMS[target.enumType] && word in ENUMS[target.enumType] ? { from: a, to: b, title: `Enum.${target.enumType}.${word}`, note: `value ${ENUMS[target.enumType][word]}` } : null;
+    if (target.datatype) {
+      const d = DATATYPE_MEMBERS[target.datatype];
+      if (!d) return null;
+      if (d.props.includes(word)) return { from: a, to: b, title: `(property) ${target.datatype}.${word}`, note: '' };
+      if (d.methods.includes(word)) return { from: a, to: b, title: `(method) ${target.datatype}:${word}()`, note: '' };
+      return null;
+    }
+    if (target.cls) {
+      const mem = classMembers(target.cls);
+      if (!mem) return null;
+      const p = mem.props.find((x) => x.name === word);
+      if (p) return { from: a, to: b, title: `(property) ${target.cls}.${word}: ${p.type}`, note: p.from !== target.cls ? `inherited from ${p.from}` : (p.def !== undefined && p.def !== null ? `default ${typeof p.def === 'object' ? JSON.stringify(p.def) : p.def}` : '') };
+      const m = mem.methods.find((x) => x.name === word);
+      if (m) return { from: a, to: b, title: `(method) ${m.from}:${word}()`, note: m.from !== target.cls ? `inherited from ${m.from}` : '' };
+      const e = mem.events.find((x) => x.name === word);
+      if (e) return { from: a, to: b, title: `(event) ${e.from}.${word}`, note: 'connect with :connect(function)' };
+      const child = target.inst && target.inst.findChild(word);
+      if (child) return { from: a, to: b, title: `(child) ${word}: ${child.ClassName}`, note: '' };
+    }
+    return null;
+  }
+  if (KEYWORDS.includes(word)) return { from: a, to: b, title: word, note: 'keyword' };
+  const g = GLOBALS[word];
+  if (g === 'function') return { from: a, to: b, title: `(global function) ${word}()`, note: '' };
+  if (g === 'library' || g === 'datatype') return { from: a, to: b, title: `${g === 'library' ? 'library' : 'datatype'} ${word}`, note: (LIBS[word] || []).slice(0, 10).join(', ') };
+  if (g === 'enums') return { from: a, to: b, title: 'Enum', note: 'all enumerations' };
+  if (g) return { from: a, to: b, title: `(global) ${word}: ${g}`, note: '' };
+  const r = resolveExpr(word, full);
+  if (r && r.cls) return { from: a, to: b, title: `(local) ${word}: ${r.cls}`, note: '' };
+  if (r && r.datatype) return { from: a, to: b, title: `(local) ${word}: ${r.datatype}`, note: '' };
+  return null;
+}

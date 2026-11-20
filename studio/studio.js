@@ -97,6 +97,7 @@ export class Studio {
     this.redoStack = [];
     this.clipboard = null;
     this.dirty = false;
+    this.localDirty = false;
     this.docs = new Map();
     this.activeDoc = 'place';
     this.era = cfg.clientVersion === 2018 ? 2018 : 2012;
@@ -133,7 +134,7 @@ export class Studio {
       this.resized();
     });
     window.addEventListener('beforeunload', (e) => {
-      if (this.dirty) {
+      if (this.localDirty) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -205,6 +206,7 @@ export class Studio {
   }
 
   markDirty() {
+    this.localDirty = true;
     if (!this.dirty) {
       this.dirty = true;
       this.ui.setTitle(`${this.cfg.placeName || 'Place'}* - Studio`);
@@ -374,6 +376,7 @@ export class Studio {
       case 'separate': return [...this.selection].some((s) => s.isA && s.isA('PartOperation'));
       case 'rotate': case 'tilt': case 'up': case 'down': case 'cam:lookat': return movable;
       case 'pause': case 'reset': case 'exit': return false;
+      case 'save': case 'saveas': case 'saveasxml': return true;
       case 'publish': case 'publish2': return !!endpointUrl('studioSave', this.cfg.placeId);
       case 'run': return !!endpointUrl('play', this.cfg.placeId);
       case 'playsolo': return !!endpointUrl('play', this.cfg.placeId) && !this.playStarting;
@@ -495,8 +498,10 @@ export class Studio {
           const sp = this.dm.services.get('StarterPack');
           return sp && this.remove([...sp.children], 'Clear StarterPack');
         }
-        case 'publish': case 'publish2': return this.save();
-        case 'saveas': return this.download(writePlace(this.dm), (this.cfg.placeName || 'place') + '.rbxl');
+        case 'save': return this.saveLocal();
+        case 'publish': case 'publish2': return this.publish();
+        case 'saveas': return this.saveAs(false);
+        case 'saveasxml': return this.saveAs(true);
         case 'savemodel': return this.saveModel(sel);
         case 'open': return this.openFile();
         case 'run': case 'playsolo': return this.playSolo();
@@ -1299,7 +1304,7 @@ export class Studio {
           this.setPropRaw(script, 'Source', src);
           this.record('Edit Script', () => set(old), () => set(src));
         }
-        if (save) this.save();
+        if (save) this.saveLocal();
       });
       ed.onCommand = (cmd) => this.exec(cmd);
       ed.onGutter = (line) => this.debugger.toggle(script, line);
@@ -1360,12 +1365,17 @@ export class Studio {
         this.explorer.focusSearch();
         return;
       }
+      if (e.altKey && !ctrl && k === 'p') {
+        e.preventDefault();
+        this.exec('publish');
+        return;
+      }
       if (!ctrl && e.key === 'F2' && this.selection.size) {
         e.preventDefault();
         this.exec('rename');
         return;
       }
-      const map = ctrl ? { z: 'undo', y: 'redo', x: 'cut', c: 'copy', v: e.shiftKey ? 'pasteinto' : 'paste', d: 'duplicate', a: 'selectall', g: 'group', u: 'ungroup', r: 'rotate', t: 'tilt', s: 'publish' } : { delete: 'delete', f: 'cam:lookat' };
+      const map = ctrl ? { z: 'undo', y: 'redo', x: 'cut', c: 'copy', v: e.shiftKey ? 'pasteinto' : 'paste', d: 'duplicate', a: 'selectall', g: 'group', u: 'ungroup', r: 'rotate', t: 'tilt', s: e.shiftKey ? 'saveas' : 'save' } : { delete: 'delete', f: 'cam:lookat' };
       const cmd = map[k] || (!ctrl && k === 'backspace' && this.selection.size ? 'delete' : null);
       if (cmd && this.enabled(cmd)) {
         e.preventDefault();
@@ -1374,9 +1384,9 @@ export class Studio {
     });
   }
 
-  download(text, name) {
+  download(text, name, type) {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([text], { type: 'application/xml' }));
+    a.href = URL.createObjectURL(new Blob([text], { type: type || 'application/xml' }));
     a.download = name.replace(/[\\/:*?"<>|]/g, '_');
     document.body.appendChild(a);
     a.click();
@@ -1594,15 +1604,58 @@ export class Studio {
     input.click();
   }
 
+  placeData() {
+    const xml = writePlace(this.dm);
+    let bytes = null;
+    try { bytes = xmlToBinary(xml); } catch {}
+    return { xml, bytes };
+  }
+
+  async saveLocal() {
+    const { xml, bytes } = this.placeData();
+    const ok = this.extras ? await this.extras.saveDraft(bytes || xml) : false;
+    if (!ok) {
+      this.ui.status('Save failed');
+      this.print('Could not save to this browser. Use Save to File As to keep a copy on your computer.', 'err');
+      return false;
+    }
+    this.localDirty = false;
+    this.ui.status('Saved to this browser');
+    this.print(`Saved to this browser (${Math.round((bytes ? bytes.length : xml.length) / 1024)} KB). The live game is unchanged until you Publish.`, 'info');
+    return true;
+  }
+
+  saveAs(asXml) {
+    const base = (this.cfg.placeName || 'place').replace(/[\\/:*?"<>|]/g, '_');
+    const { xml, bytes } = this.placeData();
+    if (asXml || !bytes) {
+      if (!asXml) this.print('This place has data the binary writer cannot encode, so it was downloaded as XML.', 'warn');
+      this.download(xml, base + '.rbxlx');
+    } else {
+      this.download(bytes, base + '.rbxl', 'application/octet-stream');
+    }
+    this.localDirty = false;
+    this.print('Downloaded ' + base + (asXml || !bytes ? '.rbxlx' : '.rbxl'), 'info');
+  }
+
+  async publish() {
+    const url = endpointUrl('studioSave', this.cfg.placeId);
+    if (!url) return false;
+    const name = this.cfg.placeName || 'this place';
+    const go = await this.ui.confirm('Publish to Solar', `Publish "${name}" to Solar? This replaces the live version that players load. The previous version is backed up automatically.`);
+    if (!go) return false;
+    return this.save();
+  }
+
   async save() {
     const url = endpointUrl('studioSave', this.cfg.placeId);
     if (!url) return;
     for (const d of this.docs.values()) d.ed.ta.blur();
-    this.ui.status('Saving...');
-    this.print('Saving place...');
-    const xml = writePlace(this.dm);
-    let packed = null;
-    if (this.cfg.binarySave) { try { packed = xmlToBinary(xml); } catch {} }
+    this.ui.status('Publishing...');
+    this.print('Publishing place...');
+    const { xml, bytes: packed } = this.placeData();
+    if (!packed) this.print('This place has data the binary writer cannot encode, so it is published as XML.', 'warn');
+    const size = packed ? packed.length : xml.length;
     const send = () => fetch(url, {
       method: 'POST',
       credentials: 'same-origin',
@@ -1611,19 +1664,20 @@ export class Studio {
     }).catch((e) => ({ ok: false, status: 0, statusText: e.message, json: async () => ({}) }));
     let r = await send();
     if (r.status === 403 && (await this.refreshCsrf())) r = await send();
-    if (r.status === 401) r = { ok: false, statusText: 'You were logged out. Log in again in another tab, then save.', json: async () => ({}) };
+    if (r.status === 401) r = { ok: false, statusText: 'You were logged out. Log in again in another tab, then publish.', json: async () => ({}) };
     const res = await r.json().catch(() => ({}));
     if (r.ok && res.success !== false) {
       this.dirty = false;
+      this.localDirty = false;
       this.ui.setTitle(`${this.cfg.placeName || 'Place'} - Studio`);
-      this.ui.status('Saved');
-      this.print(`Saved (${Math.round(xml.length / 1024)} KB)`, 'info');
+      this.ui.status('Published');
+      this.print(`Published (${Math.round(size / 1024)} KB, ${packed ? 'binary' : 'XML'})`, 'info');
       return true;
     }
-    const msg = res.error || r.statusText || 'Save failed';
-    this.ui.status('Save failed');
-    this.print('Save failed: ' + msg, 'err');
-    this.ui.alert('Save failed', msg);
+    const msg = res.error || r.statusText || 'Publish failed';
+    this.ui.status('Publish failed');
+    this.print('Publish failed: ' + msg, 'err');
+    this.ui.alert('Publish failed', msg);
     return false;
   }
 
@@ -1644,7 +1698,7 @@ export class Studio {
   async playSolo() {
     if (this.era === 2018 && (endpointUrl('studioTestTicket', this.cfg.placeId) || (this.team && this.team.open))) return this.startPlaySolo();
     if (this.dirty) {
-      const ok = await this.ui.confirm('Play Solo', 'Save the place and open it in a new tab to test it?');
+      const ok = await this.ui.confirm('Play Solo', 'Publish the place and open it in a new tab to test it?');
       if (!ok) return;
       if (!(await this.save())) return;
     }

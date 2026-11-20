@@ -371,7 +371,10 @@ function parseBinary(bytes) {
         }
         default: break;
       }
-      if (vals) for (let i = 0; i < n; i++) list[i].props.set(pn, { t, v: vals[i] });
+      if (vals) {
+        const tg = ty === 5 ? 'double' : (ty === 1 && t === 'string' && pn === 'Source' ? 'ProtectedString' : undefined);
+        for (let i = 0; i < n; i++) list[i].props.set(pn, tg ? { t, v: vals[i], tag: tg } : { t, v: vals[i] });
+      }
     } else if (name === 'PRNT') {
       q += 1;
       const n = u32(data, q); q += 4;

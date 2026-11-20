@@ -18,14 +18,14 @@ export const ICONS = {
   'cam:zoomin': S('toolbar-camera', 4), 'cam:zoomout': S('toolbar-camera', 5), 'cam:lookat': S('toolbar-camera', 6), 'cam:extents': S('toolbar-camera', 7),
   'tool:move': S('toolbar-advanced', 0), 'tool:rotate': S('toolbar-advanced', 1), 'tool:size': S('toolbar-advanced', 2),
   'grid:1': S('toolbar-advanced', 3), 'grid:0.2': S('toolbar-advanced', 4), 'grid:0': S('toolbar-advanced', 5), joints: S('toolbar-advanced', 6), 'view:objects': S('toolbar-advanced', 7),
-  delete: P('delete_x_16'), publish: S('toolbar-standard', 2, 15), publish2: P('world_16'), saveas: P('save_16'), 'view:explorer': P('explorer_16'), 'view:output': P('output_16'), 'view:properties': P('table_16'),
+  delete: P('delete_x_16'), save: S('toolbar-standard', 2, 15), publish: P('world_16'), publish2: P('world_16'), saveas: P('save_16'), saveasxml: P('save_16'), 'view:explorer': P('explorer_16'), 'view:output': P('output_16'), 'view:properties': P('table_16'),
   lockall: P('lock_open_16'), lock: P('lock_16'), 'insert:object': P('toolbox_16'), playsolo: P('script_go_16'),
 };
 
 export const MENUS = [
   ['File', [
-    ['publish', 'Save\tCtrl+S'], ['saveas', 'Save As...'], ['open', 'Open...'], null,
-    ['publish2', 'Publish to ROBLOX...'], null,
+    ['save', 'Save\tCtrl+S'], ['saveas', 'Save to File As (.rbxl)...\tCtrl+Shift+S'], ['saveasxml', 'Download as XML (.rbxlx)...'], ['open', 'Open...'], null,
+    ['publish', 'Publish to Solar...\tAlt+P'], null,
     ['savemodel', 'Save Selection as Model...'], null,
     ['exit', 'Exit'],
   ]],
@@ -80,7 +80,7 @@ export const SELECTION_MENU = [
 ];
 
 export const TOOLBARS = [
-  ['publish', 'open', null, 'cut', 'copy', 'paste', null, 'undo', 'redo', null, 'group', 'ungroup', null, 'rotate', 'tilt', null, 'up', 'down'],
+  ['save', 'open', null, 'cut', 'copy', 'paste', null, 'undo', 'redo', null, 'group', 'ungroup', null, 'rotate', 'tilt', null, 'up', 'down'],
   ['tool:drag', 'tool:axis', 'tool:resize', null, 'tool:lock', 'tool:anchor', null, 'tool:paint', 'tool:dropper', null, 'tool:material', null,
     'tool:surface0', 'tool:surface1', 'tool:surface2', 'tool:surface3', 'tool:surface4', 'tool:surface5', 'tool:surface6', 'tool:surface7'],
   ['run', 'pause', 'reset'],
@@ -89,7 +89,7 @@ export const TOOLBARS = [
 ];
 
 export const TIPS = {
-  publish: 'Save the place', open: 'Open a place file from your device', cut: 'Cut the selection and put it on the Clipboard', copy: 'Copy the selection and put it on the Clipboard',
+  save: 'Save the place in this browser (does not change the live game)', publish: 'Publish the place to Solar', open: 'Open a place file from your device', cut: 'Cut the selection and put it on the Clipboard', copy: 'Copy the selection and put it on the Clipboard',
   paste: 'Insert Clipboard contents', undo: 'Undo the last action', redo: 'Redo the previously undone action', group: 'Group parts or models', ungroup: 'Ungroup models or parts',
   rotate: 'Rotate objects', tilt: 'Tilt objects', up: 'Move objects up', down: 'Move objects down',
   'tool:drag': 'Drag', 'tool:axis': 'Move on axis', 'tool:resize': 'Resize', 'tool:lock': 'Lock - prevent selection', 'tool:anchor': 'Anchor - prevent moving',

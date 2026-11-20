@@ -2,7 +2,9 @@ import * as THREE from 'three';
 import * as C from '../shared/cframe.js';
 import { parsePlace } from '../shared/rbxl.js';
 import { writePlace } from '../shared/rbxlx.js';
+import { xmlToBinary } from '../shared/rbxlbin.js';
 import { el } from './ui.js';
+import { setEditorTheme } from './scripteditor.js';
 
 const DB_NAME = 'chocolate-studio';
 const STORE = 'autosaves';
@@ -10,7 +12,7 @@ const KEEP_SAVES = 3;
 const SETTINGS_KEY = 'chocolate-studio-settings';
 
 const SHORTCUTS = [
-  ['Ctrl+S', 'Save'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+X / C / V', 'Cut, copy, paste'], ['Ctrl+Shift+V', 'Paste into the selection'],
+  ['Ctrl+S', 'Save in this browser'], ['Ctrl+Shift+S', 'Save to file (.rbxl)'], ['Alt+P', 'Publish to Solar'], ['Ctrl+Z / Ctrl+Y', 'Undo / Redo'], ['Ctrl+X / C / V', 'Cut, copy, paste'], ['Ctrl+Shift+V', 'Paste into the selection'],
   ['Ctrl+D', 'Duplicate'], ['Ctrl+A', 'Select all'], ['Ctrl+G / Ctrl+U', 'Group / Ungroup'], ['Ctrl+R / Ctrl+T', 'Rotate / Tilt'],
   ['Delete', 'Delete'], ['F2', 'Rename'], ['F', 'Focus the camera on the selection'], ['Ctrl+Shift+X', 'Filter the Explorer'],
   ['W A S D Q E', 'Fly the camera (Shift for speed)'], ['Right drag', 'Look around'], ['Middle drag', 'Pan'],
@@ -63,6 +65,11 @@ async function dbDelete(key) {
   });
 }
 
+function recSize(r) {
+  const d = r.data || r.xml;
+  return d.length || d.byteLength || 0;
+}
+
 function loadSettings() {
   try {
     return { camSpeed: 1, autosave: 3, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
@@ -97,6 +104,7 @@ export class Extras {
 
   applySettings() {
     if (this.app.view) this.app.view.speedScale = +this.settings.camSpeed || 1;
+    setEditorTheme(this.settings.editorTheme);
   }
 
   editor() {
@@ -518,11 +526,22 @@ export class Extras {
     this.lastAutosave = Date.now();
     try {
       const xml = writePlace(app.dm);
+      const bytes = xmlToBinary(xml);
       const now = Date.now();
-      await dbPut({ key: `${app.cfg.placeId}:${now}`, place: app.cfg.placeId, t: now, name: app.cfg.placeName || 'Place', xml });
-      const all = await dbAll(app.cfg.placeId);
+      await dbPut({ key: `${app.cfg.placeId}:${now}`, place: app.cfg.placeId, t: now, name: app.cfg.placeName || 'Place', data: bytes || xml });
+      const all = (await dbAll(app.cfg.placeId)).filter((r) => !r.draft);
       for (const old of all.slice(KEEP_SAVES)) await dbDelete(old.key);
     } catch {}
+  }
+
+  async saveDraft(data) {
+    if (typeof indexedDB === 'undefined') return false;
+    const app = this.app;
+    try {
+      return await dbPut({ key: `${app.cfg.placeId}:draft`, place: app.cfg.placeId, t: Date.now(), name: app.cfg.placeName || 'Place', data, draft: true });
+    } catch {
+      return false;
+    }
   }
 
   async openAutosaves() {
@@ -536,14 +555,14 @@ export class Extras {
       const s = el('select', null, body);
       s.size = Math.min(6, list.length);
       s.style.width = '100%';
-      for (const r of list) el('option', null, s, `${new Date(r.t).toLocaleString()} (${Math.round(r.xml.length / 1024)} KB)`).value = r.key;
+      for (const r of list) el('option', null, s, `${r.draft ? 'Saved: ' : ''}${new Date(r.t).toLocaleString()} (${Math.round(recSize(r) / 1024)} KB)`).value = r.key;
       s.value = list[0].key;
       el('div', null, body, 'Opening an auto-save replaces what is open now. Save afterwards to keep it.').style.marginTop = '6px';
       return () => s.value;
     }, list.length ? [['Open', true], ['Cancel', null]] : [['Close', null]]);
     const rec = list.find((r) => r.key === pick);
     if (!rec) return;
-    app.replacePlace(parsePlace(rec.xml), `the auto-save from ${new Date(rec.t).toLocaleString()}`);
+    app.replacePlace(parsePlace(rec.data || rec.xml), `the auto-save from ${new Date(rec.t).toLocaleString()}`);
   }
 
   async newPlace() {
@@ -602,7 +621,11 @@ export class Extras {
       auto.max = '30';
       auto.value = String(this.settings.autosave);
       row('Auto-save every (minutes)', auto);
-      return () => ({ camSpeed: Math.max(0.25, Math.min(4, +speed.value || 1)), autosave: Math.max(1, Math.min(30, Math.round(+auto.value || 3))) });
+      const theme = document.createElement('select');
+      for (const [v, l] of [['auto', 'Match Studio'], ['dark', 'Dark'], ['light', 'Light']]) el('option', null, theme, l).value = v;
+      theme.value = this.settings.editorTheme || 'auto';
+      row('Script editor theme', theme);
+      return () => ({ camSpeed: Math.max(0.25, Math.min(4, +speed.value || 1)), autosave: Math.max(1, Math.min(30, Math.round(+auto.value || 3))), editorTheme: theme.value });
     }, [['OK', true], ['Cancel', null]]);
     if (!next) return;
     this.settings = { ...this.settings, ...next };
@@ -620,68 +643,22 @@ export class Extras {
 
   async find() {
     const ed = this.editor();
-    if (!ed) return;
-    const sel = ed.ta.value.slice(ed.ta.selectionStart, ed.ta.selectionEnd);
-    const term = await this.app.ui.prompt('Find', 'Find what', sel && !sel.includes('\n') ? sel : this.findTerm);
-    if (!term) return;
-    this.findTerm = term;
-    this.findStep(1);
+    if (ed) ed.openFind();
   }
 
   findStep(dir) {
     const ed = this.editor();
-    if (!ed || !this.findTerm) return this.find();
-    const text = ed.ta.value;
-    const lower = text.toLowerCase(), term = this.findTerm.toLowerCase();
-    let i;
-    if (dir > 0) {
-      i = lower.indexOf(term, ed.ta.selectionEnd);
-      if (i < 0) i = lower.indexOf(term);
-    } else {
-      i = lower.lastIndexOf(term, Math.max(0, ed.ta.selectionStart - 1));
-      if (i < 0) i = lower.lastIndexOf(term);
-    }
-    if (i < 0) return this.app.ui.status(`"${this.findTerm}" was not found`);
-    this.selectRange(ed, i, i + term.length);
+    if (ed) ed.findNext(dir);
   }
 
   selectRange(ed, a, b) {
     ed.ta.focus();
     ed.ta.setSelectionRange(a, b);
-    const line = ed.ta.value.slice(0, a).split('\n').length - 1;
-    const lh = parseFloat(getComputedStyle(ed.ta).lineHeight) || 15;
-    ed.code.scrollTop = Math.max(0, line * lh - ed.code.clientHeight / 2);
   }
 
   async replace() {
     const ed = this.editor();
-    if (!ed) return;
-    ed.unfold();
-    const r = await this.app.ui.dialog('Replace', (body) => {
-      const f = el('input', null, body);
-      f.placeholder = 'Find what';
-      f.value = this.findTerm;
-      const t = el('input', null, body);
-      t.placeholder = 'Replace with';
-      t.style.marginTop = '6px';
-      for (const i of [f, t]) i.style.width = '100%';
-      return () => ({ find: f.value, with: t.value });
-    }, [['Replace All', true], ['Cancel', null]]);
-    if (!r || !r.find) return;
-    this.findTerm = r.find;
-    const esc = r.find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const before = ed.ta.value;
-    let n = 0;
-    const after = before.replace(new RegExp(esc, 'gi'), () => {
-      n++;
-      return r.with;
-    });
-    if (!n) return this.app.ui.status(`"${r.find}" was not found`);
-    ed.ta.focus();
-    ed.ta.select();
-    ed.ta.setRangeText(after, 0, before.length, 'start');
-    ed.ta.dispatchEvent(new Event('input'));
-    this.app.ui.status(`Replaced ${n} occurrence${n === 1 ? '' : 's'}`);
+    if (ed) ed.openFind();
   }
 
   gotoLineNumber(n) {
@@ -695,14 +672,7 @@ export class Extras {
 
   async gotoLine() {
     const ed = this.editor();
-    if (!ed) return;
-    const lines = ed.ta.value.split('\n');
-    const v = await this.app.ui.prompt('Go To Line', `Line number (1-${lines.length})`, '');
-    const n = Math.max(1, Math.min(lines.length, parseInt(v, 10) || 0));
-    if (!v) return;
-    let pos = 0;
-    for (let i = 0; i < n - 1; i++) pos += lines[i].length + 1;
-    this.selectRange(ed, pos, pos);
+    if (ed) ed.openGoto();
   }
 
   comment(mode) {
@@ -963,7 +933,7 @@ class StartPage {
     el('h2', null, this.el, app.cfg.placeName || 'Place');
     el('p', null, this.el, `Place ${app.cfg.placeId}. Plays in the ${app.era} client.`);
     const actions = el('div', 'st-sp-actions', this.el);
-    for (const [cmd, label] of [['playsolo', 'Play'], ['teamtest', 'Team Test'], ['gamesettings', 'Game Settings'], ['publish', 'Save'], ['autosaves', 'Auto-Saves'], ['shortcuts', 'Shortcuts']]) {
+    for (const [cmd, label] of [['playsolo', 'Play'], ['teamtest', 'Team Test'], ['gamesettings', 'Game Settings'], ['save', 'Save'], ['publish', 'Publish'], ['autosaves', 'Auto-Saves'], ['shortcuts', 'Shortcuts']]) {
       const b = el('button', null, actions, label);
       b.addEventListener('click', () => app.exec(cmd));
     }
