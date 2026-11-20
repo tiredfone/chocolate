@@ -288,7 +288,7 @@ async function boot() {
         bubble: (part, msg) => gui && gui.bubble(part, msg),
         ownCharacter: (model) => {
           const hum = model.findChildOfClass('Humanoid');
-          world.camera.props.set('CameraSubject', hum);
+          world.dm.setProp(world.camera, 'CameraSubject', hum);
         },
         died: () => {},
         leave: () => {
