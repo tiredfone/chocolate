@@ -933,6 +933,14 @@ export class Studio {
         return writePlace(this.dm);
       });
       const bps = this.debugger.payload(), watches = this.debugger.watches;
+      if (xml.length > 60 * 1024 * 1024) throw new Error('The place is too large for Play Solo (' + Math.round(xml.length / 1048576) + ' MB)');
+      clearTimeout(this.playTimer);
+      this.playTimer = setTimeout(() => {
+        if (!this.playStarting) return;
+        this.playStarting = false;
+        this.print('Play Solo: the game server did not answer. Try again in a moment.', 'err');
+        this.refreshUI();
+      }, 60000);
       if (this.team && this.team.open) {
         this.team.send({ t: 'playsolo', on: true, xml, bps, watches });
         return;
@@ -940,6 +948,7 @@ export class Studio {
       const ws = await this.soloSocket();
       ws.send(JSON.stringify({ t: 'playsolo', on: true, xml, bps, watches }));
     } catch (e) {
+      clearTimeout(this.playTimer);
       this.playStarting = false;
       this.refreshUI();
       throw e;
@@ -983,9 +992,11 @@ export class Studio {
           reject(new Error('Could not reach the game server'));
         };
       });
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (this.solo === ws) this.solo = null;
         if (this.playing) this.endPlaySolo(false);
+        if (this.playStarting) this.print('Play Solo: the connection to the game server closed before the game started' + (ev && ev.code ? ' (code ' + ev.code + ')' : '') + '.', 'err');
+        clearTimeout(this.playTimer);
         this.playStarting = false;
         this.refreshUI();
       };
@@ -995,6 +1006,7 @@ export class Studio {
   }
 
   onPlaySolo(m) {
+    clearTimeout(this.playTimer);
     this.playStarting = false;
     if (m.on && m.job) {
       const url = endpointUrl('play', this.cfg.placeId);

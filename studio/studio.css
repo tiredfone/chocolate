@@ -2269,13 +2269,8 @@ html.st-phone .st-gs-nav {
   color: #1d5fb4;
 }
 
-.st-gui.st-uiedit .ch-g {
+.st-gui.st-uipick .ch-g {
   pointer-events: auto !important;
-  cursor: move;
-}
-
-.st-gui.st-uiedit .ch-g:hover {
-  outline: 1px dashed rgba(0, 120, 255, 0.7);
 }
 
 .st-gui.st-uiedit .ch-g.st-uisel {

@@ -15,7 +15,8 @@ const HOST = config.host || '127.0.0.1';
 const IDLE_MS = 90 * 1000;
 const MAX_MSG = 64 * 1024;
 const MAX_RATE = 120;
-const MAX_STUDIO_MSG = 8 * 1024 * 1024;
+const MAX_STUDIO_MSG = 64 * 1024 * 1024;
+const MAX_EARLY_MSG = 1024 * 1024;
 const MAX_STUDIO_RATE = 400;
 const MAX_SOCKETS_PER_IP = 40;
 const MAX_PENDING_PER_IP = 8;
@@ -622,7 +623,15 @@ function restartSelf() {
   }, 1500);
 }
 
-const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_STUDIO_MSG, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
+function allowBig(ws) {
+  try {
+    ws._receiver._maxPayload = MAX_STUDIO_MSG;
+    const d = ws._extensions && ws._extensions['permessage-deflate'];
+    if (d) d._maxPayload = MAX_STUDIO_MSG;
+  } catch {}
+}
+
+const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_EARLY_MSG, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
 
 server.on('upgrade', (req, socket, head) => {
   socket.on('error', () => {});
@@ -774,6 +783,7 @@ wss.on('connection', async (ws, req, url) => {
   if (info.mode === 'studio' && info.teamCreate === false) {
     s.solo = { placeId: info.placeId | 0, era: info.clientVersion === 2018 ? 2018 : 2012, userId: info.userId | 0, test: null };
     s.joined = true;
+    allowBig(ws);
     ws.send(JSON.stringify({ t: 'solo' }));
     for (const str of early.splice(0)) soloMessage(s, str);
     return;
@@ -804,6 +814,7 @@ wss.on('connection', async (ws, req, url) => {
     }
     s.studio = st;
     s.joined = true;
+    allowBig(ws);
     const send = (str) => {
       if (ws.readyState === 1) ws.send(str);
     };

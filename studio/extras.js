@@ -235,18 +235,49 @@ export class Extras {
       ov.appendChild(box);
       this.uiBox = box;
     }
+    const solid = (n) => {
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
+      const a = (c) => {
+        const m = /rgba?\(([^)]*)\)/.exec(c);
+        if (!m) return c !== 'transparent' && c !== '';
+        const p = m[1].split(/[ ,/]+/).filter(Boolean);
+        return p.length < 4 || parseFloat(p[3]) > 0.02;
+      };
+      if (a(cs.backgroundColor)) return true;
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return true;
+      for (const side of ['Top', 'Right', 'Bottom', 'Left']) if (parseFloat(cs['border' + side + 'Width']) > 0 && cs['border' + side + 'Style'] !== 'none' && a(cs['border' + side + 'Color'])) return true;
+      if (n.matches('input, textarea') && (n.value || n.placeholder)) return true;
+      for (const c of n.children) {
+        if (c.classList.contains('ch-g')) continue;
+        if (c.tagName === 'IMG' || c.tagName === 'VIDEO' || c.tagName === 'CANVAS') {
+          if (c.tagName !== 'IMG' || c.getAttribute('src')) return true;
+        } else if (c.classList.contains('ch-g-clip') && c.querySelector('img[src]')) return true;
+        else if (c.classList.contains('ch-g-text') && c.textContent.trim()) return true;
+      }
+      for (const c of n.childNodes) if (c.nodeType === 3 && c.textContent.trim()) return true;
+      return false;
+    };
     const guiAt = (x, y) => {
-      for (const hit of document.elementsFromPoint(x, y)) {
+      ov.classList.add('st-uipick');
+      let hits;
+      try {
+        hits = document.elementsFromPoint(x, y);
+      } finally {
+        ov.classList.remove('st-uipick');
+      }
+      for (const hit of hits) {
         if (!ov.contains(hit) || hit.closest('.st-uibox')) continue;
         const n = hit.closest('.ch-g');
         const i = n && app.gui.elInst ? app.gui.elInst.get(n) : null;
-        if (i && i.isA && i.isA('GuiObject')) return i;
+        if (i && i.isA && i.isA('GuiObject') && solid(n)) return i;
       }
       return null;
     };
     const down = (e) => {
       if (e.button !== 0 || !app.gui.elInst) return;
       const handle = e.target.closest && e.target.closest('.st-uihandle');
+      if (e.target.closest && e.target.closest('.st-uitext')) return;
       let inst = handle ? this.uiTarget() : guiAt(e.clientX, e.clientY);
       if (!inst) return;
       e.preventDefault();
@@ -277,12 +308,13 @@ export class Extras {
       e.stopPropagation();
       this.uiEditText(inst);
     };
-    ov.addEventListener('pointerdown', down, true);
-    ov.addEventListener('dblclick', dbl, true);
+    const host = ov.parentElement || ov;
+    host.addEventListener('pointerdown', down, true);
+    host.addEventListener('dblclick', dbl, true);
     document.addEventListener('keydown', key, true);
     this.uiOff = () => {
-      ov.removeEventListener('pointerdown', down, true);
-      ov.removeEventListener('dblclick', dbl, true);
+      host.removeEventListener('pointerdown', down, true);
+      host.removeEventListener('dblclick', dbl, true);
       document.removeEventListener('keydown', key, true);
       if (this.uiTextEnd) this.uiTextEnd(true);
       this.uiGuides(null, null);
