@@ -574,6 +574,15 @@ export class Physics {
       const maxSpeed = Math.max(0, seat.props.get('MaxSpeed') || 0);
       const torque = Math.max(0, seat.props.get('Torque') || 0);
       const turn = Math.max(0, seat.props.get('TurnSpeed') ?? 1);
+      if (on && st) {
+        const cb = rec.asm.body;
+        const lv = cb.linvel(), av = cb.angvel();
+        const fwd = lv.x * f[0] + lv.y * f[1] + lv.z * f[2];
+        const rate = -st * turn * Math.min(1.6, 50 / Math.max(Math.abs(fwd), 8)) * Math.max(-1, Math.min(1, fwd / 6));
+        const cur = av.x * u[0] + av.y * u[1] + av.z * u[2];
+        const k = Math.min(1, 20 * STEP) * (rate - cur);
+        cb.setAngvel({ x: av.x + u[0] * k, y: av.y + u[1] * k, z: av.z + u[2] * k }, true);
+      }
       for (const h of this.hinges.values()) {
         if (!h.joint) continue;
         const asmA = this.parts.get(h.a)?.asm, asmB = this.parts.get(h.b)?.asm;
@@ -599,7 +608,7 @@ export class Physics {
         const wb = this.parts.get(wheelPart)?.asm?.body;
         const m = wb ? wb.mass() : 1;
         const radius = Math.max(0.1, sign > 0 ? h.radiusB : h.radiusA);
-        const step = ((Math.max(1, torque) * (st ? 3 : 1)) / radius) * STEP;
+        const step = ((Math.max(1, torque, maxSpeed / 2) * (st ? 3 : 1)) / radius) * STEP;
         const cur = Number.isFinite(h.cmd) ? h.cmd : 0;
         h.cmd = cur + Math.max(-step, Math.min(step, wv - cur));
         h.joint.configureMotorVelocity(h.cmd, Math.max(0.5, torque * m * 0.02));
