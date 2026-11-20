@@ -462,6 +462,7 @@ export function createMcp(app) {
     const run = async () => {
       if (!known.has(name) || !handlers[name]) return { ok: false, error: `Unknown tool "${name}"` };
       const a = args === undefined || args === null ? {} : args;
+      if (Array.isArray(a) && a.length === 0) a = {};
       if (typeof a !== 'object' || Array.isArray(a)) return { ok: false, error: 'Arguments must be an object' };
       try {
         return { ok: true, result: await handlers[name](a) };
