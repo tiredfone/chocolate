@@ -345,17 +345,19 @@ function parseBinary(bytes) {
         case 34: {
           const cnt = u32(data, q + n * 4);
           let kinds = raw(data, q, n, 4);
-          const okKinds = (ks) => ks.every((k) => k <= 3) && ks.filter((k) => k === 1).length === cnt;
-          if (!okKinds(kinds)) {
-            const plain = [];
-            for (let i = 0; i < n; i++) plain.push(u32(data, q + i * 4));
-            if (okKinds(plain)) kinds = plain;
+          const plain = [];
+          for (let i = 0; i < n; i++) plain.push(u32(data, q + i * 4));
+          let uriKind = null;
+          for (const cand of [kinds, plain]) {
+            if (!cand.every((k) => k <= 3)) continue;
+            const hit = [2, 1].find((w) => cand.filter((k) => k === w).length === cnt);
+            if (hit !== undefined) { kinds = cand; uriKind = hit; break; }
           }
           let r = q + n * 4 + 4;
           const uris = [];
           for (let i = 0; i < cnt; i++) { const l = u32(data, r); r += 4; uris.push(td.decode(data.subarray(r, r + l))); r += l; }
           let u = 0;
-          vals = kinds.map((k) => (k === 1 ? uris[u++] || '' : ''));
+          vals = kinds.map((k) => (uriKind !== null && k === uriKind ? uris[u++] || '' : ''));
           t = 'Content';
           break;
         }
