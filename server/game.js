@@ -230,7 +230,8 @@ export class Game {
     this.running = true;
     this.t0 = performance.now();
     this.nextTick = performance.now() + TICK * 1000;
-    this.loop = setInterval(() => {
+    const pump = () => {
+      if (!this.running) return;
       const now = performance.now();
       if (now - this.nextTick > TICK * 4000) this.nextTick = now;
       let n = 0;
@@ -239,7 +240,10 @@ export class Game {
         n++;
         this.tick();
       }
-    }, 8);
+      if (!this.running) return;
+      this.loop = setTimeout(pump, Math.max(1, this.nextTick - performance.now()));
+    };
+    this.loop = setTimeout(pump, TICK * 1000);
     const begin = performance.now();
     while (performance.now() - begin < 15000) {
       const quiet = performance.now() - Math.max(begin, this.lastLoadChange || 0);
@@ -364,7 +368,7 @@ export class Game {
 
   stop() {
     this.running = false;
-    clearInterval(this.loop);
+    clearTimeout(this.loop);
     clearInterval(this.unimplTimer);
     this.flushUnimplemented();
   }
@@ -842,7 +846,12 @@ export class Game {
     const me = client.player;
     const others = [...this.clients.values()].filter((c) => c !== client).map((c) => c.player);
     if (!others.length) return;
-    const r = await social('statuses', { userId: me.props.get('userId'), others: others.map((o) => o.props.get('userId')) });
+    let r = await social('statuses', { userId: me.props.get('userId'), others: others.map((o) => o.props.get('userId')) });
+    if (!r || !r.statuses) {
+      await new Promise((res) => setTimeout(res, 2000));
+      if (me.destroyed) return;
+      r = await social('statuses', { userId: me.props.get('userId'), others: others.map((o) => o.props.get('userId')) });
+    }
     if (!r || !r.statuses || me.destroyed) return;
     for (const o of others) {
       const st = r.statuses[o.props.get('userId')];
@@ -873,6 +882,8 @@ export class Game {
     const players = this.dm.services.get('Players');
     this.dm.emit(players, 'PlayerRemoving', pl);
     const ch = pl.props.get('Character');
+    const chRec = ch && this.chars.get(ch);
+    if (chRec && chRec.seat) this.unseat(chRec);
     if (ch && !ch.destroyed) this.dm.destroy(ch);
     if (!pl.destroyed) {
       if (pl.parent) this.dm.setParent(pl, null);
@@ -1171,7 +1182,7 @@ export class Game {
       if (prev === STATES.fall) dm.emit(hum, 'FreeFalling', false);
       if (st === STATES.jump) dm.emit(hum, 'Jumping', true);
       if (st === STATES.fall) dm.emit(hum, 'FreeFalling', true);
-      if (st === STATES.climb) dm.emit(hum, 'Climbing', hum.props.get('WalkSpeed'));
+      if (st === STATES.climb) dm.emit(hum, 'Climbing', hum.props.get('WalkSpeed') * 0.7);
       if (this.era === 2018) dm.emit(hum, 'StateChanged', T.e('HumanoidStateType', HUM_STATE[prev] ?? 8), T.e('HumanoidStateType', HUM_STATE[st] ?? 8));
     }
     const speed = st === STATES.walk || st === STATES.swim ? Math.hypot(rec.vel[0], rec.vel[2]) : 0;
@@ -1373,6 +1384,7 @@ export class Game {
     if (rec.dead) return;
     rec.dead = true;
     const { model, hum } = rec;
+    if (rec.seat) this.unseat(rec);
     model.data.dead = true;
     if (hum.props.get('Health') > 0 && !hum.destroyed) this.dm.setProp(hum, 'Health', 0);
     const parts = model.descendants().filter((d) => d.isA('BasePart'));
@@ -1506,6 +1518,8 @@ export class Game {
     dm.setParent(w, seat);
     rec.seat = { seat, weld: w };
     if (rec.proxy) rec.proxy.setSeated(true);
+    rec.hum.data = rec.hum.data || {};
+    rec.hum.data.seat = seat;
     dm.setProp(rec.hum, 'Sit', true);
     dm.setProp(seat, 'Occupant', rec.hum);
     dm.emit(rec.hum, 'Seated', true, seat);
@@ -1584,6 +1598,7 @@ export class Game {
       }
     }
     if (!rec.hum.destroyed) {
+      if (rec.hum.data) rec.hum.data.seat = null;
       this.dm.setProp(rec.hum, 'Sit', false);
       this.dm.emit(rec.hum, 'Seated', false, null);
     }
@@ -2214,6 +2229,13 @@ export class Game {
       this.anims.step(dt, (inst, ev, arg) => this.dm.emit(inst, ev, arg));
       this.updateChars(dt);
       this.handleExplosions();
+      for (const rec of this.chars.values()) {
+        const cf = rec.torsoCF, last = rec.lastStepCF;
+        if (!last || !cf || cf.some((v, i) => v !== last[i])) {
+          this.physics.stir = true;
+          rec.lastStepCF = cf ? cf.slice() : null;
+        }
+      }
       this.physics.step(dt);
       this.syncAssemblies();
       if (this.handleTouches()) this.host.tick(this.t);

@@ -302,7 +302,7 @@ export class Animations {
       const used = new Set();
       if (blend.size) {
         for (const d of model.descendants()) {
-          if (!d.isA('JointInstance')) continue;
+          if (!d.isA('Motor') && d.ClassName !== 'VelocityMotor') continue;
           const p1 = d.props.get('Part1');
           const cf = p1 ? blend.get(p1.props.get('Name')) : null;
           if (cf) {

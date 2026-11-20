@@ -17,7 +17,66 @@ const MAX_MSG = 64 * 1024;
 const MAX_RATE = 120;
 const MAX_STUDIO_MSG = 8 * 1024 * 1024;
 const MAX_STUDIO_RATE = 400;
+const MAX_SOCKETS_PER_IP = 40;
+const MAX_PENDING_PER_IP = 8;
+const MAX_CONNECTS_PER_MIN = 90;
+const MAX_SOCKETS_PER_USER = 4;
+const MAX_REDEEMS_INFLIGHT = 24;
+const MAX_BAD_TICKETS = 20;
+const MAX_INSTANCES = 60;
+const MAX_STARTS_PER_USER = 4;
+const START_WINDOW_MS = 5 * 60 * 1000;
+const JOIN_TIMEOUT_MS = 20 * 1000;
+const MAX_BUFFERED = 48 * 1024 * 1024;
+const RATE_STRIKES = 6;
+const ipStats = new Map();
+const userStarts = new Map();
+let redeemsInflight = 0;
 const studios = new Map();
+
+function clientIp(req) {
+  const raw = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$)/.test(raw)) {
+    const hops = String(req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '').split(',').map((s) => s.trim().replace(/^::ffff:/, '')).filter((s) => /^[0-9a-f:.]{3,45}$/i.test(s));
+    for (let i = hops.length - 1; i >= 0; i--) {
+      if (!/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1$|f[cd][0-9a-f]{2}:)/i.test(hops[i])) return hops[i];
+    }
+    if (hops.length) return hops[0];
+  }
+  return raw || 'unknown';
+}
+
+function ipEntry(ip) {
+  let e = ipStats.get(ip);
+  if (!e) {
+    e = { open: 0, pending: 0, connects: [], bad: 0, badAt: 0 };
+    ipStats.set(ip, e);
+  }
+  return e;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, e] of ipStats) {
+    e.connects = e.connects.filter((t) => now - t < 60000);
+    if (now - e.badAt > 60000) e.bad = 0;
+    if (!e.open && !e.pending && !e.connects.length && !e.bad) ipStats.delete(ip);
+  }
+  for (const [uid, list] of userStarts) {
+    const keep = list.filter((t) => now - t < START_WINDOW_MS);
+    if (keep.length) userStarts.set(uid, keep);
+    else userStarts.delete(uid);
+  }
+}, 30000).unref();
+
+function drop(ws, code, why, text) {
+  try {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'kick', m: text || why }));
+  } catch {}
+  try {
+    ws.close(code, why);
+  } catch {}
+}
 const KEY = String(config.key || '');
 const REDEEM = siteUrl('redeem');
 
@@ -42,20 +101,44 @@ function jobId() {
   return `${Date.now().toString(36)}${(nextJob++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+const TRANSIENT_START = /out of bounds|unreachable|RuntimeError|WebAssembly|Aborted\(|memory/i;
+
 function startInstance(placeId, kind, privateId, max, allowGear, era = 2012, extra = {}) {
   const id = jobId();
-  const worker = new Worker(path.join(HERE, 'worker.js'), { workerData: { placeId, jobId: id, kind, privateId, allowGear, era, placeData: extra.placeData || null, debug: extra.debug || null }, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
-  const p = { id, placeId, kind, privateId, max, era, worker, members: new Map(), ready: false, dead: false, idleTimer: null, failed: null, started: Date.now(), allowed: extra.allowed || null };
+  const p = { id, placeId, kind, privateId, max, era, worker: null, members: new Map(), joins: new Map(), ready: false, dead: false, idleTimer: null, failed: null, started: Date.now(), allowed: extra.allowed || null, attempt: 0, spec: { placeId, jobId: id, kind, privateId, allowGear, era, placeData: extra.placeData || null, debug: extra.debug || null } };
   places.set(id, p);
   const tag = `[place ${placeId} ${kind === 'public' ? id : kind + ' ' + privateId}]`;
   p.tag = tag;
+  spawnWorker(p);
+  log(`${tag} starting (max ${max}, ${era} client)`);
+  return p;
+}
+
+function spawnWorker(p) {
+  const { id, tag } = p;
+  const worker = new Worker(path.join(HERE, 'worker.js'), { workerData: p.spec, resourceLimits: { maxOldGenerationSizeMb: 1024 } });
+  p.worker = worker;
+  p.ready = false;
   worker.on('message', (m) => {
+    if (p.worker !== worker) return;
     if (m.t === 'send') {
       const s = sockets.get(m.cid);
-      if (s && s.ws.readyState === 1) s.ws.send(m.data);
+      if (s && s.ws.readyState === 1) {
+        if (s.ws.bufferedAmount > MAX_BUFFERED) {
+          log(`${tag} socket ${m.cid} (${s.userId || '?'}) too slow, buffered ${s.ws.bufferedAmount} bytes, dropping`);
+          drop(s.ws, 4006, 'too slow', 'You were disconnected because your connection could not keep up with the game.');
+          return;
+        }
+        try {
+          s.ws.send(m.data);
+        } catch (e) {
+          log(`${tag} send to socket ${m.cid} failed: ${e && e.message}`);
+        }
+      }
     } else if (m.t === 'kick') {
       const s = sockets.get(m.cid);
       if (s) {
+        log(`${tag} kicking socket ${m.cid} (${s.userId || '?'}): ${m.reason}`);
         try {
           s.ws.send(JSON.stringify({ t: 'kick', m: m.reason }));
         } catch {}
@@ -72,10 +155,19 @@ function startInstance(placeId, kind, privateId, max, allowGear, era = 2012, ext
       if (p.debugSend) p.debugSend({ t: 'dbg', side: 'server', pause: m.data });
     } else if (m.t === 'ready') {
       p.ready = true;
-      log(`${tag} ready`);
+      log(`${tag} ready${p.attempt ? ` (attempt ${p.attempt + 1})` : ''}`);
     } else if (m.t === 'failed') {
+      log(`${tag} failed to start (attempt ${p.attempt + 1}): ${m.error}`);
+      if (p.kind !== 'test' && p.attempt < 2 && TRANSIENT_START.test(String(m.error)) && !p.dead) {
+        p.attempt++;
+        p.worker = null;
+        worker.terminate().catch(() => {});
+        log(`${tag} retrying with a fresh worker (attempt ${p.attempt + 1})`);
+        spawnWorker(p);
+        for (const [cid, user] of p.joins) if (p.members.has(cid)) p.worker.postMessage({ t: 'join', cid, user });
+        return;
+      }
       p.failed = m.error;
-      log(`${tag} failed to start: ${m.error}`);
       for (const cid of p.members.keys()) {
         const s = sockets.get(cid);
         if (s) {
@@ -89,20 +181,25 @@ function startInstance(placeId, kind, privateId, max, allowGear, era = 2012, ext
     }
   });
   worker.on('error', (e) => {
+    if (p.worker !== worker) return;
     log(`${tag} worker error: ${e.stack || e.message}`);
   });
   worker.on('exit', (code) => {
+    if (p.worker !== worker) return;
     p.dead = true;
     if (places.get(id) === p) places.delete(id);
     log(`${tag} worker exited (${code})`);
     for (const cid of p.members.keys()) {
       const s = sockets.get(cid);
-      if (s) s.ws.close(4002, 'server stopped');
+      if (s) drop(s.ws, 4002, 'server stopped', code ? 'The game server crashed and was stopped. Rejoin to start a new one.' : 'The game server stopped.');
     }
     pushPresence();
   });
-  log(`${tag} starting (max ${max}, ${era} client)`);
-  return p;
+}
+
+function postJoin(p, cid, user) {
+  p.joins.set(cid, user);
+  p.worker.postMessage({ t: 'join', cid, user });
 }
 
 function cleanPerks(p) {
@@ -135,6 +232,19 @@ function cleanGearMap(v) {
   return out;
 }
 
+function startAllowed(info) {
+  let live = 0;
+  for (const x of places.values()) if (!x.dead) live++;
+  if (live >= MAX_INSTANCES) return 'The server is busy right now. Try again in a moment.';
+  const uid = info.userId | 0;
+  const now = Date.now();
+  const list = (userStarts.get(uid) || []).filter((t) => now - t < START_WINDOW_MS);
+  if (list.length >= MAX_STARTS_PER_USER) return 'You have started too many servers recently. Wait a few minutes and try again.';
+  list.push(now);
+  userStarts.set(uid, list);
+  return null;
+}
+
 function chooseInstance(info) {
   const placeId = info.placeId | 0;
   const max = Math.max(1, Math.min(100, (info.maxPlayers | 0) || DEFAULT_MAX));
@@ -146,7 +256,11 @@ function chooseInstance(info) {
     const kind = m[1] === 'priv' ? 'private' : 'reserved';
     const privateId = +m[2];
     let p = [...places.values()].find((x) => !x.dead && x.placeId === placeId && x.kind === kind && x.privateId === privateId && x.era === era);
-    if (!p) p = startInstance(placeId, kind, privateId, max, allowGear, era);
+    if (!p) {
+      const why = startAllowed(info);
+      if (why) return { busy: why };
+      p = startInstance(placeId, kind, privateId, max, allowGear, era);
+    }
     p.max = max;
     return p.members.size >= p.max ? { full: true } : { p };
   }
@@ -163,6 +277,8 @@ function chooseInstance(info) {
   }
   const open = live.filter((x) => x.members.size < x.max).sort((a, b) => b.members.size - a.members.size || a.started - b.started);
   if (open.length) return { p: open[0] };
+  const why = startAllowed(info);
+  if (why) return { busy: why };
   return { p: startInstance(placeId, 'public', 0, max, allowGear, era) };
 }
 
@@ -509,30 +625,83 @@ function restartSelf() {
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_STUDIO_MSG, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
 
 server.on('upgrade', (req, socket, head) => {
-  const url = new URL(req.url, 'http://x');
+  socket.on('error', () => {});
+  let url;
+  try {
+    url = new URL(req.url, 'http://x');
+  } catch {
+    socket.destroy();
+    return;
+  }
   if (!/\/ws\/?$/.test(url.pathname)) {
     socket.destroy();
     return;
   }
+  const ip = clientIp(req);
+  const e = ipEntry(ip);
+  const now = Date.now();
+  e.connects = e.connects.filter((t) => now - t < 60000);
+  if (e.open >= MAX_SOCKETS_PER_IP || e.pending >= MAX_PENDING_PER_IP || e.connects.length >= MAX_CONNECTS_PER_MIN || e.bad >= MAX_BAD_TICKETS) {
+    log(`refused connection from ${ip}: open ${e.open}, pending ${e.pending}, recent ${e.connects.length}, bad tickets ${e.bad}`);
+    socket.end('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    return;
+  }
+  e.connects.push(now);
+  req.solarIp = ip;
   wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req, url));
 });
 
 wss.on('connection', async (ws, req, url) => {
   const cid = nextCid++;
   const ticket = url.searchParams.get('ticket') || '';
-  const s = { ws, cid, place: null, joined: false, count: 0, window: Date.now() };
+  const ip = req.solarIp || 'unknown';
+  const ipe = ipEntry(ip);
+  const s = { ws, cid, ip, place: null, joined: false, count: 0, window: Date.now(), over: false, strikes: 0, pend: true };
+  ipe.open++;
+  ipe.pending++;
   sockets.set(cid, s);
-  ws.on('error', (e) => log(`socket ${cid} error: ${e && e.message}`));
+  const release = () => {
+    if (s.pend) {
+      s.pend = false;
+      ipe.pending = Math.max(0, ipe.pending - 1);
+    }
+  };
+  const joinTimer = setTimeout(() => {
+    if (!s.joined) {
+      log(`socket ${cid} from ${ip} did not finish joining in time`);
+      drop(ws, 4003, 'join timeout', 'Joining the game took too long. Reload the page to try again.');
+    }
+  }, JOIN_TIMEOUT_MS);
+  ws.on('error', (e) => log(`socket ${cid} (${s.userId || '?'}) error: ${e && e.message}`));
   const early = [];
   ws.on('message', (data, isBinary) => {
-    if (isBinary) return;
-    if (!s.studio && !s.solo && data.length > MAX_MSG) return;
+    if (isBinary || s.dropped) return;
+    const big = !s.studio && !s.solo && data.length > MAX_MSG;
+    if (big) {
+      if (s.joined) {
+        log(`socket ${cid} (${s.userId || '?'}) sent an oversized message (${data.length} bytes), disconnecting`);
+        s.dropped = true;
+        drop(ws, 4005, 'message too large', 'You were disconnected for sending too much data.');
+      }
+      return;
+    }
     const now = Date.now();
     if (now - s.window > 1000) {
       s.window = now;
       s.count = 0;
+      s.strikes = s.over ? s.strikes + 1 : 0;
+      s.over = false;
+      if (s.strikes >= RATE_STRIKES) {
+        log(`socket ${cid} (${s.userId || '?'}) from ${ip} flooded messages for ${s.strikes}s, disconnecting`);
+        s.dropped = true;
+        drop(ws, 4005, 'rate limited', 'You were disconnected for sending too many messages.');
+        return;
+      }
     }
-    if (++s.count > (s.studio || s.solo ? MAX_STUDIO_RATE : MAX_RATE)) return;
+    if (++s.count > (s.studio || s.solo ? MAX_STUDIO_RATE : MAX_RATE)) {
+      s.over = true;
+      return;
+    }
     const str = data.toString();
     if (!s.joined) {
       if (early.length < 50 && str.length <= MAX_MSG) early.push(str);
@@ -545,8 +714,12 @@ wss.on('connection', async (ws, req, url) => {
       s.place.worker.postMessage({ t: 'msg', cid, data: str });
     }
   });
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
+    clearTimeout(joinTimer);
+    release();
+    ipe.open = Math.max(0, ipe.open - 1);
     sockets.delete(cid);
+    log(`socket ${cid} (${s.userId || '?'}) from ${ip} closed: ${code}${reason && reason.length ? ' ' + String(reason).slice(0, 80) : ''}${s.place ? ' ' + s.place.tag : ''}`);
     if (s.solo) {
       if (s.solo.test) shutdown(s.solo.test);
       return;
@@ -565,19 +738,35 @@ wss.on('connection', async (ws, req, url) => {
     }
     if (s.place) {
       s.place.members.delete(cid);
+      s.place.joins.delete(cid);
       if (!s.place.dead) s.place.worker.postMessage({ t: 'leave', cid });
       scheduleIdle(s.place);
       pushPresence();
     }
   });
   if (!/^[a-f0-9]{64}$/.test(ticket)) {
+    ipe.bad++;
+    ipe.badAt = Date.now();
     ws.close(4003, 'bad ticket');
     return;
   }
-  const info = await redeem(ticket);
+  if (redeemsInflight >= MAX_REDEEMS_INFLIGHT) {
+    drop(ws, 4010, 'busy', 'The server is busy. Try again in a moment.');
+    return;
+  }
+  redeemsInflight++;
+  let info;
+  try {
+    info = await redeem(ticket);
+  } finally {
+    redeemsInflight--;
+    release();
+  }
   if (ws.readyState !== 1) return;
   if (info) s.userId = info.userId | 0;
   if (!info) {
+    ipe.bad++;
+    ipe.badAt = Date.now();
     ws.send(JSON.stringify({ t: 'kick', m: 'Your join ticket is invalid or has expired. Reload the page to try again.' }));
     ws.close(4003, 'bad ticket');
     return;
@@ -627,7 +816,20 @@ wss.on('connection', async (ws, req, url) => {
     ws.close(4003, 'bad ticket');
     return;
   }
+  let sameUser = 0;
+  for (const o of sockets.values()) if (o !== s && o.userId === s.userId) sameUser++;
+  if (sameUser >= MAX_SOCKETS_PER_USER) {
+    drop(ws, 4010, 'too many connections', 'You have too many game connections open.');
+    return;
+  }
+  try {
+    ws._receiver._maxPayload = MAX_MSG;
+  } catch {}
   const pick = chooseInstance(info);
+  if (pick.busy) {
+    drop(ws, 4010, 'busy', pick.busy);
+    return;
+  }
   if (pick.denied) {
     ws.send(JSON.stringify({ t: 'kick', m: 'This Team Test is only for the place\'s editors.' }));
     ws.close(4003, 'denied');
@@ -643,7 +845,7 @@ wss.on('connection', async (ws, req, url) => {
   s.place = p;
   const joinedAt = Date.now();
   p.members.set(cid, { id: info.userId | 0, name: String(info.username), joinedAt, lastActive: joinedAt, acts: 0, kinds: new Set(), cells: new Set(), px: undefined, pz: undefined });
-  p.worker.postMessage({ t: 'join', cid, user: { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6', scale: cleanScale(info.scale), gearGenres: cleanGenres(info.gearGenres), gearMap: cleanGearMap(info.gearMap), animations: Array.isArray(info.animations) ? info.animations.map((a) => String(a)).filter((a) => /^\d{1,20}$/.test(a)).slice(0, 16) : [] } });
+  postJoin(p, cid, { id: info.userId | 0, name: String(info.username), membership: info.membership | 0, age: info.age | 0, dev: !!info.dev, perks: cleanPerks(info.perks), avatarType: info.avatarType === 'R15' ? 'R15' : 'R6', scale: cleanScale(info.scale), gearGenres: cleanGenres(info.gearGenres), gearMap: cleanGearMap(info.gearMap), animations: Array.isArray(info.animations) ? info.animations.map((a) => String(a)).filter((a) => /^\d{1,20}$/.test(a)).slice(0, 16) : [] });
   s.joined = true;
   for (const str of early.splice(0)) p.worker.postMessage({ t: 'msg', cid, data: str });
   log(`${p.tag} ${info.username} (${info.userId}) connected`);
@@ -653,20 +855,21 @@ wss.on('connection', async (ws, req, url) => {
 setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.readyState !== 1) continue;
-    if (ws.solarAlive === false) {
+    if (ws.solarMiss >= 2) {
+      log(`socket timed out (no pong for ${ws.solarMiss} pings), terminating`);
       ws.terminate();
       continue;
     }
-    ws.solarAlive = false;
+    ws.solarMiss = (ws.solarMiss || 0) + 1;
     try {
       ws.ping();
     } catch {}
   }
-}, 25000);
+}, 20000);
 wss.on('connection', (ws) => {
-  ws.solarAlive = true;
-  ws.on('pong', () => (ws.solarAlive = true));
-  ws.on('message', () => (ws.solarAlive = true));
+  ws.solarMiss = 0;
+  ws.on('pong', () => (ws.solarMiss = 0));
+  ws.on('message', () => (ws.solarMiss = 0));
 });
 
 server.listen(PORT, HOST, () => {

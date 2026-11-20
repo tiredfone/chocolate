@@ -1,13 +1,13 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { Lua } from 'wasmoon-lua5.1';
 import { Net } from './net.js';
-import { ClientWorld } from './world.js';
+import { ClientWorld, prefetch2018 } from './world.js';
 import { Renderer } from './render.js';
 import { CameraController } from './camera.js';
 import { Gui } from './gui.js';
 import { TouchInput, detectTouch } from './touch.js';
 import { T } from '../shared/luahost.js';
-import { configure, publicPath, endpointUrl, loadContentIndex, contentUrl } from './assets.js';
+import { configure, publicPath, endpointUrl, loadContentIndex, contentUrl, animationBytes } from './assets.js';
 import { CursorLayer, CURSORS } from './cursor.js';
 import { DevConsole } from './devconsole.js';
 import { Input2018 } from './input2018.js';
@@ -94,6 +94,10 @@ function wsUrl(path) {
 
 async function boot() {
   setStatus('Requesting a server');
+  if (cfg.clientVersion === 2018) {
+    prefetch2018(cfg.version);
+    fetch(publicPath('/client/vendor/liblua5.1.wasm')).catch(() => {});
+  }
   const [t, src] = await Promise.all([ticket(), fetch(publicPath('/shared/runtime.lua?v=') + cfg.version).then((r) => r.text()), RAPIER.init(), loadContentIndex()]);
   setStatus('Connecting');
   const net = new Net();
@@ -105,7 +109,19 @@ async function boot() {
     showFatal('Disconnected', m.m || 'You were disconnected from the game.');
   });
   net.on('close', (ev) => {
-    if (!kicked) showFatal('Connection lost', ev.code === 4003 ? 'Your join ticket was not accepted. Reload the page to try again.' : 'The connection to the game server was closed.');
+    if (kicked) return;
+    const reasons = {
+      4001: 'This game could not be started.',
+      4002: 'The game server stopped.',
+      4003: 'Your join ticket was not accepted. Reload the page to try again.',
+      4005: 'You were disconnected for sending too much data.',
+      4006: 'Your connection could not keep up with the game.',
+      4007: 'Too many connections from your network. Try again in a minute.',
+      4010: 'The server is busy. Try again in a moment.',
+      1006: 'The connection to the game server dropped (network problem or timeout).',
+      1012: 'The game server is restarting. Reload in a few seconds.',
+    };
+    showFatal('Connection lost', (reasons[ev.code] || 'The connection to the game server was closed.') + ' (code ' + ev.code + ')');
   });
   net.on('anim', (m) => {
     if (world && world.ready) world.remoteAnim(m);
@@ -151,6 +167,10 @@ async function boot() {
       const prev = world.friendStatus.get(+id) || 1;
       world.friendStatus.set(+id, st | 0);
       if (other && world.player && prev !== (st | 0)) world.dm.emit(world.player, 'FriendStatusChanged', other, T.e('FriendStatus', st | 0));
+      if ((st | 0) !== 1) for (const delay of [700, 2500, 6000]) setTimeout(() => {
+        const o2 = world.dm.byId.get(+id);
+        if (o2 && !o2.destroyed && world.player && world.friendStatus.get(+id) === (st | 0)) world.dm.emit(world.player, 'FriendStatusChanged', o2, T.e('FriendStatus', st | 0));
+      }, delay);
     }
   };
   const applyFre = (m) => {
@@ -193,6 +213,7 @@ async function boot() {
   });
   net.on('init', async (m) => {
     setStatus('Loading the world');
+    if (m.era === 2018 && Array.isArray(m.anims)) for (const id of m.anims) animationBytes(id).catch(() => {});
     let input2018 = null;
     try {
       world = new ClientWorld(net, {
@@ -243,6 +264,7 @@ async function boot() {
           a.click();
         },
         message: () => status.textContent,
+        animProgress: (done, total) => setStatus(`Loading animations (${done}/${total})`),
         zoomCamera: (d) => camera && camera.zoomBy(Math.exp(-d * 0.15)),
         log: (k, msg, where) => {
           const line = where ? `${where}: ${msg}` : msg;
@@ -290,6 +312,7 @@ async function boot() {
         flush: () => world.host.tick(world.t),
       });
       if (world.host && world.host.env) world.host.env.textBounds = (inst) => gui.textBounds(inst);
+      if (world.host && world.host.env) world.host.env.absoluteSize = (inst) => gui.absoluteSize(inst);
       if (touch) new TouchInput(world, renderer, gui, root, canvas);
       if (world.era === 2018) {
         input2018 = new Input2018(world, gui, canvas, root);
@@ -306,7 +329,7 @@ async function boot() {
       for (const p of pending.splice(0)) if (p.t === 'anim') world.remoteAnim(p); else if (p.t === 'fs') applyFs(p); else if (p.t === 'fre') applyFre(p); else if (p.t === 're' || p.t === 'rfc' || p.t === 'rfr') world.onRemote(p); else if (p.t === 'terrain') world.applyTerrain(p); else world.applyRep(p);
       const animsReady = world.era === 2018 && Array.isArray(m.anims) && m.anims.length
         ? Promise.race([
-          world.anims.preload(m.anims, (done, total) => setStatus(`Loading animations (${done}/${total})`)),
+          world.animsReady || world.anims.preload(m.anims, (done, total) => setStatus(`Loading animations (${done}/${total})`)),
           new Promise((r) => setTimeout(r, 20000)),
         ])
         : Promise.resolve();

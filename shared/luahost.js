@@ -1445,6 +1445,7 @@ function buildComputed(host) {
     const v = host.env && host.env.textBounds ? host.env.textBounds(t) : null;
     return T.v2(v || t.props.get('TextBounds') || [0, 0]);
   };
+  def('AbsoluteSize', 'GuiObject', (g) => T.v2((host.env && host.env.absoluteSize ? host.env.absoluteSize(g) : null) || g.props.get('AbsoluteSize') || [0, 0]));
   def('TextBounds', 'TextLabel', textBounds);
   def('TextBounds', 'TextButton', textBounds);
   def('TextBounds', 'TextBox', textBounds);

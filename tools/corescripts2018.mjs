@@ -48,6 +48,7 @@ const addPlayer = (name, uid) => {
   const pl = dm.create('Player', null);
   pl.props.set('Name', name);
   pl.props.set('userId', uid);
+  pl.props.set('UserId', uid);
   for (const c of ['PlayerGui', 'Backpack', 'PlayerScripts']) {
     const x = dm.create(c, null);
     x.props.set('Name', c);
@@ -124,14 +125,33 @@ if (SERVER) {
   for (const s of sps.children) { const c = dm.clone(s); if (c) dm.setParent(c, player.findChildOfClass('PlayerScripts')); }
   await tick(15);
   spawnCharacter(player);
+  for (let i = 0; i < +(process.env.PLAYERS || 0); i++) dm.setParent(addPlayer('Other' + (i + 1), 10 + i), players);
 }
 if (process.env.LUA && !SERVER) {
-  const ls = dm.create('LocalScript', null);
+  const ls = dm.create(process.env.CORE ? 'CoreScript' : 'LocalScript', null);
   ls.props.set('Name', 'Probe');
   ls.props.set('Source', process.env.LUA);
-  dm.setParent(ls, player.findChildOfClass('PlayerGui'));
+  dm.setParent(ls, process.env.CORE ? dm.services.get('ScriptContext') : player.findChildOfClass('PlayerGui'));
 }
 await tick(Math.round(SECONDS * 30));
+
+if (process.env.GUICLICKS && !SERVER) {
+  for (const spec of process.env.GUICLICKS.split(',')) {
+    const [name, evt, nth] = spec.split(':');
+    const hits = rg.descendants().filter((d) => (name.includes('.') ? d.fullName().endsWith(name) : d.props.get('Name') === name));
+    const target = hits[+(nth || 0)];
+    console.log('guiclick', name, evt || 'MouseButton1Click', hits.length, !!target);
+    if (target) dm.emit(target, evt || 'MouseButton1Click', 5, 7);
+    await tick(20);
+  }
+  if (process.env.LUA2) {
+    const l2 = dm.create('CoreScript', null);
+    l2.props.set('Name', 'Probe2');
+    l2.props.set('Source', process.env.LUA2);
+    dm.setParent(l2, dm.services.get('ScriptContext'));
+    await tick(20);
+  }
+}
 
 if (process.env.KEY && !SERVER) {
   const uis = dm.services.get('UserInputService');

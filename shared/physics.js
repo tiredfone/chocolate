@@ -283,7 +283,8 @@ export class Physics {
   shapeDesc(part) {
     const R = this.R;
     const s = part.props.get('Size');
-    const hx = Math.max(0.05, s[0] / 2), hy = Math.max(0.05, s[1] / 2), hz = Math.max(0.05, s[2] / 2);
+    const half = (v) => (Number.isFinite(v) ? Math.min(1e5, Math.max(0.05, v / 2)) : 0.05);
+    const hx = half(s[0]), hy = half(s[1]), hz = half(s[2]);
     const cls = part.ClassName;
     let d;
     let rot = null;
@@ -355,6 +356,7 @@ export class Physics {
 
   makeCollider(rec, body = null, offset = null) {
     const part = rec.part;
+    this.stir = true;
     if (rec.collider) {
       this.byHandle.delete(rec.collider.handle);
       this.world.removeCollider(rec.collider, true);
@@ -390,6 +392,7 @@ export class Physics {
   removePart(part) {
     const rec = this.parts.get(part);
     if (!rec) return;
+    this.stir = true;
     this.parts.delete(part);
     const asm = rec.asm;
     if (rec.collider) {
@@ -853,6 +856,7 @@ export class Physics {
   }
 
   flush() {
+    if (this.pendingJoin.size || this.dirty.size || this.hingesDirty) this.stir = true;
     if (this.pendingJoin.size) {
       const list = [...this.pendingJoin].filter((p) => this.parts.has(p));
       this.pendingJoin.clear();
@@ -998,6 +1002,7 @@ export class Physics {
   moved(part, rec, opts) {
     const cf = part.props.get('CFrame');
     if (!rec.collider) return;
+    this.stir = true;
     const asm = rec.asm;
     if (asm && asm.body) {
       const target = C.mul(cf, C.inv(rec.local));
@@ -1023,7 +1028,7 @@ export class Physics {
   applyMovers(dt) {
     if (!this.forced) this.forced = new Set();
     for (const b of this.forced) {
-      if (this.world.bodies.contains(b.handle)) {
+      if (this.world.getRigidBody(b.handle) === b) {
         b.resetForces(false);
         b.resetTorques(false);
       }
@@ -1032,7 +1037,7 @@ export class Physics {
     if (this.loads && this.loads.size) {
       const now = Date.now();
       for (const [key, l] of this.loads) {
-        if (now - l.at > 250 || !this.world.bodies.contains(l.body.handle)) {
+        if (now - l.at > 250 || this.world.getRigidBody(l.body.handle) !== l.body) {
           this.loads.delete(key);
           continue;
         }
@@ -1141,14 +1146,21 @@ export class Physics {
     if (!this.simulate) return;
     this.acc = Math.min(this.acc + dt, STEP * 4);
     while (this.acc >= STEP) {
+      this.acc -= STEP;
+      const busy = this.stir || this.anyAwake !== false || this.vehicleSeats.size || this.skateboards.size || (this.forced && this.forced.size) || (this.loads && this.loads.size);
+      if (!busy) continue;
+      this.stir = false;
       this.applyMovers(STEP);
       if (this.vehicleSeats.size) this.driveVehicles();
       if (this.skateboards.size) this.driveSkateboards(STEP);
       this.world.step(this.events, this.pushHooks());
-      this.acc -= STEP;
       this.drainEvents();
+      this.stirWrite = true;
     }
-    this.writeBack();
+    if (this.stirWrite || this.anyAwake !== false) {
+      this.stirWrite = false;
+      this.writeBack();
+    }
   }
 
   pushHooks() {
@@ -1210,6 +1222,7 @@ export class Physics {
 
   writeBack() {
     const fallen = [];
+    let awakeCount = 0;
     const destroyY = this.ws ? this.ws.props.get('FallenPartsDestroyHeight') : -500;
     for (const asm of this.assemblies) {
       const body = asm.body;
@@ -1225,6 +1238,7 @@ export class Physics {
         continue;
       }
       asm.sleeping = false;
+      awakeCount++;
       const bcf = cfOf(body.translation(), body.rotation());
       const lv = body.linvel(), av = body.angvel();
       const vel = [lv.x, lv.y, lv.z], avel = [av.x, av.y, av.z];
@@ -1240,6 +1254,7 @@ export class Physics {
         this.dm.setProp(p, 'RotVelocity', avel, { physics: true });
       }
     }
+    this.anyAwake = awakeCount > 0;
     for (const asm of fallen) {
       const parts = [...asm.parts];
       if (this.onFallen) this.onFallen(parts);

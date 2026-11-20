@@ -20,7 +20,7 @@ let started = false;
 
 parentPort.on('message', (m) => {
   if (!started) {
-    queue.push(m);
+    if (queue.length < 2000 || m.t === 'join' || m.t === 'leave' || m.t === 'stop') queue.push(m);
     return;
   }
   dispatch(m);

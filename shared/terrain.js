@@ -138,14 +138,23 @@ export class TerrainData {
     return { cx, cy, cz, mat: new Uint8Array(N), occ: new Uint8Array(N), block: cells ? new Uint8Array(N) : ZERO, orient: cells ? new Uint8Array(N) : ZERO, count: 0 };
   }
 
+  look(x, y, z) {
+    const cx = div(x), cy = div(y), cz = div(z);
+    const l = this.last;
+    if (l && l.cx === cx && l.cy === cy && l.cz === cz) return l;
+    const c = this.chunks.get(keyOf(cx, cy, cz));
+    if (c) this.last = c;
+    return c;
+  }
+
   get(x, y, z) {
-    const c = this.chunks.get(keyOf(div(x), div(y), div(z)));
+    const c = this.look(x, y, z);
     if (!c) return 0;
     return c.mat[idx(mod(x), mod(y), mod(z))];
   }
 
   occ(x, y, z) {
-    const c = this.chunks.get(keyOf(div(x), div(y), div(z)));
+    const c = this.look(x, y, z);
     if (!c) return 0;
     const i = idx(mod(x), mod(y), mod(z));
     return c.mat[i] ? c.occ[i] : 0;
@@ -178,7 +187,10 @@ export class TerrainData {
     c.block[i] = b;
     c.orient[i] = r;
     this.touch(x, y, z);
-    if (c.count <= 0) this.chunks.delete(keyOf(cx, cy, cz));
+    if (c.count <= 0) {
+      this.chunks.delete(keyOf(cx, cy, cz));
+      this.last = null;
+    }
     return true;
   }
 
@@ -217,6 +229,7 @@ export class TerrainData {
     for (const k of this.chunks.keys()) this.dirty.add(k);
     for (const c of this.chunks.values()) for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) for (let d = -1; d <= 1; d++) this.dirty.add(keyOf(c.cx + a, c.cy + b, c.cz + d));
     this.chunks.clear();
+    this.last = null;
   }
 
   bounds() {
@@ -273,6 +286,7 @@ export class TerrainData {
       const k = keyOf(cx, cy, cz);
       const has = r.byte();
       if (!has) {
+        this.last = null;
         if (this.chunks.delete(k)) changed.push(k);
         continue;
       }
@@ -287,6 +301,7 @@ export class TerrainData {
       }
       for (let j = 0; j < N; j++) if (c.mat[j] > (this.era === 2018 ? SMOOTH_MATERIALS.length - 1 : CELL_MATERIALS.length - 1)) c.mat[j] = 0;
       for (let j = 0; j < N; j++) if (c.mat[j]) c.count++;
+      this.last = null;
       if (c.count) this.chunks.set(k, c);
       else this.chunks.delete(k);
       changed.push(k);

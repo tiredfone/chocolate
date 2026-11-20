@@ -34,6 +34,9 @@ export function rootOf(model) {
   return model ? model.findChild('Torso') || model.findChild('HumanoidRootPart') : null;
 }
 
+const CLIMB_PUSH = 8;
+const CLIMB_PUSH_TIME = 0.3;
+const CLIMB_REGRAB = 0.5;
 export const STATES = { idle: 0, walk: 1, jump: 2, fall: 3, sit: 4, climb: 5, dead: 6, stand: 7, swim: 8 };
 export const STATE_NAMES = Object.fromEntries(Object.entries(STATES).map(([k, v]) => [v, k]));
 
@@ -399,17 +402,34 @@ export class Controller {
     let prev = Infinity;
     const minRise = this.state === STATES.climb && this.ledgeTop !== undefined ? 0.3 : 2.6;
     let lastHit = -Infinity;
+    const ds = [];
     for (let k = 0; k <= 22; k++) {
       const y = foot + k * 0.25;
       const r = this.ph.raycast([this.pos[0], y, this.pos[2]], [dir[0] * reach, 0, dir[2] * reach], [this.model], (q) => q.ClassName !== 'Terrain' && q.props.get('CanCollide') && !liveCharacterOf(q));
       const facing = r.part && Math.abs(r.normal[1]) < 0.35 && r.normal[0] * dir[0] + r.normal[2] * dir[2] < -0.5;
-      const d = facing ? Math.hypot(r.point[0] - this.pos[0], r.point[2] - this.pos[2]) : Infinity;
+      ds.push(facing ? Math.hypot(r.point[0] - this.pos[0], r.point[2] - this.pos[2]) : Infinity);
+    }
+    let seen = false, gap = 0, rungs = false;
+    for (const d of ds) {
+      if (d < Infinity) {
+        if (seen && gap >= 3) rungs = true;
+        seen = true;
+        gap = 0;
+      } else if (seen) gap++;
+    }
+    for (let k = 0; k <= 22; k++) {
+      const y = foot + k * 0.25;
+      const d = ds[k];
       if (d < Infinity) lastHit = y;
       if (k * 0.25 >= minRise && prev <= reach && d > prev + 0.8) {
         this.ledgeTop = lastHit + 0.25;
         return true;
       }
       prev = d;
+    }
+    if (rungs) {
+      this.ledgeTop = undefined;
+      return true;
     }
     return false;
   }
@@ -531,8 +551,27 @@ export class Controller {
     else this.jumpHeldFor = Math.max(0, (this.jumpHeldFor || 0) - dt);
     const wantJump = this.jumpHeldFor > 0 && !platform;
     if (hum.props.get('Jump')) hum.dm.setProp(hum, 'Jump', false, { local: true });
-    const moving = !platform && this.climbCheck(dir);
-    const holding = !moving && !platform && !wantJump && ml <= 1e-3 && this.state === STATES.climb && hum.dm && hum.dm.era === 2018 && this.climbDir && this.climbCheck(this.climbDir);
+    this.climbBlock = Math.max(0, (this.climbBlock || 0) - dt);
+    if (!platform && wantJump && this.state === STATES.climb && this.climbDir) {
+      this.climbOff = { dir: [-this.climbDir[0], 0, -this.climbDir[2]], t: CLIMB_PUSH_TIME };
+      this.climbBlock = CLIMB_REGRAB;
+      this.vel[1] = (hum.props.get('JumpPower') || 50) * 0.8;
+      this.grounded = false;
+      this.jumped = true;
+      this.jumpHeldFor = 0;
+      this.ledgeTop = undefined;
+      this.state = STATES.jump;
+    }
+    if (this.climbOff && this.climbOff.t > 0) {
+      const push = Math.max(CLIMB_PUSH, ws * 0.6);
+      this.vel[0] = this.climbOff.dir[0] * push;
+      this.vel[2] = this.climbOff.dir[2] * push;
+      this.climbOff.t -= dt;
+    }
+    const canClimb = !platform && this.climbBlock <= 0;
+    const moving = canClimb && this.climbCheck(dir);
+    const dotc = this.climbDir && ml > 1e-3 ? dir[0] * this.climbDir[0] + dir[2] * this.climbDir[2] : 0;
+    const holding = !moving && canClimb && !this.grounded && this.state === STATES.climb && this.climbDir && (ml <= 1e-3 || dotc <= 0.5) && this.climbCheck(this.climbDir);
     const climbing = moving || holding;
     let fell = false;
     let swimming = false;
@@ -546,7 +585,9 @@ export class Controller {
     }
     this.swimming = swimming;
     if (holding) {
-      this.vel[1] = 0;
+      this.vel[1] = dotc < -0.5 ? -ws * 0.7 : 0;
+      this.vel[0] = ml > 1e-3 ? (dir[0] - this.climbDir[0] * dotc) * ws * 0.7 : 0;
+      this.vel[2] = ml > 1e-3 ? (dir[2] - this.climbDir[2] * dotc) * ws * 0.7 : 0;
       this.state = STATES.climb;
     } else if (climbing) {
       this.vel[1] = ws * 0.7;
@@ -620,7 +661,9 @@ export class Controller {
     }
     if (platform) this.state = STATES.stand;
     const face = input.face;
-    if (face && Math.hypot(face[0], face[2]) > 1e-3 && !platform) {
+    if (climbing && this.climbDir && !platform) {
+      this.yawCF = C.lookAt(0, 0, 0, this.climbDir[0], 0, this.climbDir[2]);
+    } else if (face && Math.hypot(face[0], face[2]) > 1e-3 && !platform) {
       this.yawCF = C.lookAt(0, 0, 0, face[0], 0, face[2]);
     } else if (hum.props.get('AutoRotate') && ml > 1e-3 && !platform) {
       const target = C.lookAt(0, 0, 0, dir[0], 0, dir[2]);

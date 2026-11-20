@@ -20,8 +20,11 @@ RewriteRule .* - [R=404,L]
     <FilesMatch "^(three\.core|three\.module|rapier|wasmoon)\.js$|\.wasm$">
         Header set Cache-Control "public, max-age=604800"
     </FilesMatch>
+    <If "%{QUERY_STRING} =~ /^v=[0-9]+$/">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </If>
 </IfModule>
 
 <IfModule mod_deflate.c>
-    AddOutputFilterByType DEFLATE text/javascript application/javascript application/wasm text/plain
+    AddOutputFilterByType DEFLATE text/javascript application/javascript application/wasm text/plain application/json text/css image/svg+xml
 </IfModule>

@@ -30,6 +30,21 @@ export const TOUCH_CONTROLS_SCRIPT = 153556783;
 
 const SEND_HZ = 30;
 
+let pack2018 = null;
+
+export function prefetch2018(version) {
+  if (!pack2018) {
+    const v = version ? '?v=' + version : '';
+    pack2018 = Promise.all([
+      fetch(publicPath('/corescripts2018/bundle.json') + v).then((r) => (r.ok ? r.json() : {})),
+      fetch(publicPath('/shared/runtime2018.lua') + v).then((r) => (r.ok ? r.text() : '')),
+      useContent2018(),
+    ]).then(([bundle, runtime]) => ({ bundle, runtime }));
+    pack2018.catch(() => { pack2018 = null; });
+  }
+  return pack2018;
+}
+
 export class ClientWorld {
   constructor(net, hooks = {}) {
     this.net = net;
@@ -69,14 +84,8 @@ export class ClientWorld {
     this.dm.emit(uis, kind === 'b' ? 'InputBegan' : kind === 'e' ? 'InputEnded' : 'InputChanged', io, !!processed);
   }
 
-  async load2018() {
-    const v = this.hooks.version ? '?v=' + this.hooks.version : '';
-    const [bundle, runtime] = await Promise.all([
-      fetch(publicPath('/corescripts2018/bundle.json') + v).then((r) => (r.ok ? r.json() : {})),
-      fetch(publicPath('/shared/runtime2018.lua') + v).then((r) => (r.ok ? r.text() : '')),
-      useContent2018(),
-    ]);
-    return { bundle, runtime };
+  load2018() {
+    return prefetch2018(this.hooks.version);
   }
 
   async init(msg, RAPIER, luaFactory, runtimeSrc) {
@@ -152,6 +161,9 @@ export class ClientWorld {
       dm.load(parsePlace(bytes), model);
       return model;
     });
+    if (this.era === 2018 && Array.isArray(msg.anims) && msg.anims.length) {
+      this.animsReady = this.anims.preload(msg.anims, (done, total) => this.hooks.animProgress && this.hooks.animProgress(done, total));
+    }
     if (pack) this.host.flags = FLAGS_2018;
     const embedded = typeof window !== 'undefined' && window.parent && window.parent !== window;
     await this.host.init(luaFactory, runtimeSrc, [...(pack && pack.runtime ? [{ source: pack.runtime, name: 'runtime2018' }] : []), ...(embedded ? [{ source: DEBUG_LUA, name: 'debug' }] : [])]);
@@ -481,7 +493,22 @@ export class ClientWorld {
     };
   }
 
+  seedScreenGuiSize(sg) {
+    const par = sg.parent;
+    if (!par || (par.ClassName !== 'PlayerGui' && par.ClassName !== 'CoreGui')) return;
+    const [w, h] = this.screenSize();
+    let [l, t, r, b] = this.guiInset || [0, 0, 0, 0];
+    let top = 0;
+    if (this.era === 2018 && !this.noTopbar) {
+      top = t || 36;
+      t = 0;
+    }
+    if (this.era !== 2018 || sg.props.get('IgnoreGuiInset')) top = 0;
+    sg.props.set('AbsoluteSize', [Math.max(0, w - l - r), Math.max(0, h - t - b - top)]);
+  }
+
   onReparent(inst, old, opts) {
+    if (inst.ClassName === 'ScreenGui') this.seedScreenGuiSize(inst);
     const ws = this.dm.services.get('Workspace');
     for (const [model, rec] of this.chars) {
       if (model === inst || inst.isDescendantOf(model) || (old && (old === model || old.isDescendantOf(model)))) rec.dirty = true;
@@ -706,9 +733,17 @@ export class ClientWorld {
         dm.setProp(inst, op[2], decodeValue(dm, p.type, op[3]), { remote: true });
         break;
       }
-      case 'n':
+      case 'n': {
+        const fresh = [];
+        for (const r of op[1]) if (r[1] === 'Player' && !dm.byId.has(r[0])) fresh.push(r[0]);
         applyRecords(dm, op[1]);
+        const players = dm.services.get('Players');
+        if (players) for (const id of fresh) {
+          const pl = dm.byId.get(id);
+          if (pl && pl.parent === players) dm.emit(players, 'PlayerAdded', pl);
+        }
         break;
+      }
       case 'm': {
         const inst = dm.byId.get(op[1]);
         const par = op[2] == null ? null : op[2] === 0 ? dm.root : dm.byId.get(op[2]);
@@ -719,6 +754,7 @@ export class ClientWorld {
       }
       case 'd': {
         const inst = dm.byId.get(op[1]);
+        if (inst && inst.ClassName === 'Player' && inst.parent && inst.parent === dm.services.get('Players')) dm.emit(inst.parent, 'PlayerRemoving', inst);
         if (inst) dm.destroy(inst);
         break;
       }
@@ -945,7 +981,14 @@ export class ClientWorld {
       const seat = this.seated();
       if ((seat || null) !== (own.seatedOn || null)) {
         own.seatedOn = seat || null;
+        own.drive = null;
+        own.hum.data = own.hum.data || {};
+        own.hum.data.seat = seat || null;
         dm.emit(own.hum, 'Seated', !!seat, seat || null);
+      }
+      if (seat && this.era === 2018 && own.hum.props.get('Jump')) {
+        input.jump = true;
+        dm.setProp(own.hum, 'Jump', false);
       }
       if (seat && seat.ClassName === 'SkateboardPlatform') {
         const th = (input.forward ? 1 : 0) - (input.back ? 1 : 0), st = (input.right ? 1 : 0) - (input.left ? 1 : 0);
@@ -1009,7 +1052,7 @@ export class ClientWorld {
           rec.state = r.state;
           if (r.state === STATES.jump && prev !== STATES.jump) dm.emit(own.hum, 'Jumping', true);
           if (r.state === STATES.fall && this.era !== 2018) dm.emit(own.hum, 'FreeFalling', true);
-          if (r.state === STATES.climb && this.era !== 2018) dm.emit(own.hum, 'Climbing', own.hum.props.get('WalkSpeed'));
+          if (r.state === STATES.climb && this.era !== 2018) dm.emit(own.hum, 'Climbing', own.hum.props.get('WalkSpeed') * 0.7);
           if (this.era === 2018) dm.emit(own.hum, 'StateChanged', T.e('HumanoidStateType', HUM_STATE[prev] ?? 8), T.e('HumanoidStateType', HUM_STATE[r.state] ?? 8));
         }
         if (this.era === 2018) {

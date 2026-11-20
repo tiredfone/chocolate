@@ -13,8 +13,8 @@ await RAPIER.init();
 function scene(parts) {
   const dm = new DataModel('client');
   const ws = dm.service('Workspace');
-  for (const [name, pos, size] of parts) {
-    const p = dm.create('Part', null);
+  for (const [name, pos, size, cls] of parts) {
+    const p = dm.create(cls || 'Part', null);
     p.props.set('Name', name);
     p.props.set('Anchored', true);
     p.props.set('Size', size);
@@ -68,7 +68,7 @@ run(hop, 1, { move: [0, 0, 0] });
 console.log('jump held 3s (expect a few landed jumps, maxY about 9.4: a jump peaks 6.4 studs up):', JSON.stringify(run(hop, 3, { move: [0, 0, 0], jump: true })));
 const ledge = scene([['Floor', [0, -0.5, 0], [60, 1, 60]], ['Ledge', [0, 2, -10], [12, 4, 6]]]);
 run(ledge, 1, { move: [0, 0, 0] });
-console.log('4-stud ledge, walking (expect climbed: maxY about 7):', JSON.stringify(run(ledge, 1.6, fwd)));
+console.log('4-stud solid ledge, walking (expect climbed onto it: maxY about 7.7):', JSON.stringify(run(ledge, 1.6, fwd)));
 
 const rungs = scene([['Floor', [0, -0.5, 0], [60, 1, 60]], ...[0, 1, 2, 3, 4, 5, 6, 7].map((k) => ['Rung' + k, [0, 1.5 + k * 2, -6], [4, 0.4, 0.4]]), ['Top', [0, 16.2, -9], [8, 1, 6]]]);
 run(rungs, 1, { move: [0, 0, 0] });
@@ -77,6 +77,43 @@ console.log('ladder of rungs 2 studs apart (expect maxY above 19):', JSON.string
 const tall = scene([['Floor', [0, -0.5, 0], [60, 1, 60]], ['Tall', [0, 10, -8], [12, 20, 1]]]);
 run(tall, 1, { move: [0, 0, 0] });
 console.log('tall flat wall (expect blocked, maxY 2.99):', JSON.stringify(run(tall, 2, fwd)));
+
+const truss = () => scene([['Floor', [0, -0.5, 0], [60, 1, 60]], ['Truss', [0, 10, -3], [2, 20, 2], 'TrussPart']]);
+const back = { move: [0, 0, 1], jump: false };
+const idle = { move: [0, 0, 0], jump: false };
+const tUp = truss();
+run(tUp, 1, idle);
+const up = run(tUp, 1.5, fwd);
+console.log('truss climb up 1.5s (expect y gain about 0.7*16*1.5=16):', JSON.stringify(up));
+const hold = run(tUp, 1, idle);
+console.log('truss hold (expect y unchanged):', JSON.stringify(hold));
+const down = run(tUp, 1, back);
+console.log('truss climb down 1s (expect y about 11 lower):', JSON.stringify(down));
+const bottom = run(tUp, 2, back);
+console.log('truss down to the ground (expect y 2.99, walked off):', JSON.stringify(bottom));
+const rungs2 = scene([['Floor', [0, -0.5, 0], [60, 1, 60]], ...[0, 1, 2, 3, 4, 5, 6, 7].map((k) => ['Rung' + k, [0, 1.5 + k * 2, -6], [4, 0.4, 0.4]])]);
+run(rungs2, 1, idle);
+console.log('rung ladder without top platform (expect maxY above 12):', JSON.stringify(run(rungs2, 2, fwd)));
+const solid = scene([['Floor', [0, -0.5, 0], [60, 1, 60]], ['Ledge', [0, 2, -10], [12, 4, 6]]]);
+run(solid, 1, idle);
+console.log('solid 4-stud ledge (expect climbed onto it: maxY about 7.7):', JSON.stringify(run(solid, 1.6, fwd)));
+const tJ = truss();
+run(tJ, 1, idle);
+run(tJ, 1, fwd);
+let jr = null, minZ = 99, jumpedFrom = null;
+{
+  const dt = 1 / 60;
+  let regrab = 0, states = [];
+  for (let i = 0; i < 90; i++) {
+    const inp = i === 0 ? { move: [0, 0, -1], jump: true } : fwd;
+    jr = tJ.ctrl.update(dt, inp);
+    tJ.ph.world.step();
+    states.push(jr.state);
+    if (i === 0) jumpedFrom = jr.cf[2];
+    minZ = Math.max(minZ === 99 ? -99 : minZ, jr.cf[2]);
+  }
+  console.log('jump off truss holding forward (expect maxZ at least 2 behind ' + jumpedFrom.toFixed(2) + ', states 2, no climb frames in first 0.5s):', JSON.stringify({ z: +jr.cf[2].toFixed(2), maxZ: +minZ.toFixed(2), first: states.slice(0, 4), climbFrames: states.slice(0, 30).filter((x) => x === 5).length }));
+}
 
 function players(otherAt) {
   const s = scene([['Floor', [0, -0.5, 0], [80, 1, 80]]]);

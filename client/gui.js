@@ -171,6 +171,7 @@ export class Gui {
     this.renderer = renderer;
     this.opts = opts;
     this.nodes = new Map();
+    this.sizeDirty = new Set();
     this.dirty = true;
     this.overlay = el('div', 'ch-gui', root);
     this.screen = el('div', 'ch-screen', this.overlay);
@@ -189,7 +190,10 @@ export class Gui {
       destroyed: () => (this.dirty = true),
       changed: (inst, name) => {
         if (inst.isA('GuiBase') || inst.ClassName === 'Message' || inst.ClassName === 'Hint') this.dirty = true;
-        if (name === 'Size' && inst.isA('GuiObject')) this.detachedAbs(inst);
+        if (name === 'Size' && inst.isA('GuiObject')) {
+          this.sizeDirty.add(inst);
+          this.detachedAbs(inst);
+        }
         if (inst.ClassName === 'Player' || inst.isA('ValueBase')) this.listDirty = true;
         if (inst.ClassName === 'Humanoid') this.hudDirty = true;
       },
@@ -247,6 +251,28 @@ export class Gui {
       if (Array.isArray(s) && s.length === 4) base = [s[0] * base[0] + s[1], s[2] * base[1] + s[3]];
     }
     return base;
+  }
+
+  absoluteSize(inst) {
+    const stored = inst.props.get('AbsoluteSize') || [0, 0];
+    if (!inst.isA('GuiObject')) return stored;
+    const chain = [];
+    let stale = false;
+    let top = inst;
+    while (top && top.isA('GuiObject')) {
+      chain.push(top);
+      if (this.sizeDirty.has(top)) stale = true;
+      top = top.parent;
+    }
+    if (!stale && (stored[0] > 0 || stored[1] > 0)) return stored;
+    if (!top || !top.isA('LayerCollector')) return stored;
+    let abs = top.props.get('AbsoluteSize') || [0, 0];
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const sz = chain[i].props.get('Size');
+      if (!Array.isArray(sz) || sz.length !== 4) return stored;
+      abs = [sz[0] * abs[0] + sz[1], sz[2] * abs[1] + sz[3]];
+    }
+    return abs;
   }
 
   textBounds(inst) {
@@ -327,6 +353,7 @@ export class Gui {
   }
 
   layout() {
+    this.sizeDirty.clear();
     let [l, t, r, b] = this.world.guiInset || [0, 0, 0, 0];
     const era = contentEra();
     let top18 = 0;
@@ -475,7 +502,8 @@ export class Gui {
       e.classList.add('ch-g-btn');
       const fire = (ev, name) => {
         ev.stopPropagation();
-        this.dm.emit(inst, name, ev.offsetX | 0, ev.offsetY | 0);
+        if (name.endsWith('Click')) this.dm.emit(inst, name);
+        else this.dm.emit(inst, name, ev.offsetX | 0, ev.offsetY | 0);
         if (inst.id > 0) this.opts.send({ t: 'gui', id: inst.id, ev: name, x: ev.clientX | 0, y: ev.clientY | 0 });
       };
       e.addEventListener('pointerdown', (ev) => {

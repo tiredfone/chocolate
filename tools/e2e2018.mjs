@@ -201,6 +201,12 @@ if (process.env.LUA) {
   probe.props.set('Source', process.env.LUA);
   dm.setParent(probe, player.findChildOfClass('PlayerGui') || player);
 }
+if (process.env.SLUA) {
+  const sp = game.dm.create('Script', null);
+  sp.props.set('Name', 'ServerProbe');
+  sp.props.set('Source', process.env.SLUA);
+  game.dm.setParent(sp, game.dm.services.get('ServerScriptService'));
+}
 await run(+(process.env.SECONDS || 8));
 const say = dm.create('LocalScript', null);
 say.props.set('Name', 'Say');
