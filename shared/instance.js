@@ -4,6 +4,29 @@ import { linkProps } from './api2018.js';
 
 const GENERIC = CLASSES.get('Instance');
 
+export function parseTagsRaw(xml) {
+  const m = /<BinaryString[^>]*>([\s\S]*?)<\/BinaryString>/.exec(String(xml));
+  if (!m) return [];
+  let b64 = m[1].trim();
+  const cd = /^<!\[CDATA\[([\s\S]*?)\]\]>$/.exec(b64);
+  if (cd) b64 = cd[1].trim();
+  if (!b64) return [];
+  try {
+    const bin = atob(b64.replace(/\s+/g, ''));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return new TextDecoder().decode(bytes).split('\u0000').filter((t) => t);
+  } catch (e) {
+    return [];
+  }
+}
+
+export function encodeTagsRaw(tags) {
+  const bytes = new TextEncoder().encode([...tags].join('\u0000'));
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  return `<BinaryString name="Tags">${btoa(s)}</BinaryString>`;
+}
+
 function cloneValue(v) {
   return Array.isArray(v) ? v.slice() : v;
 }
@@ -31,6 +54,7 @@ export class Instance {
     this.parentLocked = false;
     this.listeners = null;
     this.data = null;
+    this.tags = null;
     for (const [k, p] of this.info.all) this.props.set(k, cloneValue(p.def));
     this.props.set('Name', cls);
   }
@@ -114,6 +138,7 @@ export class DataModel {
     this.luaSubs = new Set();
     this.luaSink = null;
     this.services = new Map();
+    this.tagIndex = new Map();
     this.root = this.create('DataModel', null, 0);
     this.root.parentLocked = true;
   }
@@ -165,6 +190,69 @@ export class DataModel {
 
   hasListener(inst, event) {
     return (inst.listeners && inst.listeners.get(event)?.size > 0) || this.luaSubs.has(inst.id + ':' + event);
+  }
+
+  inGame(inst) {
+    return inst === this.root || inst.isDescendantOf(this.root);
+  }
+
+  addTag(inst, tag, opts = null) {
+    tag = String(tag);
+    if (!tag || inst.destroyed || tag.includes('\u0000')) return false;
+    if (!inst.tags) inst.tags = new Set();
+    if (inst.tags.has(tag)) return false;
+    inst.tags.add(tag);
+    let set = this.tagIndex.get(tag);
+    if (!set) this.tagIndex.set(tag, (set = new Set()));
+    set.add(inst);
+    for (const o of this.observers) if (o.tagged) o.tagged(inst, tag, true, opts);
+    const cs = this.services.get('CollectionService');
+    if (cs && this.inGame(inst)) this.emit(cs, 'TA:' + tag, inst);
+    return true;
+  }
+
+  removeTag(inst, tag, opts = null) {
+    tag = String(tag);
+    if (!inst.tags || !inst.tags.delete(tag)) return false;
+    const set = this.tagIndex.get(tag);
+    if (set) {
+      set.delete(inst);
+      if (!set.size) this.tagIndex.delete(tag);
+    }
+    for (const o of this.observers) if (o.tagged) o.tagged(inst, tag, false, opts);
+    const cs = this.services.get('CollectionService');
+    if (cs && this.inGame(inst)) this.emit(cs, 'TR:' + tag, inst);
+    return true;
+  }
+
+  getTagged(tag) {
+    const set = this.tagIndex.get(String(tag));
+    if (!set) return [];
+    const out = [];
+    for (const i of set) if (!i.destroyed && this.inGame(i)) out.push(i);
+    return out;
+  }
+
+  setTagsQuiet(inst, tags) {
+    for (const tag of tags) {
+      if (!inst.tags) inst.tags = new Set();
+      inst.tags.add(tag);
+      let set = this.tagIndex.get(tag);
+      if (!set) this.tagIndex.set(tag, (set = new Set()));
+      set.add(inst);
+    }
+  }
+
+  emitTagMoves(inst, entering) {
+    if (!this.tagIndex.size) return;
+    const cs = this.services.get('CollectionService');
+    if (!cs) return;
+    const pre = entering ? 'TA:' : 'TR:';
+    const visit = (x) => {
+      if (x.tags) for (const t of x.tags) this.emit(cs, pre + t, x);
+      for (const c of x.children) visit(c);
+    };
+    visit(inst);
   }
 
   coerce(inst, name, value) {
@@ -244,6 +332,15 @@ export class DataModel {
     inst.parentLocked = true;
     for (const o of this.observers) if (o.destroyed) o.destroyed(inst, quiet);
     inst.listeners = null;
+    if (inst.tags) {
+      for (const t of inst.tags) {
+        const set = this.tagIndex.get(t);
+        if (set) {
+          set.delete(inst);
+          if (!set.size) this.tagIndex.delete(t);
+        }
+      }
+    }
     this.byId.delete(inst.id);
   }
 
@@ -259,6 +356,7 @@ export class DataModel {
       const c = this.create(src.ClassName, null);
       for (const [k, v] of src.props) c.props.set(k, cloneValue(v));
       if (src.extra) c.extra = new Map(src.extra);
+      if (src.tags) this.setTagsQuiet(c, src.tags);
       map.set(src, c);
       for (const ch of src.children) {
         if (!ch.props.get('Archivable')) continue;
@@ -312,6 +410,10 @@ export class DataModel {
         if (shadow.has(rawName)) {
           if (!inst.extra) inst.extra = new Map();
           inst.extra.set(rawName, pv);
+          continue;
+        }
+        if (rawName === 'Tags' && pv.t === 'raw') {
+          this.setTagsQuiet(inst, parseTagsRaw(pv.v));
           continue;
         }
         if (pv.t === 'raw') {

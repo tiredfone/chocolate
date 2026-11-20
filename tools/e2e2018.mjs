@@ -90,6 +90,9 @@ const pump = () => {
             const inst = dm.byId.get(op[1]);
             const p = inst && inst.info.all.get(op[2]);
             if (p) dm.setProp(inst, op[2], decodeValue(dm, p.type, op[3]), { remote: true });
+          } else if (op[0] === 'tg') {
+            const inst = dm.byId.get(op[1]);
+            if (inst) (op[3] ? dm.addTag(inst, op[2], { remote: true }) : dm.removeTag(inst, op[2], { remote: true }));
           } else if (op[0] === 'n') applyRecords(dm, op[1]);
           else if (op[0] === 'm') {
             const inst = dm.byId.get(op[1]);

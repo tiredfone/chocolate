@@ -209,7 +209,7 @@ const ROT = {
   0x1f: [0, 1, 0, 0, 0, -1, -1, 0, 0], 0x20: [0, 0, 1, 0, 1, 0, -1, 0, 0], 0x22: [0, -1, 0, 0, 0, 1, -1, 0, 0], 0x23: [0, 0, -1, 0, -1, 0, -1, 0, 0],
 };
 
-const BINARY_PROPS = new Set(['ChocolateTerrain', 'MeshData', 'ChildData', 'PhysicalConfigData']);
+const BINARY_PROPS = new Set(['Tags', 'ChocolateTerrain', 'MeshData', 'ChildData', 'PhysicalConfigData']);
 const CONTENT_PROPS = new Set(['MeshId', 'TextureId', 'TextureID', 'Texture', 'ShirtTemplate', 'PantsTemplate', 'Graphic', 'SoundId', 'Image',
   'SkyboxBk', 'SkyboxDn', 'SkyboxFt', 'SkyboxLf', 'SkyboxRt', 'SkyboxUp', 'MoonTextureId', 'SunTextureId', 'AnimationId', 'LinkedSource']);
 

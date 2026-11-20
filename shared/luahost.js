@@ -390,6 +390,7 @@ export class ScriptHost {
         const inGame = !!inst.parent && inst.isDescendantOf(dm.root);
         const wasGame = !!old && (old === dm.root || old.isDescendantOf(dm.root));
         if (inGame === wasGame) return;
+        dm.emitTagMoves(inst, inGame);
         const ev = inGame ? 'ItemAdded' : 'ItemRemoved';
         if (!dm.hasListener(cs, ev)) return;
         dm.emit(cs, ev, inst);
@@ -1243,9 +1244,15 @@ function buildMethods(host) {
   def('SetTeleportGui GetTeleportSetting SetTeleportSetting', 'TeleportService', () => null);
   def('Preload', 'ContentProvider', () => null);
   def('SetBaseUrl', 'ContentProvider', () => null);
-  def('AddTag RemoveTag', 'CollectionService', () => null);
-  def('GetTagged', 'CollectionService', () => T.list([]));
-  def('HasTag', 'CollectionService', () => false);
+  const tagInst = (i, fn) => {
+    if (!i || typeof i !== 'object' || !i.props) throw new Error(`${fn}: Instance expected`);
+    return i;
+  };
+  def('AddTag', 'CollectionService', (c, [i, tag]) => { dm.addTag(tagInst(i, 'AddTag'), tag, { local: host.side === 'client' }); return null; });
+  def('RemoveTag', 'CollectionService', (c, [i, tag]) => { dm.removeTag(tagInst(i, 'RemoveTag'), tag, { local: host.side === 'client' }); return null; });
+  def('HasTag', 'CollectionService', (c, [i, tag]) => !!tagInst(i, 'HasTag').tags && tagInst(i, 'HasTag').tags.has(String(tag)));
+  def('GetTags', 'CollectionService', (c, [i]) => T.list(tagInst(i, 'GetTags').tags ? [...i.tags] : []));
+  def('GetTagged', 'CollectionService', (c, [tag]) => T.list(dm.getTagged(tag)));
   def('GetCollection', 'CollectionService', (c, [cls]) => T.list(dm.root.descendants().filter((d) => d.ClassName === String(cls ?? ''))));
   def('IsServer', 'RunService', () => host.side === 'server');
   def('IsClient', 'RunService', () => host.side === 'client');

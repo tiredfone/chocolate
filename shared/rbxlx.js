@@ -1,5 +1,6 @@
 import { isService } from './classes.js';
 import { storeTerrain } from './terrain.js';
+import { encodeTagsRaw } from './instance.js';
 
 const HEADER = '<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">\n\t<External>null</External>\n\t<External>nil</External>\n';
 const SKIP = new Set(['Archivable', 'RobloxLocked', 'DistributedGameTime', 'LocalPlayer', 'NumPlayers', 'JobId', 'PlaceId', 'CreatorId', 'GameId', 'Parent', 'ClassName']);
@@ -139,6 +140,7 @@ function serialize(dm, tops, opts = {}) {
         if (xml) out.push(`${pad}\t\t${xml}\n`);
       }
     }
+    if (inst.tags && inst.tags.size) out.push(`${pad}\t\t${encodeTagsRaw(inst.tags)}\n`);
     out.push(`${pad}\t</Properties>\n`);
     for (const c of inst.children) if (saved.has(c)) write(c, depth + 1);
     out.push(`${pad}</Item>\n`);

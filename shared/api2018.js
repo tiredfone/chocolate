@@ -4,7 +4,7 @@ import * as C from './cframe.js';
 import { parseGroups, serializeGroups, groupsCollide, MAX_COLLISION_GROUPS } from './collisiongroups.js';
 
 export const LUA_CLASS = {
-  GetPropertyChangedSignal: ['Instance'],
+  GetPropertyChangedSignal: ['Instance'], GetInstanceAddedSignal: ['CollectionService'], GetInstanceRemovedSignal: ['CollectionService'],
   FireServer: ['RemoteEvent'], FireClient: ['RemoteEvent'], FireAllClients: ['RemoteEvent'],
   InvokeServer: ['RemoteFunction'], InvokeClient: ['RemoteFunction'],
   RegisterSetCore: ['StarterGui'], RegisterGetCore: ['StarterGui'], SetCore: ['StarterGui'], GetCore: ['StarterGui'],

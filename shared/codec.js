@@ -38,7 +38,9 @@ export function encodeInst(inst) {
     if (hiddenProp(inst, k)) continue;
     props.push(k, encodeValue(p.type, v));
   }
-  return [inst.id, inst.ClassName, inst.parent ? inst.parent.id : null, props];
+  const rec = [inst.id, inst.ClassName, inst.parent ? inst.parent.id : null, props];
+  if (inst.tags && inst.tags.size) rec.push([...inst.tags]);
+  return rec;
 }
 
 export function encodeTree(root, filter) {
@@ -60,13 +62,14 @@ export function decodeValue(dm, type, v) {
 export function applyRecords(dm, records) {
   const refs = [];
   const fresh = [];
-  for (const [id, cls, parentId, props] of records) {
+  for (const [id, cls, parentId, props, tags] of records) {
     let inst = dm.byId.get(id);
     const existing = !!inst;
     if (!inst) {
       inst = dm.create(cls, null, id);
       inst.pendingParent = parentId;
       fresh.push(inst);
+      if (tags) dm.setTagsQuiet(inst, tags);
     }
     for (let i = 0; i < props.length; i += 2) {
       const k = props[i];

@@ -758,6 +758,13 @@ export class ClientWorld {
         if (inst) dm.destroy(inst);
         break;
       }
+      case 'tg': {
+        const inst = dm.byId.get(op[1]);
+        if (!inst) return;
+        if (op[3]) dm.addTag(inst, op[2], { remote: true });
+        else dm.removeTag(inst, op[2], { remote: true });
+        break;
+      }
       case 's': {
         const inst = dm.byId.get(op[1]);
         if (inst) this.playSound(inst, op[2]);

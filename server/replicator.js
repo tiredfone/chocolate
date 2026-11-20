@@ -75,6 +75,12 @@ export class Replicator {
     this.ops.push({ k: 'p', inst, name });
   }
 
+  tagged(inst, tag, add, opts) {
+    if (!inst.repWas || !inst.repWas.rep) return;
+    if (opts && opts.local) return;
+    this.ops.push({ k: 'tg', inst, tag, add });
+  }
+
   destroyed(inst) {
     if (inst.repWas && inst.repWas.rep) this.ops.push({ k: 'del', id: inst.id, prev: inst.repWas });
     inst.repWas = { rep: false };
@@ -138,6 +144,10 @@ export class Replicator {
           else if (knew && !sees) o.push(['d', inst.id]);
         } else if (op.k === 'del') {
           if (this.visible(op.prev, client)) o.push(['d', op.id]);
+        } else if (op.k === 'tg') {
+          const inst = op.inst;
+          if (inst.destroyed || !inst.repWas || !this.visible(inst.repWas, client)) continue;
+          o.push(['tg', inst.id, op.tag, op.add ? 1 : 0]);
         } else if (op.k === 'snd') {
           if (op.inst.repWas && this.visible(op.inst.repWas, client)) o.push(['s', op.inst.id, op.op]);
         }

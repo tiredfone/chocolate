@@ -406,6 +406,13 @@ LM.GetPropertyChangedSignal = function(self, id, prop)
   return makeSignal(id, "P:" .. prop)
 end
 
+LM.GetInstanceAddedSignal = function(self, id, tag)
+  return makeSignal(id, "TA:" .. tostring(tag))
+end
+LM.GetInstanceRemovedSignal = function(self, id, tag)
+  return makeSignal(id, "TR:" .. tostring(tag))
+end
+
 local function remoteCall(id, op, ...)
   return call(id, "__remote", op, ...)
 end
