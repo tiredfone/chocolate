@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as C from '../shared/cframe.js';
 import { parsePlace } from '../shared/rbxl.js';
+import { makeSpawnLocation } from '../shared/services.js';
 import { writePlace } from '../shared/rbxlx.js';
 import { xmlToBinary } from '../shared/rbxlbin.js';
 import { el } from './ui.js';
@@ -104,6 +105,7 @@ export class Extras {
 
   applySettings() {
     if (this.app.view) this.app.view.speedScale = +this.settings.camSpeed || 1;
+    document.documentElement.classList.toggle('st-dark', this.settings.theme === 'dark');
     setEditorTheme(this.settings.editorTheme);
   }
 
@@ -584,7 +586,9 @@ export class Extras {
       base.props.set('BottomSurface', 0);
     }
     app.dm.setParent(base, ws);
-    app.add([base], 'New');
+    const spawn = makeSpawnLocation(app.dm, app.era === 2018 ? 2018 : 2012);
+    app.dm.setParent(spawn, ws);
+    app.add([base, spawn], 'New');
     app.view.frameAll();
   }
 
@@ -621,11 +625,15 @@ export class Extras {
       auto.max = '30';
       auto.value = String(this.settings.autosave);
       row('Auto-save every (minutes)', auto);
+      const studioTheme = document.createElement('select');
+      for (const [v, l] of [['light', 'Light'], ['dark', 'Dark']]) el('option', null, studioTheme, l).value = v;
+      studioTheme.value = this.settings.theme === 'dark' ? 'dark' : 'light';
+      row('Studio theme', studioTheme);
       const theme = document.createElement('select');
       for (const [v, l] of [['auto', 'Match Studio'], ['dark', 'Dark'], ['light', 'Light']]) el('option', null, theme, l).value = v;
       theme.value = this.settings.editorTheme || 'auto';
       row('Script editor theme', theme);
-      return () => ({ camSpeed: Math.max(0.25, Math.min(4, +speed.value || 1)), autosave: Math.max(1, Math.min(30, Math.round(+auto.value || 3))), editorTheme: theme.value });
+      return () => ({ camSpeed: Math.max(0.25, Math.min(4, +speed.value || 1)), autosave: Math.max(1, Math.min(30, Math.round(+auto.value || 3))), editorTheme: theme.value, theme: studioTheme.value });
     }, [['OK', true], ['Cancel', null]]);
     if (!next) return;
     this.settings = { ...this.settings, ...next };

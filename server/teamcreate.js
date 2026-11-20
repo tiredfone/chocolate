@@ -4,7 +4,7 @@ import { parsePlace } from '../shared/rbxl.js';
 import { GidMap, packPlace, unpack, encodeProp, decodeProp, canMove, MAX_XML } from '../shared/teamsync.js';
 import { writePlace } from '../shared/rbxlx.js';
 import { placeBytes } from './assets.js';
-import { defaultServices } from '../shared/services.js';
+import { defaultServices, makeSpawnLocation } from '../shared/services.js';
 import { terrainOf, storeTerrain } from '../shared/terrain.js';
 
 const IDLE_MS = 10 * 60 * 1000;
@@ -67,6 +67,7 @@ export class TeamSession {
       base.props.set('TopSurface', 3);
       base.props.set('BottomSurface', 4);
       dm.setParent(base, ws);
+      dm.setParent(makeSpawnLocation(dm, this.era), ws);
     }
     if (!ws.findChildOfClass('Terrain')) {
       const t = dm.create('Terrain', null);

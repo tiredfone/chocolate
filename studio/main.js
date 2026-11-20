@@ -6,7 +6,7 @@ import { Physics } from '../shared/physics.js';
 import { Renderer } from '../client/render.js';
 import { Studio } from './studio.js';
 import { connectTeam, loadSnapshot, TeamSync } from './teamcreate.js';
-import { defaultServices } from '../shared/services.js';
+import { defaultServices, makeSpawnLocation } from '../shared/services.js';
 import { terrainOf } from '../shared/terrain.js';
 
 const cfg = JSON.parse(document.getElementById('chocolate-config').textContent || '{}');
@@ -61,6 +61,7 @@ async function boot() {
     base.props.set('TopSurface', 3);
     base.props.set('BottomSurface', 4);
     dm.setParent(base, ws);
+    if (!ws.descendants().some((d) => d.ClassName === 'SpawnLocation')) dm.setParent(makeSpawnLocation(dm, cfg.clientVersion === 2018 ? 2018 : 2012), ws);
   }
   say('Starting');
   const canvas = document.createElement('canvas');

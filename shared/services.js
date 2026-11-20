@@ -18,3 +18,26 @@ export function defaultServices(dm, era) {
     dm.setParent(c, sp);
   }
 }
+
+export function makeSpawnLocation(dm, era) {
+  const spawn = dm.create('SpawnLocation', null);
+  spawn.props.set('Name', 'SpawnLocation');
+  spawn.props.set('Anchored', true);
+  spawn.props.set('BrickColor', 194);
+  if (era === 2018) {
+    spawn.props.set('Size', [12, 1, 12]);
+    spawn.props.set('TopSurface', 0);
+    spawn.props.set('BottomSurface', 0);
+  } else {
+    spawn.props.set('Size', [6, 1.2, 6]);
+    spawn.props.set('TopSurface', 3);
+    spawn.props.set('BottomSurface', 4);
+  }
+  spawn.props.set('CFrame', [0, spawn.props.get('Size')[1] / 2, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+  const decal = dm.create('Decal', null);
+  decal.props.set('Name', 'Decal');
+  decal.props.set('Texture', 'rbxasset://textures/SpawnLocation.png');
+  decal.props.set('Face', 1);
+  dm.setParent(decal, spawn);
+  return spawn;
+}
