@@ -2525,19 +2525,6 @@ html.st-dark .st-btn.active {
   border-color: #5a90d4;
 }
 
-html.st-dark .st-btn > i,
-html.st-dark .st18-big > i,
-html.st-dark .st18-small > i,
-html.st-dark .st-popup .st-item .st-icon,
-html.st-dark .st-node .st-cicon,
-html.st-dark .st-obj > i,
-html.st-dark .st-tb-top i {
-  background-color: rgba(238, 241, 246, 0.9);
-  border-radius: 3px;
-  box-shadow: 0 0 0 1px rgba(238, 241, 246, 0.9);
-}
-
-html.st-dark .st-node .st-cicon { box-shadow: none; border-radius: 2px; }
 
 html.st-dark .st-tab { background: linear-gradient(#3c3c3c, #303030); color: var(--st-text); }
 html.st-dark .st-tab.active { background: #252525; }
