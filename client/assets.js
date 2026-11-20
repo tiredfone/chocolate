@@ -19,6 +19,17 @@ export function endpointUrl(name, id) {
   return t ? String(t).replace(/\{id\}/g, String(Number.isSafeInteger(Number(id)) && Number(id) > 0 ? Number(id) : 0)) : null;
 }
 
+let loadsOpen = 0;
+export function loadsPending() {
+  return loadsOpen;
+}
+function track(p) {
+  loadsOpen++;
+  const done = () => { loadsOpen--; };
+  p.then(done, done);
+  return p;
+}
+
 const images = new Map();
 const meshes = new Map();
 const raw = new Map();
@@ -59,10 +70,10 @@ function contentImage(path) {
   let p = contentImages.get(path);
   if (!p) {
     const local = LOCAL_CONTENT[path.toLowerCase()];
-    p = fetch(local ? publicPath(local) : contentUrl(path))
+    p = track(fetch(local ? publicPath(local) : contentUrl(path))
       .then((r) => (r.ok ? r.blob() : null))
       .then((b) => (b ? createImageBitmap(b, { imageOrientation: 'flipY', premultiplyAlpha: 'none' }) : null))
-      .catch(() => null);
+      .catch(() => null));
     contentImages.set(path, p);
   }
   return p;
@@ -82,7 +93,7 @@ async function fetchBytes(id) {
       if (n >= 4 || e.retry === false) throw e;
       return new Promise((res) => setTimeout(res, 400 * 2 ** n + Math.random() * 300)).then(() => attempt(n + 1));
     });
-    p = attempt(0);
+    p = track(attempt(0));
     raw.set(id, p);
     p.catch(() => raw.delete(id));
   }
@@ -160,7 +171,7 @@ function thumbImage(id) {
   let p = thumbImages.get(id);
   if (!p) {
     const url = endpointUrl('itemThumbnail', id);
-    p = url ? fetch(url, { credentials: 'same-origin' }).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => (b ? imageFromBytes(new Uint8Array(b)) : null)).catch(() => null) : Promise.resolve(null);
+    p = url ? track(fetch(url, { credentials: 'same-origin' }).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => (b ? imageFromBytes(new Uint8Array(b)) : null)).catch(() => null)) : Promise.resolve(null);
     thumbImages.set(id, p);
   }
   return p;
@@ -185,7 +196,7 @@ export function loadImage(url) {
         return attempt(n + 1);
       }
     };
-    p = attempt(0);
+    p = track(attempt(0));
     images.set(id, p);
     p.then((img) => { if (!img && images.get(id) === p) images.delete(id); });
   }
@@ -438,7 +449,7 @@ function fetchContentBytes(path) {
   if (path.includes('..')) return Promise.resolve(null);
   let p = contentBytes.get(path);
   if (!p) {
-    p = fetch(contentUrl(path)).then(async (r) => (r.ok ? new Uint8Array(await r.arrayBuffer()) : null)).catch(() => null);
+    p = track(fetch(contentUrl(path)).then(async (r) => (r.ok ? new Uint8Array(await r.arrayBuffer()) : null)).catch(() => null));
     contentBytes.set(path, p);
   }
   return p;
@@ -468,10 +479,10 @@ const rawContent = new Map();
 function contentRawImage(path) {
   let p = rawContent.get(path);
   if (!p) {
-    p = fetch(contentUrl(path))
+    p = track(fetch(contentUrl(path))
       .then((r) => (r.ok ? r.blob() : null))
       .then((b) => (b ? createImageBitmap(b, { premultiplyAlpha: 'none' }) : null))
-      .catch(() => null);
+      .catch(() => null));
     rawContent.set(path, p);
   }
   return p;

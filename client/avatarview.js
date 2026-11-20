@@ -1,4 +1,4 @@
-import { configure, assetBytes, animationBytes, loadContentIndex, useContent2018, publicPath } from './assets.js';
+import { configure, assetBytes, animationBytes, loadContentIndex, useContent2018, publicPath, loadsPending } from './assets.js';
 import { Animations, animAssetId } from '../shared/animator.js';
 import { DataModel } from '../shared/instance.js';
 import { parsePlace } from '../shared/rbxl.js';
@@ -10,6 +10,8 @@ const COLOR_PROPS = { Head: 'HeadColor', Torso: 'TorsoColor', 'Left Arm': 'LeftA
 const FRAME_MS = 1000 / 30;
 const IDLE_MS = 400;
 const SETTLE_MS = 45000;
+const SHIFT = 4000;
+const READY_TIMEOUT = 15000;
 const DEFAULT_ANIMS = {
   R6: { idle: '180435571', walk: '180426354', run: '180426354', jump: '125750702', fall: '180436148', climb: '180436334', swim: '180426354' },
   R15: { idle: '507766388', walk: '507777826', run: '507767714', jump: '507765000', fall: '507767968', climb: '507765644', swim: '507784897' },
@@ -32,6 +34,8 @@ export class AvatarView {
     this.pitch = 0.12;
     this.dist = 13;
     this.target = [0, 2.6, 0];
+    canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, powerPreference: 'high-performance' })
+      || canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: false, powerPreference: 'high-performance' });
     const r = new Renderer(canvas, { dm: this.dm, era: 2018 });
     r.applySky = () => {};
     r.updateSunSprite = () => {};
@@ -39,16 +43,22 @@ export class AvatarView {
     r.camera.fov = 32;
     r.camera.near = 0.5;
     r.camera.far = 200;
-    r.r.setClearColor(opts.background || 0xdfe5eb, 1);
+    r.r.setClearColor(0x000000, 0);
+    r.scene.background = null;
     r.attach();
     this.renderer = r;
+    this.frames = 0;
+    this.inflight = 0;
+    this.lastSet = Promise.resolve();
+    this.staged = null;
+    this.loading = 0;
     this.anims = new Animations(this.dm, async (id) => {
-      const bytes = await animationBytes(id);
-      if (!new TextDecoder().decode(bytes.subarray(0, 8)).startsWith('<roblox')) throw new Error('asset ' + id + ' is not a model');
-      const model = this.dm.create('Model', null);
-      model.props.set('Name', 'Model');
-      this.dm.load(parsePlace(bytes), model);
-      return model;
+      this.loading++;
+      try {
+        return await this.loadAnimation(id);
+      } finally {
+        this.loading--;
+      }
     });
     this.rig = null;
     this.rootCF = null;
@@ -71,10 +81,16 @@ export class AvatarView {
     }).observe(canvas);
   }
 
-  setBackground(c) {
-    this.renderer.r.setClearColor(c, 1);
-    this.wake();
+  async loadAnimation(id) {
+    const bytes = await animationBytes(id);
+    if (!new TextDecoder().decode(bytes.subarray(0, 8)).startsWith('<roblox')) throw new Error('asset ' + id + ' is not a model');
+    const model = this.dm.create('Model', null);
+    model.props.set('Name', 'Model');
+    this.dm.load(parsePlace(bytes), model);
+    return model;
   }
+
+  setBackground() {}
 
   bindInput() {
     const c = this.canvas;
@@ -143,6 +159,7 @@ export class AvatarView {
       last = now;
       this.animate(dt);
       this.renderer.frame(dt);
+      this.frames++;
     };
     requestAnimationFrame(loop);
   }
@@ -153,6 +170,37 @@ export class AvatarView {
     this.anims.step(dt);
     const poses = this.rig.pose(this.rootCF);
     for (const [p, cf] of poses) if (p && !p.destroyed) this.dm.setProp(p, 'CFrame', cf, { local: true });
+    const st = this.staged;
+    if (st && !st.model.destroyed) {
+      for (const [p, cf] of st.rig.pose(st.rootCF)) if (p && !p.destroyed) this.dm.setProp(p, 'CFrame', cf, { local: true });
+    }
+  }
+
+  quiet(seq, timeout) {
+    return new Promise((resolve) => {
+      const t0 = performance.now();
+      let calm = 0;
+      let f0 = -1;
+      const iv = setInterval(() => {
+        if (seq !== this.seq) {
+          clearInterval(iv);
+          resolve(false);
+          return;
+        }
+        this.wake(1500);
+        if (f0 < 0) f0 = this.frames;
+        calm = loadsPending() === 0 && this.loading === 0 ? calm + 1 : 0;
+        const drawn = !this.visible || document.hidden || this.frames - f0 >= 3;
+        if ((calm >= 5 && drawn) || performance.now() - t0 > timeout) {
+          clearInterval(iv);
+          resolve(true);
+        }
+      }, 50);
+    });
+  }
+
+  ready() {
+    return this.lastSet;
   }
 
   async r15Template() {
@@ -210,8 +258,22 @@ export class AvatarView {
     return p;
   }
 
-  async set(look) {
+  set(look, timeout = READY_TIMEOUT) {
+    this.inflight++;
+    const p = this.build(look, timeout).finally(() => {
+      this.inflight--;
+    });
+    this.lastSet = p.catch(() => {});
+    return p;
+  }
+
+  async build(look, timeout) {
     const seq = ++this.seq;
+    if (this.staged) {
+      const dead = this.staged;
+      this.staged = null;
+      if (!dead.model.destroyed) this.dm.destroy(dead.model);
+    }
     const ids = [...new Set((look.assets || []).map((a) => a | 0).filter((a) => a > 0))];
     const lists = await Promise.all(ids.map((id) => this.assetNodes(id)));
     const rigType = look.avatarType === 'R15' ? 'R15' : 'R6';
@@ -253,24 +315,73 @@ export class AvatarView {
     partColorProps(model);
     if (tool) gripWeld(dm, model, tool);
     const root = model.findChild('HumanoidRootPart');
-    this.rootCF = r15 && root ? root.props.get('CFrame').slice() : C.cf(0, 3, 0);
+    const rootCF = r15 && root ? root.props.get('CFrame').slice() : C.cf(0, 3, 0);
     const rig = new Rig(model);
-    rig.pose(this.rootCF, (p, cf) => p.props.set('CFrame', cf));
-    const old = this.model;
-    this.model = model;
-    this.rig = rig;
-    this.hum = model.findChildOfClass('Humanoid');
+    rig.pose(rootCF, (p, cf) => p.props.set('CFrame', cf));
+    const entry = {
+      model,
+      rig,
+      rootCF,
+      hum: model.findChildOfClass('Humanoid'),
+      animIds: this.animsFrom(lists, r15 ? 'R15' : 'R6'),
+      toolAnim: tool ? (r15 ? '507768375' : '182393478') : null,
+    };
+    const first = !this.model;
+    if (!first) {
+      entry.rootCF = rootCF.slice();
+      entry.rootCF[0] += SHIFT;
+      rig.pose(entry.rootCF, (p, cf) => p.props.set('CFrame', cf));
+      this.staged = entry;
+    }
     dm.setParent(model, this.ws);
-    if (old) dm.destroy(old);
-    this.animIds = this.animsFrom(lists, r15 ? 'R15' : 'R6');
-    this.toolAnim = tool ? (r15 ? '507768375' : '182393478') : null;
-    this.playPreview();
+    if (first) this.commit(entry, rootCF);
+    this.playOn(entry);
     this.wake(4000);
+    const ok = await this.quiet(seq, timeout);
+    if (!ok || seq !== this.seq) return false;
+    if (!first) {
+      this.staged = null;
+      const shown = entry.rootCF.slice();
+      shown[0] -= SHIFT;
+      const old = this.model;
+      this.commit(entry, shown);
+      if (old && !old.destroyed) dm.destroy(old);
+      const f0 = this.frames;
+      this.wake(1500);
+      await new Promise((res) => {
+        const t = setInterval(() => {
+          if (this.frames - f0 >= 2 || !this.visible || document.hidden) {
+            clearInterval(t);
+            res();
+          }
+        }, 30);
+      });
+    }
+    this.canvas.dispatchEvent(new CustomEvent('avatarready'));
+    return true;
+  }
+
+  commit(entry, rootCF) {
+    this.model = entry.model;
+    this.rig = entry.rig;
+    this.rootCF = rootCF;
+    this.hum = entry.hum;
+    this.animIds = entry.animIds;
+    this.toolAnim = entry.toolAnim;
+  }
+
+  playOn(entry) {
+    if (!entry.hum || !entry.animIds) return;
+    const id = entry.animIds[this.animName] || entry.animIds.idle;
+    const speed = this.animName === 'run' && id === entry.animIds.walk ? 1.6 : 1;
+    this.anims.op(entry.hum, 'preview', 'play', id, 0.15, 1, speed);
+    if (entry.toolAnim) this.anims.op(entry.hum, 'tool', 'play', entry.toolAnim, 0.15, 1, 1);
   }
 
   setAnimation(name) {
     this.animName = DEFAULT_ANIMS.R6[name] ? name : 'idle';
     this.playPreview();
+    if (this.staged) this.playOn(this.staged);
     this.wake(SETTLE_MS);
   }
 
