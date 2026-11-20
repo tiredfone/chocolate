@@ -1,6 +1,6 @@
 import { tree } from './rbxl.js';
 
-const BINARY_PROPS = new Set(['ChocolateTerrain', 'MeshData', 'ChildData']);
+const BINARY_PROPS = new Set(['ChocolateTerrain', 'MeshData', 'ChildData', 'PhysicalConfigData']);
 const CONTENT_PROPS = new Set(['MeshId', 'TextureId', 'TextureID', 'Texture', 'ShirtTemplate', 'PantsTemplate', 'Graphic', 'SoundId', 'Image',
   'SkyboxBk', 'SkyboxDn', 'SkyboxFt', 'SkyboxLf', 'SkyboxRt', 'SkyboxUp', 'MoonTextureId', 'SunTextureId', 'AnimationId', 'LinkedSource']);
 const MAGIC = [0x3c, 0x72, 0x6f, 0x62, 0x6c, 0x6f, 0x78, 0x21, 0x89, 0xff, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00];

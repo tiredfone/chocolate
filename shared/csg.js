@@ -6,7 +6,7 @@ export function parseCSG(raw) {
   if (String.fromCharCode(...d.subarray(0, 6)) !== 'CSGMDL') return null;
   const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
   const version = dv.getInt32(6, true);
-  if (version !== 2) return null;
+  if (version < 2 || version > 5) return null;
   let o = 42;
   const nv = dv.getInt32(o, true), stride = dv.getInt32(o + 4, true);
   o += 8;
